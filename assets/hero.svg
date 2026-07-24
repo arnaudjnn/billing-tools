@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 460" role="img" aria-label="billing-tools — the get-paid engine for Stripe + WorkOS apps, for humans and AI agents" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0A0A0F"/>
+      <stop offset="1" stop-color="#15151F"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="34%" r="45%">
+      <stop offset="0" stop-color="#635BFF" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#635BFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1280" height="460" rx="24" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1280" height="460" rx="24" fill="url(#glow)"/>
+  <rect x="0.5" y="0.5" width="1279" height="459" rx="24" fill="none" stroke="#2A2A38" stroke-width="1"/>
+
+  <!-- Brand row: Stripe  +  WorkOS -->
+  <g transform="translate(0,150)">
+    <text x="560" y="0" text-anchor="end" dominant-baseline="middle" font-size="68" font-weight="700" fill="#635BFF" letter-spacing="-1">Stripe</text>
+
+    <!-- connector "+" node -->
+    <circle cx="640" cy="0" r="34" fill="#1C1C28" stroke="#3A3A4C" stroke-width="1.5"/>
+    <g stroke="#B9B4FF" stroke-width="5" stroke-linecap="round">
+      <line x1="640" y1="-15" x2="640" y2="15"/>
+      <line x1="625" y1="0" x2="655" y2="0"/>
+    </g>
+
+    <text x="720" y="0" text-anchor="start" dominant-baseline="middle" font-size="68" font-weight="700" fill="#FFFFFF" letter-spacing="-1">WorkOS</text>
+  </g>
+
+  <!-- Title -->
+  <text x="640" y="300" text-anchor="middle" font-size="92" font-weight="800" fill="#FFFFFF" letter-spacing="-3">billing-tools</text>
+
+  <!-- Tagline -->
+  <text x="640" y="352" text-anchor="middle" font-size="27" font-weight="400" fill="#A6A6B8">The get-paid engine for Stripe + WorkOS apps — for humans and AI agents.</text>
+
+  <!-- Capability line -->
+  <text x="640" y="410" text-anchor="middle" font-size="20" font-weight="600" fill="#6E6E82" letter-spacing="1.5">MCP&#160;&#160;·&#160;&#160;REST&#160;&#160;·&#160;&#160;CLI&#160;&#160;·&#160;&#160;auth.md&#160;&#160;·&#160;&#160;MPP&#160;&#160;·&#160;&#160;ZERO-WEBHOOK SYNC</text>
+</svg>

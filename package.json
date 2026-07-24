@@ -1,8 +1,33 @@
 {
   "name": "@arnaudjnn/billing-tools",
   "version": "0.13.0",
-  "description": "Make your Stripe + WorkOS app ready to get paid: drop-in API-key auth + token/credit billing as MCP tools, a REST API, and a CLI. Storage-agnostic via an adapter.",
+  "description": "The get-paid engine for Stripe + WorkOS apps — for humans and AI agents. Drop-in API-key auth, token/credit + subscription billing, auth.md agent registration, and MPP machine payments, as MCP tools, a REST API, and a CLI. Framework-agnostic, storage-pluggable.",
   "license": "MIT",
+  "author": "Arnaud Jeannin",
+  "homepage": "https://github.com/arnaudjnn/billing-tools#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arnaudjnn/billing-tools.git"
+  },
+  "bugs": {
+    "url": "https://github.com/arnaudjnn/billing-tools/issues"
+  },
+  "keywords": [
+    "stripe",
+    "workos",
+    "billing",
+    "payments",
+    "auth",
+    "api-keys",
+    "mcp",
+    "auth.md",
+    "mpp",
+    "ai-agents",
+    "agentic-commerce",
+    "subscriptions",
+    "saas",
+    "usage-based-billing"
+  ],
   "type": "module",
   "exports": {
     ".": {

@@ -1,51 +1,233 @@
-# billing-tools
+<p align="center">
+  <img src="assets/hero.svg" alt="billing-tools — the get-paid engine for Stripe + WorkOS apps, for humans and AI agents" width="100%">
+</p>
 
-**Make your Stripe + WorkOS app ready to get paid.**
+<p align="center">
+  <b>Drop-in auth + billing for any Stripe&nbsp;+&nbsp;WorkOS app — usable by humans <i>and</i> AI agents,</b><br/>
+  exposed as <b>MCP tools</b>, a <b>REST API</b>, and a <b>CLI</b>, over one storage-agnostic engine.
+</p>
 
-Drop-in API-key auth (WorkOS) + token/credit billing (Stripe), exposed as **MCP tools**, a **REST API**, and a **CLI**. Storage-agnostic: use the built-in WorkOS-org store, or plug in your own (e.g. Postgres) via a small adapter.
+<p align="center">
+  <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-635BFF.svg">
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-strict-3178C6.svg">
+  <img alt="Stripe" src="https://img.shields.io/badge/Stripe-635BFF.svg">
+  <img alt="WorkOS" src="https://img.shields.io/badge/WorkOS-000000.svg">
+  <img alt="MCP compatible" src="https://img.shields.io/badge/MCP-compatible-16a34a.svg">
+  <img alt="Framework agnostic" src="https://img.shields.io/badge/framework-agnostic-8A8A9A.svg">
+  <img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg">
+</p>
 
-It gives any app the "get money in" plumbing without rebuilding it each time:
+---
 
-- **Auth** — users authenticate with a WorkOS **magic-auth** code; each gets a workspace/org and an API key (`sk_…`) they pass as `Authorization: Bearer`.
-- **Billing** — a Stripe customer per workspace, a token/credit balance (1 token = 1 cent), Checkout top-ups, auto-reload, and invoices.
-- **Surfaces** — the same tools over MCP (`/mcp`), REST (`/api/v0`), and a CLI.
+**billing-tools** packages the "get money in" plumbing you'd otherwise rebuild in every SaaS: API-key auth on top of **WorkOS**, token/credit + subscription billing on top of **Stripe**, and — because the next wave of customers is autonomous — first-class **agent** rails (`auth.md` self-registration and `MPP` machine payments). Wire it once; serve humans through a browser and agents through headless HTTP with the same engine. Storage is pluggable behind one small adapter (use the built-in WorkOS store, or mirror into your own Postgres).
 
-## Tools
+## Table of contents
 
-| Tool | What it does |
-|---|---|
-| `get_api_key` | WorkOS magic-auth bootstrap → workspace + API key (shown once) |
-| `list_api_keys` | List the workspace's keys (obfuscated) |
-| `revoke_api_key` | Revoke a key by id (belongs-to checked) |
-| `get_token_balance` | Current token balance + per-tool costs + auto-reload settings |
-| `buy_tokens` | Stripe Checkout top-up (returns a payment URL) |
-| `set_auto_reload` | Recharge the balance automatically below a threshold |
-| `list_invoices` | Recent invoices + auto-reload charges |
+- [Key Features](#key-features)
+- [Getting Started](#getting-started)
+- [How it works](#how-it-works)
+- [Agent auth (auth.md)](#agent-auth-authmd)
+- [Machine payments (MPP)](#machine-payments-mpp)
+- [CLI](#cli)
+- [Configuration](#configuration)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License](#license)
 
-## Install (git dependency, pinned by tag)
+## Key Features
+
+### 🔐 Auth & identity
+- 🔑 **API-key auth** — WorkOS organization API keys (`Authorization: Bearer sk_…`), validated on every request.
+- ✉️ **Passwordless magic-auth** — email a 6-digit code → workspace/org + API key, no passwords.
+- 🤖 **auth.md agent self-registration** — the [WorkOS auth.md](https://workos.com/auth-md) protocol: RFC 9728 Protected-Resource-Metadata + RFC 8414 Authorization-Server-Metadata + `/agent/identity` (anonymous **or** verified-email) + the claim ceremony — agents onboard with **no human signup**.
+- ♻️ **RFC 7009 revocation** — revoke a key by value; always-200, no token-existence leak.
+- 🎫 **Optional OAuth-JWT hook** — bring your own MCP OAuth proxy via a single adapter method.
+
+### 💳 Billing & payments
+- 🪙 **Usage-metered token wallet** — held in the native Stripe customer credit balance (1 token = 1¢), with idempotent credit/debit.
+- 🛒 **Checkout top-ups** — Stripe Checkout that auto-offers cards **+ Apple&nbsp;Pay / Google&nbsp;Pay / Link**.
+- 📦 **Declarative subscription plans** — describe plans in code; products/prices are **auto-provisioned in Stripe** via `lookup_key` (immutable-price safe, orphan-cleaning). Zero dashboard clicks.
+- 🎟️ **Per-seat / per-cycle token grants + seat limits** — included tokens scale with active members.
+- 🔁 **Auto-reload** — off-session saved-card recharge when the balance drops below a threshold.
+- 🧾 **Invoices + 🏛️ Customer Portal** — list invoices, and a one-call Stripe Billing Portal URL for self-serve upgrade/downgrade/cancel + card updates.
+- 🔒 **Idempotency on every money move** — welcome bonus, checkout credit, and per-cycle grants each carry a stable key, so retries/replays never double-charge.
+
+### 🤖 Built for AI agents
+- 📄 **auth.md** — the agent onboarding standard, served for you (`/auth.md` narrative + discovery metadata).
+- 🏧 **MPP machine payments** — Stripe's [Machine Payments Protocol](https://mpp.dev): HTTP **402 + `WWW-Authenticate: Payment`** challenge, pay-per-request (SPT card or crypto/USDC) — the payment sibling of auth.md's 401.
+- 🧰 **MCP server tools** — `get_api_key`, `get_token_balance`, `buy_tokens`, `list_plans`, `get_billing_portal`, … drop straight into Claude, Cursor, or any MCP client.
+- 🧭 **Discovery hints** — every 401/402 advertises `resource_metadata`, so an agent can bootstrap unattended.
+
+### 🧩 Three surfaces, one engine
+- 🛠️ **MCP** — `createMcpTransport({ register, adapter })`.
+- 🌐 **REST** — `createToolListHandler` + `createToolDispatchHandler` (429/401/400/404 mapping built in).
+- ⌨️ **CLI** — `registerBillingCommands(program, …)` → `auth`, `keys`, `balance`, `buy`, `invoices`.
+- 🪝 **Stripe webhook** — `createStripeWebhookHandler()` for instant checkout crediting.
+
+### 🔄 Zero-webhook sync
+- 📡 **Event polling** — reconcile Stripe **and** WorkOS via their Events APIs — no webhook endpoints, no signing secrets.
+- ⏱️ **Any scheduler** — run it in-process with `sync.start()` (persistent hosts) **or** as a serverless cron via `createSyncRoute()`.
+- 🪞 **Generic DB mirror** — shadow WorkOS orgs/users into your own tables (`createMirror`), driver-agnostic.
+- 📉 **Dunning hook** — `invoice.payment_failed` → `past_due` + an `onPaymentFailed` hook (Stripe Smart Retries do the retries).
+
+### 🌍 Framework- & platform-agnostic
+- ⚡ **Web-standard handlers** — everything returns `Request → Response`; mount in Next.js, Hono, Bun, Deno, or Cloudflare Workers.
+- 🧱 **No framework imports** — runtime deps are just `stripe` + `@workos-inc/node`.
+- 🗄️ **Bring-your-own DB** — no `pg` dependency; you pass a `query` executor (any Postgres-compatible driver).
+- 🔌 **Pluggable storage adapter** — WorkOS-only, or WorkOS + your DB mirror, behind one interface.
+- ☁️ **No lock-in** — runs on any Node host (Railway / Render / Fly / Vercel / self-host).
+
+### 🏛️ Design doctrine
+- 📐 **SDK-first** — thin-wraps the Stripe & WorkOS SDKs (SDK types, pagination, typed errors, idempotency) so the lib evolves *with* the platforms instead of drifting.
+- 🎯 **One memoized client per SDK** — lazy, never constructed at import.
+- 🔒 **Secure by default** — AES-256-GCM session encryption at rest, SHA-256-hashed claim tokens, verified-domain-only internal-org checks.
+- 🧪 **Offline-testable** — the auth.md + MPP protocol surfaces are pure `Request → Response`, unit-testable without a live account.
+
+## Getting Started
+
+### Prerequisites
+- **Node 18+**
+- A **Stripe** secret key (`STRIPE_SECRET_KEY`)
+- A **WorkOS** API key + client id (`WORKOS_API_KEY`, `WORKOS_CLIENT_ID`)
+
+### Install
+
+Installed as a Git dependency (ships compiled `dist/`, so **no build step or `transpilePackages`** in the consumer). Pin by commit SHA for reproducibility:
 
 ```jsonc
 // package.json
 "dependencies": {
-  "@arnaudjnn/billing-tools": "github:arnaudjnn/billing-tools#v0.1.0"
+  "@arnaudjnn/billing-tools": "github:arnaudjnn/billing-tools#<commit-sha>"
 }
 ```
 
-The package ships compiled `dist/`, so no build step or `transpilePackages` is needed in the consumer.
+> To upgrade later: `pnpm update @arnaudjnn/billing-tools` and commit the lockfile. (Prefer a commit SHA over a tag — package managers cache Git-tag→SHA resolution and can serve a stale commit.)
 
-## Quick start (Next.js)
+### Environment
 
-```ts
-import { registerBillingTools } from "@arnaudjnn/billing-tools";
-import { WorkOSOrgAdapter } from "@arnaudjnn/billing-tools/adapters/workos-org";
-
-const adapter = new WorkOSOrgAdapter();          // WorkOS orgs + org API keys + org metadata
-const config = { freeTokens: 100, currency: "usd", baseUrl: process.env.APP_URL!, internalDomains: [] };
-
-// MCP: registerBillingTools(server, { adapter, toolCosts, config })
-// REST/webhook: mount the route factories from "@arnaudjnn/billing-tools" (see AGENTS.md)
+```bash
+STRIPE_SECRET_KEY=sk_test_…
+STRIPE_WEBHOOK_SECRET=whsec_…        # only if you mount the webhook
+WORKOS_API_KEY=sk_…
+WORKOS_CLIENT_ID=client_…
+INTERNAL_ORG_DOMAINS=acme.com        # optional: orgs with these verified domains are unmetered
 ```
 
-**WorkOS is always the source of truth.** Two adapter patterns (see `AGENTS.md`): **Pattern A — WorkOS-only** (`WorkOSOrgAdapter`, above — `orgId` is the WorkOS org id, zero extra storage); **Pattern B — WorkOS + DB mirror** (your app row is 1:1 with a WorkOS org via a `workos_org_id` column + `org.externalId`; memberships/invitations/keys/billing stay in WorkOS, the DB mirrors only what WorkOS can't hold). Note: the shipped adapter targets `@workos-inc/node` v8; v10 moved the org API-key methods (`organizations.*` → `apiKeys.*`), so a v10 consumer writes its own adapter.
+### Wire it up (Next.js example)
 
-See **AGENTS.md** for the full integration guide (adapter interface, route factories, CLI, env, release flow).
+```ts
+// billing.ts — one composition root (single module instance = one auth context)
+import {
+  registerBillingTools, createDispatcher, resolveConfig,
+  createToolListHandler, createToolDispatchHandler,
+  createMcpTransport, createStripeWebhookHandler,
+} from "@arnaudjnn/billing-tools";
+import { WorkOSOrgAdapter } from "@arnaudjnn/billing-tools/adapters/workos-org";
+
+export const adapter = new WorkOSOrgAdapter();            // WorkOS is the source of truth
+const config = resolveConfig({ currency: "usd", baseUrl: process.env.APP_URL! });
+
+const register = (server: any) => registerBillingTools(server, { adapter, config });
+const dispatcher = createDispatcher(register);
+
+export const mcp          = createMcpTransport({ register, adapter });        // app/[transport]/route.ts
+export const toolList     = createToolListHandler({ dispatcher });            // app/api/v0/route.ts
+export const toolDispatch = createToolDispatchHandler({ dispatcher });        // app/api/v0/[tool]/route.ts
+export const webhook      = createStripeWebhookHandler();                     // app/api/stripe/webhook/route.ts
+```
+
+```ts
+// app/[transport]/route.ts
+import { mcp } from "@/billing";
+export const GET = mcp.GET;
+export const POST = mcp.POST;
+```
+
+### First call
+
+```bash
+# List available tools + costs
+curl https://your-app.com/api/v0
+
+# Use a key (Bearer sk_…)
+curl -X POST https://your-app.com/api/v0/get_token_balance \
+  -H "Authorization: Bearer sk_…"
+```
+
+Add agent onboarding with [`createAgentAuth`](#agent-auth-authmd) and pay-per-call with [`createMachinePaymentHandler`](#machine-payments-mpp) — see below.
+
+## How it works
+
+**WorkOS is always the source of truth.** Your app's `orgId` is opaque — implement the adapter and everything (auth, metering, Stripe math, all surfaces) works unchanged. Two shipped patterns:
+
+| Pattern | `orgId` is… | Storage | Use when |
+|---|---|---|---|
+| **A — WorkOS-only** | the WorkOS org id | none beyond WorkOS | you don't have (or need) your own DB rows |
+| **B — WorkOS + DB mirror** | your own id (e.g. `ws_…`) | a `workos_org_id` column + `org.externalId`, 1:1 | you keep local rows and mirror WorkOS into them |
+
+In both, API keys are WorkOS org keys and the Stripe pointer lives on the org. The `WorkOSOrgAdapter` (`@arnaudjnn/billing-tools/adapters/workos-org`) implements both; pass a `map` for Pattern B.
+
+## Agent auth (auth.md)
+
+```ts
+import { createAgentAuth } from "@arnaudjnn/billing-tools";
+
+export const agentAuth = createAgentAuth({
+  adapter, config,
+  branding: { productName: "Acme", logoUri: "https://acme.com/logo.svg" },
+  identityTypes: ["anonymous", "verified_email"],
+});
+// mount: /auth.md, /.well-known/oauth-{protected-resource,authorization-server},
+//        /agent/identity, /agent/identity/claim, /oauth/token, /oauth/revoke
+```
+
+An agent hits a 401, follows the `resource_metadata` hint to your metadata, reads `/auth.md`, then registers — either **anonymously** (instant key) or via a **verified-email** claim ceremony (the user reads back a code) — and starts calling tools. All handlers are `Request → Response`.
+
+## Machine payments (MPP)
+
+```ts
+import { createMachinePaymentHandler } from "@arnaudjnn/billing-tools";
+
+const pay = createMachinePaymentHandler({ methods: ["stripe"], amount: 50, currency: "usd" });
+const gate = await pay.requirePayment(request);
+if (gate instanceof Response) return gate;   // 402 + WWW-Authenticate: Payment challenge
+// …else settlement succeeded — serve the paid resource
+```
+
+The 402 challenge + credential parsing ship ready and are offline-testable. Actual settlement (card via shared payment tokens, or crypto/USDC) is injected via a `settle` function once your Stripe account is enabled for machine payments — until then the gate returns a clean "settlement not enabled" 402 (never a crash). `createPaymentMd()` serves an agent-facing `/payment.md`.
+
+## CLI
+
+```ts
+import { registerBillingCommands } from "@arnaudjnn/billing-tools";
+import { Command } from "commander";
+
+const program = new Command();
+registerBillingCommands(program, { configDir: "~/.acme", envPrefix: "ACME", defaultUrl: "https://acme.com" });
+// → acme auth | keys list|revoke | balance | buy | invoices
+```
+
+## Configuration
+
+`BillingConfig` (pass to `resolveConfig`):
+
+| Field | Default | Purpose |
+|---|---|---|
+| `baseUrl` | — (required) | Checkout success/cancel + portal return URLs |
+| `currency` | `"usd"` | Stripe currency |
+| `freeTokens` | `100` | Welcome credit on first customer creation |
+| `internalDomains` | `[]` | Orgs with these **verified** WorkOS domains are unmetered (see `internalDomainsFromEnv`) |
+
+## Roadmap
+
+- 🧰 `createBilling()` one-call composition helper (mount every surface from a single config)
+- 🧾 Stripe Tax (`automatic_tax`) opt-in
+- 🪙 x402 machine-payment protocol alongside MPP
+
+## Contributing
+
+Issues and PRs welcome. The engine is plain TypeScript compiled with `tsc`; `dist/` is committed (consumers install via Git). See `AGENTS.md` for the architecture, the adapter interface, the SDK-first doctrine, and the release flow.
+
+## License
+
+[MIT](LICENSE) © Arnaud Jeannin
