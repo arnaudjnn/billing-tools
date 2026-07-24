@@ -1,7 +1,8 @@
 import { runWithAuth } from "../auth.js";
 import { ToolValidationError } from "../dispatch.js";
-function wwwAuth(realm) {
-    return `Bearer realm="${realm}", error="invalid_token"`;
+function wwwAuth(realm, resourceMetadata) {
+    const base = `Bearer realm="${realm}", error="invalid_token"`;
+    return resourceMetadata ? `${base}, resource_metadata="${resourceMetadata}"` : base;
 }
 // GET /api/v0 → { tools: [{ name, cost }] }
 export function createToolListHandler(opts) {
@@ -34,6 +35,7 @@ export function createToolDispatchHandler(opts) {
     return async (request, ctx) => {
         const { tool } = await ctx.params;
         const authHeader = request.headers.get("authorization");
+        const rm = typeof opts.resourceMetadata === "function" ? opts.resourceMetadata(request) : opts.resourceMetadata;
         return runWithAuth(authHeader, async () => {
             try {
                 const body = await request.json().catch(() => ({}));
@@ -46,14 +48,14 @@ export function createToolDispatchHandler(opts) {
                     });
                 }
                 if (isUnauthorizedResult(result)) {
-                    return Response.json(result, { status: 401, headers: { "WWW-Authenticate": wwwAuth(realm) } });
+                    return Response.json(result, { status: 401, headers: { "WWW-Authenticate": wwwAuth(realm, rm) } });
                 }
                 return Response.json(result);
             }
             catch (err) {
                 const message = err instanceof Error ? err.message : String(err);
                 if (/\bUnauthorized\b|\b401\b/i.test(message)) {
-                    return Response.json({ error: message }, { status: 401, headers: { "WWW-Authenticate": wwwAuth(realm) } });
+                    return Response.json({ error: message }, { status: 401, headers: { "WWW-Authenticate": wwwAuth(realm, rm) } });
                 }
                 const status = err instanceof ToolValidationError ? 400 : message.includes("Unknown tool") ? 404 : 500;
                 return Response.json({ error: message }, { status });

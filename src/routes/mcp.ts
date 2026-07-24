@@ -14,10 +14,14 @@ export interface McpTransportOptions {
   /** Prefix that marks a raw API key (vs an OAuth JWT). Default "sk_". */
   apiKeyPrefix?: string;
   maxDuration?: number;
+  /** Advertise the auth.md PRM discovery doc in the 401 WWW-Authenticate header
+   *  (`resource_metadata="…"`) so agents can bootstrap. String or per-request. */
+  resourceMetadata?: string | ((request: Request) => string);
 }
 
-function wwwAuth(realm: string): string {
-  return `Bearer realm="${realm}", error="invalid_token"`;
+function wwwAuth(realm: string, resourceMetadata?: string): string {
+  const base = `Bearer realm="${realm}", error="invalid_token"`;
+  return resourceMetadata ? `${base}, resource_metadata="${resourceMetadata}"` : base;
 }
 
 export function createMcpTransport(opts: McpTransportOptions) {
@@ -34,10 +38,10 @@ export function createMcpTransport(opts: McpTransportOptions) {
     return handlerPromise;
   }
 
-  async function withAuthHeader(res: Response): Promise<Response> {
+  async function withAuthHeader(res: Response, rm?: string): Promise<Response> {
     if (res.status !== 401) return res;
     const headers = new Headers(res.headers);
-    if (!headers.has("WWW-Authenticate")) headers.set("WWW-Authenticate", wwwAuth(realm));
+    if (!headers.has("WWW-Authenticate")) headers.set("WWW-Authenticate", wwwAuth(realm, rm));
     return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
   }
 
@@ -45,13 +49,15 @@ export function createMcpTransport(opts: McpTransportOptions) {
     const mcp = await getHandler();
     const authHeader = request.headers.get("authorization");
     const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+    const rm =
+      typeof opts.resourceMetadata === "function" ? opts.resourceMetadata(request) : opts.resourceMetadata;
 
     if (token && !token.startsWith(apiKeyPrefix) && opts.adapter.resolveOauthOrg) {
       const orgId = await opts.adapter.resolveOauthOrg(token);
       if (orgId) return runWithResolvedOrg(authHeader, orgId, () => mcp(request));
     }
     const res = await runWithAuth(authHeader, () => mcp(request));
-    return withAuthHeader(res);
+    return withAuthHeader(res, rm);
   }
 
   return { GET: handler, POST: handler, maxDuration: opts.maxDuration ?? 60 };

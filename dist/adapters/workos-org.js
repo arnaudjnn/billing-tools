@@ -93,6 +93,31 @@ export class WorkOSOrgAdapter {
             obfuscatedValue: k.obfuscatedValue,
         }));
     }
+    /** Revoke by raw token value (RFC 7009): validate → key id → hard delete. */
+    async revokeApiKeyByToken(token) {
+        try {
+            const { apiKey } = await this.workos.apiKeys.createValidation({ value: token });
+            if (!apiKey)
+                return false;
+            await this.workos.apiKeys.deleteApiKey(apiKey.id);
+            return true;
+        }
+        catch {
+            return false;
+        }
+    }
+    /** Create an org with no user (auth.md anonymous). No verified domain, so it
+     *  never satisfies the internal-org unmetered check. Returns the WorkOS org id
+     *  as `orgId` (Pattern A). With a `map` configured there's no mirror row, so
+     *  prefer disabling anonymous for mirror apps (identityTypes without it). */
+    async createAnonymousOrg(opts) {
+        const org = await this.workos.organizations.createOrganization({
+            name: opts.name,
+            metadata: opts.metadata,
+        });
+        const orgId = this.map ? (await this.map.toOrgId(org.id)) ?? org.id : org.id;
+        return { orgId };
+    }
     async revokeApiKey(orgId, id) {
         // Full-list scope check (all pages) so a key on a later page isn't mistaken
         // for "not found"; the SDK delete needs only the id.

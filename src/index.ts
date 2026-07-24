@@ -99,6 +99,34 @@ export {
 // REST dispatch bridge
 export { createDispatcher, ToolValidationError, type RegisterFn } from "./dispatch.js";
 
+// auth.md — agent self-registration protocol (framework-agnostic handlers)
+export {
+  createAgentAuth,
+  CLAIM_GRANT_TYPE,
+  type AgentAuthOptions,
+  type AgentAuthBranding,
+  type AgentAuthPaths,
+  type AgentAuthPolicy,
+  type AgentIdentityType,
+} from "./agent-auth/index.js";
+export {
+  inMemoryClaimStore,
+  type ClaimStore,
+  type ClaimStatus,
+  type ClaimReadResult,
+} from "./agent-auth/claim-store.js";
+
+// Machine payments — MPP (the 402 payment sibling of auth.md)
+export {
+  createMachinePaymentHandler,
+  createPaymentMd,
+  type MachinePaymentOptions,
+  type MachinePaymentMethod,
+  type PaymentChallenge,
+  type SettleFn,
+  type PaymentMdOptions,
+} from "./machine-payment/index.js";
+
 // Next route factories
 export { createToolListHandler, createToolDispatchHandler, type Dispatcher } from "./routes/rest.js";
 export { createMcpTransport, type McpTransportOptions } from "./routes/mcp.js";

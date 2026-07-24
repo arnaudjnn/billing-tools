@@ -7,6 +7,9 @@ export interface McpTransportOptions {
     /** Prefix that marks a raw API key (vs an OAuth JWT). Default "sk_". */
     apiKeyPrefix?: string;
     maxDuration?: number;
+    /** Advertise the auth.md PRM discovery doc in the 401 WWW-Authenticate header
+     *  (`resource_metadata="…"`) so agents can bootstrap. String or per-request. */
+    resourceMetadata?: string | ((request: Request) => string);
 }
 export declare function createMcpTransport(opts: McpTransportOptions): {
     GET: (request: Request) => Promise<Response>;

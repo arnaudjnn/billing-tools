@@ -41,6 +41,17 @@ export interface BillingAdapter {
         id: string;
         name: string;
     } | null>;
+    /** Revoke an API key by its raw value — for the RFC 7009 /oauth/revoke
+     *  endpoint, where only the token (not the org/id) is known. Optional. */
+    revokeApiKeyByToken?(token: string): Promise<boolean>;
+    /** Create an org with NO associated user (auth.md `anonymous` registration).
+     *  Optional — if absent, anonymous registration reports `anonymous_not_enabled`. */
+    createAnonymousOrg?(opts: {
+        name: string;
+        metadata?: Record<string, string>;
+    }): Promise<{
+        orgId: string;
+    }>;
 }
 export interface BillingConfig {
     /** Welcome credit granted on first Stripe customer creation. Default 100. */

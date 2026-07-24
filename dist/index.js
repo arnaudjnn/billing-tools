@@ -20,6 +20,11 @@ export { createMirror, } from "./mirror.js";
 export { registerBillingTools, installInputLogging, BILLING_TOOL_NAMES, } from "./tools/register.js";
 // REST dispatch bridge
 export { createDispatcher, ToolValidationError } from "./dispatch.js";
+// auth.md — agent self-registration protocol (framework-agnostic handlers)
+export { createAgentAuth, CLAIM_GRANT_TYPE, } from "./agent-auth/index.js";
+export { inMemoryClaimStore, } from "./agent-auth/claim-store.js";
+// Machine payments — MPP (the 402 payment sibling of auth.md)
+export { createMachinePaymentHandler, createPaymentMd, } from "./machine-payment/index.js";
 // Next route factories
 export { createToolListHandler, createToolDispatchHandler } from "./routes/rest.js";
 export { createMcpTransport } from "./routes/mcp.js";

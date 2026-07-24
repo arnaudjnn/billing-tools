@@ -38,6 +38,12 @@ export interface BillingAdapter {
   listApiKeys(orgId: string): Promise<ApiKeyInfo[]>;
   /** Revoke a key by id, scoped to the org (belongs-to check inside). */
   revokeApiKey(orgId: string, id: string): Promise<{ id: string; name: string } | null>;
+  /** Revoke an API key by its raw value — for the RFC 7009 /oauth/revoke
+   *  endpoint, where only the token (not the org/id) is known. Optional. */
+  revokeApiKeyByToken?(token: string): Promise<boolean>;
+  /** Create an org with NO associated user (auth.md `anonymous` registration).
+   *  Optional — if absent, anonymous registration reports `anonymous_not_enabled`. */
+  createAnonymousOrg?(opts: { name: string; metadata?: Record<string, string> }): Promise<{ orgId: string }>;
 }
 
 export interface BillingConfig {

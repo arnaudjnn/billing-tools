@@ -43,6 +43,18 @@ export declare class WorkOSOrgAdapter implements BillingAdapter {
         value: string;
     }>;
     listApiKeys(orgId: string): Promise<ApiKeyInfo[]>;
+    /** Revoke by raw token value (RFC 7009): validate → key id → hard delete. */
+    revokeApiKeyByToken(token: string): Promise<boolean>;
+    /** Create an org with no user (auth.md anonymous). No verified domain, so it
+     *  never satisfies the internal-org unmetered check. Returns the WorkOS org id
+     *  as `orgId` (Pattern A). With a `map` configured there's no mirror row, so
+     *  prefer disabling anonymous for mirror apps (identityTypes without it). */
+    createAnonymousOrg(opts: {
+        name: string;
+        metadata?: Record<string, string>;
+    }): Promise<{
+        orgId: string;
+    }>;
     revokeApiKey(orgId: string, id: string): Promise<{
         id: string;
         name: string;

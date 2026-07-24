@@ -9,6 +9,9 @@ export declare function createToolListHandler(opts: {
 export declare function createToolDispatchHandler(opts: {
     dispatcher: Dispatcher;
     realm?: string;
+    /** Advertise the auth.md PRM discovery doc in the 401 WWW-Authenticate header
+     *  (`resource_metadata="…"`) so agents can bootstrap. String or per-request. */
+    resourceMetadata?: string | ((request: Request) => string);
 }): (request: Request, ctx: {
     params: Promise<{
         tool: string;
