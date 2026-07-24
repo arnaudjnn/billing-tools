@@ -190,7 +190,8 @@ export async function createTokenCheckoutSession(
   const session = await getStripe().checkout.sessions.create({
     customer: stripeCustomerId,
     mode: "payment",
-    payment_method_types: ["card"],
+    // No payment_method_types → Checkout auto-offers every method enabled in the
+    // Dashboard (cards + Apple Pay / Google Pay / Link), maximizing conversion.
     line_items: [
       {
         price_data: {
@@ -214,6 +215,20 @@ export async function createTokenCheckoutSession(
     cancel_url: `${config.baseUrl}/billing/cancel`,
   });
   return session.url!;
+}
+
+/** A Stripe Billing Portal session URL — the no-code self-serve surface where a
+ *  customer manages their subscription (upgrade/downgrade/cancel), updates the
+ *  payment method (fixes a failing card), and views invoices. */
+export async function createBillingPortalSession(
+  stripeCustomerId: string,
+  returnUrl: string,
+): Promise<string> {
+  const session = await getStripe().billingPortal.sessions.create({
+    customer: stripeCustomerId,
+    return_url: returnUrl,
+  });
+  return session.url;
 }
 
 export async function getAutoReloadSettings(stripeCustomerId: string): Promise<{

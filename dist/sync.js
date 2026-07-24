@@ -31,6 +31,7 @@ const STRIPE_TYPES = [
     "customer.subscription.updated",
     "customer.subscription.deleted",
     "invoice.paid",
+    "invoice.payment_failed",
 ];
 const WORKOS_EVENTS = [
     "organization.updated",
@@ -89,6 +90,21 @@ export function createBillingSync(opts) {
                 // the per-cycle tokens exactly once.
                 await creditTokens(invoice.customer, tokens, `Included tokens: ${plan} (${seats} seat${seats === 1 ? "" : "s"})`, currency, `credit:invoice:${invoice.id}`);
             }
+        }
+        if (event.type === "invoice.payment_failed") {
+            const invoice = event.data.object;
+            if (!invoice.subscription)
+                return; // one-off top-ups don't affect subscription state
+            const sub = (await getStripe().subscriptions.retrieve(invoice.subscription));
+            const orgId = sub.metadata?.org_id;
+            if (!orgId)
+                return;
+            await opts.adapter.setSubscription(orgId, {
+                status: "past_due",
+                subscriptionId: sub.id,
+                periodEnd: sub.current_period_end ? new Date(sub.current_period_end * 1000).toISOString() : null,
+            });
+            await opts.hooks?.onPaymentFailed?.(orgId);
         }
     }
     async function handleWorkOS(event) {

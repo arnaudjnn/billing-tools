@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { enforceAccess } from "../auth.js";
-import { ensureStripeCustomer, getBillingCustomerId, getTokenBalance, getAutoReloadSettings, setAutoReloadSettings, createTokenCheckoutSession, listInvoices, stripeConfigured, } from "../billing.js";
+import { ensureStripeCustomer, getBillingCustomerId, getTokenBalance, getAutoReloadSettings, setAutoReloadSettings, createTokenCheckoutSession, createBillingPortalSession, listInvoices, stripeConfigured, } from "../billing.js";
 const NO_STRIPE = {
     isError: true,
     content: [{ type: "text", text: "Billing is not configured (STRIPE_SECRET_KEY unset)." }],
@@ -89,6 +89,24 @@ Requires a saved card (use buy_tokens first).`, {
                             ? `Auto-reload enabled: at <=${threshold} tokens, recharge to ${reload_to}.`
                             : "Auto-reload disabled.",
                     }, null, 2),
+                },
+            ],
+        };
+    });
+    server.tool("get_billing_portal", `Get a Stripe billing-portal URL to manage your subscription (upgrade, downgrade, cancel),
+update your payment method, and view invoices. Returns a short-lived link.`, { return_url: z.string().url().optional().describe("Where to send the user back to after the portal (defaults to the app)") }, async ({ return_url }) => {
+        const auth = await enforceAccess(adapter);
+        if ("isError" in auth)
+            return auth;
+        if (!stripeConfigured())
+            return NO_STRIPE;
+        const cid = await customerId(auth.orgId);
+        const url = await createBillingPortalSession(cid, return_url ?? config.baseUrl);
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: JSON.stringify({ status: "portal_created", portal_url: url, message: "Open this URL to manage billing." }, null, 2),
                 },
             ],
         };

@@ -24,6 +24,10 @@ export interface BillingSyncOptions {
         /** Extra app-specific cleanup when a WorkOS user is deleted (the user
          *  mirror row is already removed). */
         onUserDeleted?(workosUserId: string): Promise<void>;
+        /** A subscription invoice failed to collect (dunning). The org's status is
+         *  already set to `past_due`; use this to notify the user / gate access.
+         *  Stripe Smart Retries + the card-updater keep retrying automatically. */
+        onPaymentFailed?(orgId: string): Promise<void>;
     };
 }
 export interface BillingSync {

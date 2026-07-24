@@ -81,6 +81,7 @@ export const BILLING_TOOL_NAMES = [
     "get_token_balance",
     "buy_tokens",
     "set_auto_reload",
+    "get_billing_portal",
     "list_invoices",
 ];
 //# sourceMappingURL=register.js.map

@@ -35,6 +35,10 @@ export declare function creditTokens(stripeCustomerId: string, amount: number, d
  *  — a re-delivered webhook, an overlapping poll — credit exactly once. */
 idempotencyKey?: string): Promise<void>;
 export declare function createTokenCheckoutSession(stripeCustomerId: string, orgId: string, amountMajor: number, config: ResolvedConfig): Promise<string>;
+/** A Stripe Billing Portal session URL — the no-code self-serve surface where a
+ *  customer manages their subscription (upgrade/downgrade/cancel), updates the
+ *  payment method (fixes a failing card), and views invoices. */
+export declare function createBillingPortalSession(stripeCustomerId: string, returnUrl: string): Promise<string>;
 export declare function getAutoReloadSettings(stripeCustomerId: string): Promise<{
     enabled: boolean;
     threshold: number;

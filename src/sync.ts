@@ -40,6 +40,10 @@ export interface BillingSyncOptions {
     /** Extra app-specific cleanup when a WorkOS user is deleted (the user
      *  mirror row is already removed). */
     onUserDeleted?(workosUserId: string): Promise<void>;
+    /** A subscription invoice failed to collect (dunning). The org's status is
+     *  already set to `past_due`; use this to notify the user / gate access.
+     *  Stripe Smart Retries + the card-updater keep retrying automatically. */
+    onPaymentFailed?(orgId: string): Promise<void>;
   };
 }
 
@@ -77,6 +81,7 @@ const STRIPE_TYPES = [
   "customer.subscription.updated",
   "customer.subscription.deleted",
   "invoice.paid",
+  "invoice.payment_failed",
 ];
 const WORKOS_EVENTS = [
   "organization.updated",
@@ -154,6 +159,22 @@ export function createBillingSync(opts: BillingSyncOptions): BillingSync {
           `credit:invoice:${invoice.id}`,
         );
       }
+    }
+
+    if (event.type === "invoice.payment_failed") {
+      const invoice = event.data.object as Stripe.Invoice & { subscription?: string | null };
+      if (!invoice.subscription) return; // one-off top-ups don't affect subscription state
+      const sub = (await getStripe().subscriptions.retrieve(invoice.subscription)) as Stripe.Subscription & {
+        current_period_end?: number;
+      };
+      const orgId = sub.metadata?.org_id;
+      if (!orgId) return;
+      await opts.adapter.setSubscription(orgId, {
+        status: "past_due",
+        subscriptionId: sub.id,
+        periodEnd: sub.current_period_end ? new Date(sub.current_period_end * 1000).toISOString() : null,
+      });
+      await opts.hooks?.onPaymentFailed?.(orgId);
     }
   }
 

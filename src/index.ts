@@ -31,6 +31,7 @@ export {
   deductTokens,
   creditTokens,
   createTokenCheckoutSession,
+  createBillingPortalSession,
   getAutoReloadSettings,
   setAutoReloadSettings,
   tryAutoReload,

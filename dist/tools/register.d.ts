@@ -16,5 +16,5 @@ export interface RegisterBillingToolsOptions {
     defaultPlan?: string;
 }
 export declare function registerBillingTools(server: McpServer, opts: RegisterBillingToolsOptions): void;
-export declare const BILLING_TOOL_NAMES: readonly ["get_api_key", "list_api_keys", "revoke_api_key", "get_token_balance", "buy_tokens", "set_auto_reload", "list_invoices"];
+export declare const BILLING_TOOL_NAMES: readonly ["get_api_key", "list_api_keys", "revoke_api_key", "get_token_balance", "buy_tokens", "set_auto_reload", "get_billing_portal", "list_invoices"];
 //# sourceMappingURL=register.d.ts.map
