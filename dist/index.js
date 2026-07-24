@@ -10,6 +10,8 @@ export { ensurePlans, planPriceId, planForPriceId, seatLimit, includedTokens, lo
 export { sendMagicAuth, verifyMagicAuth } from "./magic-auth.js";
 // WorkOS organization invitations (shared, hook-configurable)
 export { createWorkOSInvitations, } from "./invitations.js";
+// Event-polling sync (zero-webhook: poll Stripe + WorkOS Events APIs)
+export { pollStripeEvents, pollWorkOSEvents } from "./events.js";
 // Generic DB mirror for WorkOS entities (table-agnostic; org + user shapes)
 export { createMirror, } from "./mirror.js";
 // Tool registration

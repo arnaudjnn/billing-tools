@@ -67,6 +67,9 @@ export {
   type WorkOSInvitationsOptions,
 } from "./invitations.js";
 
+// Event-polling sync (zero-webhook: poll Stripe + WorkOS Events APIs)
+export { pollStripeEvents, pollWorkOSEvents, type PollResult } from "./events.js";
+
 // Generic DB mirror for WorkOS entities (table-agnostic; org + user shapes)
 export {
   createMirror,
