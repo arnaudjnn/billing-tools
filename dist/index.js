@@ -1,5 +1,5 @@
 // billing-tools — make your Stripe + WorkOS app ready to get paid.
-export { resolveConfig } from "./types.js";
+export { resolveConfig, internalDomainsFromEnv } from "./types.js";
 // Auth engine
 export { authContext, runWithAuth, runWithResolvedOrg, enforceAccess, enforceTokens, } from "./auth.js";
 // Billing engine (Stripe math)

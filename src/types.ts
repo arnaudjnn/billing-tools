@@ -62,6 +62,25 @@ export function resolveConfig(c: BillingConfig): ResolvedConfig {
   };
 }
 
+/** Build the `internalDomains` allowlist from the environment: an optional
+ *  deployment root domain (whatever your host exposes — pass it if you want the
+ *  deployment's own domain treated as internal) plus a comma-separated env var
+ *  (default `INTERNAL_ORG_DOMAINS`). Orgs with a verified WorkOS domain matching
+ *  any entry get unmetered access (see enforceTokens → isInternalOrg). Result is
+ *  lowercased + de-duplicated. Host-agnostic: the caller supplies the root
+ *  domain (or nothing); the env var is generic. */
+export function internalDomainsFromEnv(
+  rootDomain?: string | null,
+  envVar = "INTERNAL_ORG_DOMAINS",
+): string[] {
+  const extras = (process.env[envVar] ?? "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  const root = rootDomain?.trim().toLowerCase();
+  return Array.from(new Set([...(root ? [root] : []), ...extras]));
+}
+
 // The MCP tool-result envelope every handler returns.
 export type ToolResult = {
   content: Array<{ type: "text"; text: string }>;

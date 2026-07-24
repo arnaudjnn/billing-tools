@@ -10,7 +10,7 @@ export type {
   ToolResult,
   ToolErrorResult,
 } from "./types.js";
-export { resolveConfig } from "./types.js";
+export { resolveConfig, internalDomainsFromEnv } from "./types.js";
 
 // Auth engine
 export {

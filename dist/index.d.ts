@@ -1,5 +1,5 @@
 export type { BillingAdapter, BillingUser, ApiKeyInfo, BillingConfig, ResolvedConfig, ToolResult, ToolErrorResult, } from "./types.js";
-export { resolveConfig } from "./types.js";
+export { resolveConfig, internalDomainsFromEnv } from "./types.js";
 export { authContext, runWithAuth, runWithResolvedOrg, enforceAccess, enforceTokens, } from "./auth.js";
 export { getStripe, stripeConfigured, ensureStripeCustomer, getBillingCustomerId, getTokenBalance, deductTokens, creditTokens, createTokenCheckoutSession, getAutoReloadSettings, setAutoReloadSettings, tryAutoReload, listInvoices, listSubscriptionPrices, resolveSubscriptionPrice, type StripePrice, } from "./billing.js";
 export { ensurePlans, planPriceId, planForPriceId, seatLimit, includedTokens, lookupKeyFor, type PlanDef, type PlansConfig, type BillingInterval, type EnsuredPrice, } from "./plans.js";
