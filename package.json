@@ -1,17 +1,19 @@
 {
   "name": "@arnaudjnn/billing-tools",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Make your Stripe + WorkOS app ready to get paid: drop-in API-key auth + token/credit billing as MCP tools, a REST API, and a CLI. Storage-agnostic via an adapter.",
   "license": "MIT",
   "type": "module",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     },
     "./adapters/workos-org": {
       "types": "./dist/adapters/workos-org.d.ts",
-      "import": "./dist/adapters/workos-org.js"
+      "import": "./dist/adapters/workos-org.js",
+      "default": "./dist/adapters/workos-org.js"
     }
   },
   "files": [
@@ -44,5 +46,6 @@
     "mcp-handler": "^1.1.0",
     "typescript": "^5",
     "zod": "^3.25.76"
-  }
+  },
+  "main": "./dist/index.js"
 }
