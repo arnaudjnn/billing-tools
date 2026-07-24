@@ -3,6 +3,7 @@ import type { BillingAdapter, BillingConfig } from "../types.js";
 import { resolveConfig } from "../types.js";
 import { registerKeyTools } from "./keys.js";
 import { registerBillingOnlyTools } from "./billing.js";
+import { ensurePlans, type PlansConfig } from "../plans.js";
 
 // Keys whose values must never hit the logs (magic-auth codes, API keys, etc.).
 const SENSITIVE_KEY_RE =
@@ -54,6 +55,11 @@ export interface RegisterBillingToolsOptions {
   toolCosts?: Record<string, number>;
   /** Install the redacted [tool-input] logging wrapper. Default true. */
   installLogging?: boolean;
+  /** Declarative plans. When set, a `list_plans` tool is registered and the
+   *  Stripe products/prices are auto-provisioned (lazily, on first list). */
+  plans?: PlansConfig;
+  /** Default plan key (e.g. "hobby"). */
+  defaultPlan?: string;
 }
 
 // Register the billing-tools surface (auth/key management + token billing) on
@@ -63,6 +69,38 @@ export function registerBillingTools(server: McpServer, opts: RegisterBillingToo
   if (opts.installLogging !== false) installInputLogging(server);
   registerKeyTools(server, opts.adapter, config);
   registerBillingOnlyTools(server, opts.adapter, config, opts.toolCosts ?? {});
+  if (opts.plans) registerPlanTools(server, opts.plans, opts.defaultPlan, config.currency);
+}
+
+// list_plans: returns the configured plans + live Stripe prices, provisioning
+// the Stripe products/prices on first call (idempotent). Zero dashboard setup.
+function registerPlanTools(
+  server: McpServer,
+  plans: PlansConfig,
+  defaultPlan: string | undefined,
+  currency: string,
+) {
+  server.tool(
+    "list_plans",
+    "List the available subscription plans (seats, included tokens, and monthly/yearly prices). Prices are provisioned in Stripe automatically.",
+    {},
+    async () => {
+      const ensured = await ensurePlans(plans, { currency });
+      const priceOf = (plan: string, interval: "monthly" | "yearly") =>
+        ensured.find((e) => e.plan === plan && e.interval === interval) ?? null;
+      const out = Object.entries(plans).map(([key, def]) => ({
+        plan: key,
+        default: key === defaultPlan,
+        seats: def.seats,
+        tokens_per_seat: def.tokensPerSeat,
+        prices: {
+          monthly: { amount: def.price.monthly, currency, price_id: priceOf(key, "monthly")?.priceId ?? null },
+          yearly: { amount: def.price.yearly, currency, price_id: priceOf(key, "yearly")?.priceId ?? null },
+        },
+      }));
+      return { content: [{ type: "text" as const, text: JSON.stringify({ plans: out }, null, 2) }] };
+    },
+  );
 }
 
 export const BILLING_TOOL_NAMES = [

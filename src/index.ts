@@ -40,6 +40,20 @@ export {
   type StripePrice,
 } from "./billing.js";
 
+// Declarative plans (auto-provision Stripe products/prices from config)
+export {
+  ensurePlans,
+  planPriceId,
+  planForPriceId,
+  seatLimit,
+  includedTokens,
+  lookupKeyFor,
+  type PlanDef,
+  type PlansConfig,
+  type BillingInterval,
+  type EnsuredPrice,
+} from "./plans.js";
+
 // WorkOS magic-auth
 export { sendMagicAuth, verifyMagicAuth } from "./magic-auth.js";
 

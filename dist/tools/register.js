@@ -1,6 +1,7 @@
 import { resolveConfig } from "../types.js";
 import { registerKeyTools } from "./keys.js";
 import { registerBillingOnlyTools } from "./billing.js";
+import { ensurePlans } from "../plans.js";
 // Keys whose values must never hit the logs (magic-auth codes, API keys, etc.).
 const SENSITIVE_KEY_RE = /cookie|token|secret|password|passwd|authorization|api[_-]?key|session|credential|code/i;
 function redactForLog(value, depth = 0) {
@@ -51,6 +52,27 @@ export function registerBillingTools(server, opts) {
         installInputLogging(server);
     registerKeyTools(server, opts.adapter, config);
     registerBillingOnlyTools(server, opts.adapter, config, opts.toolCosts ?? {});
+    if (opts.plans)
+        registerPlanTools(server, opts.plans, opts.defaultPlan, config.currency);
+}
+// list_plans: returns the configured plans + live Stripe prices, provisioning
+// the Stripe products/prices on first call (idempotent). Zero dashboard setup.
+function registerPlanTools(server, plans, defaultPlan, currency) {
+    server.tool("list_plans", "List the available subscription plans (seats, included tokens, and monthly/yearly prices). Prices are provisioned in Stripe automatically.", {}, async () => {
+        const ensured = await ensurePlans(plans, { currency });
+        const priceOf = (plan, interval) => ensured.find((e) => e.plan === plan && e.interval === interval) ?? null;
+        const out = Object.entries(plans).map(([key, def]) => ({
+            plan: key,
+            default: key === defaultPlan,
+            seats: def.seats,
+            tokens_per_seat: def.tokensPerSeat,
+            prices: {
+                monthly: { amount: def.price.monthly, currency, price_id: priceOf(key, "monthly")?.priceId ?? null },
+                yearly: { amount: def.price.yearly, currency, price_id: priceOf(key, "yearly")?.priceId ?? null },
+            },
+        }));
+        return { content: [{ type: "text", text: JSON.stringify({ plans: out }, null, 2) }] };
+    });
 }
 export const BILLING_TOOL_NAMES = [
     "get_api_key",

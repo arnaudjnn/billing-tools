@@ -4,6 +4,8 @@ export { resolveConfig } from "./types.js";
 export { authContext, runWithAuth, runWithResolvedOrg, enforceAccess, enforceTokens, } from "./auth.js";
 // Billing engine (Stripe math)
 export { getStripe, stripeConfigured, ensureStripeCustomer, getBillingCustomerId, getTokenBalance, deductTokens, creditTokens, createTokenCheckoutSession, getAutoReloadSettings, setAutoReloadSettings, tryAutoReload, listInvoices, listSubscriptionPrices, resolveSubscriptionPrice, } from "./billing.js";
+// Declarative plans (auto-provision Stripe products/prices from config)
+export { ensurePlans, planPriceId, planForPriceId, seatLimit, includedTokens, lookupKeyFor, } from "./plans.js";
 // WorkOS magic-auth
 export { sendMagicAuth, verifyMagicAuth } from "./magic-auth.js";
 // WorkOS organization invitations (shared, hook-configurable)
