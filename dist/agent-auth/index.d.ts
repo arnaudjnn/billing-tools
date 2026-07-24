@@ -53,7 +53,9 @@ export declare function createAgentAuth(opts: AgentAuthOptions): {
     token: (request: Request) => Promise<Response>;
     handleClaimGrant: (params: Record<string, string>) => Promise<Response>;
     revoke: (request: Request) => Promise<Response>;
-    /** `WWW-Authenticate` value advertising the PRM discovery doc on a 401. */
+    /** Bare PRM discovery URL — pass as the REST/MCP factory `resourceMetadata`. */
+    resourceMetadataUrl: (request: Request) => string;
+    /** Full `WWW-Authenticate` value advertising the PRM discovery doc on a 401. */
     wwwAuthenticate: (request: Request) => string;
 };
 //# sourceMappingURL=index.d.ts.map

@@ -268,7 +268,9 @@ export function createAgentAuth(opts) {
         token,
         handleClaimGrant,
         revoke,
-        /** `WWW-Authenticate` value advertising the PRM discovery doc on a 401. */
+        /** Bare PRM discovery URL — pass as the REST/MCP factory `resourceMetadata`. */
+        resourceMetadataUrl: (request) => `${baseUrlOf(request)}${p.protectedResource}`,
+        /** Full `WWW-Authenticate` value advertising the PRM discovery doc on a 401. */
         wwwAuthenticate: (request) => `Bearer resource_metadata="${baseUrlOf(request)}${p.protectedResource}"`,
     };
 }
