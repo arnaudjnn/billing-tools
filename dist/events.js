@@ -1,24 +1,5 @@
-import { WorkOS } from "@workos-inc/node";
 import { getStripe } from "./billing.js";
-// Event-polling sync — the zero-webhook path. Poll the Stripe and WorkOS Events
-// APIs on a schedule (the app runs a loop/cron); no webhook endpoints, no
-// signing secrets, no dashboard — just the API keys + a persisted cursor.
-//
-// Cursor = the last processed event id. First run (no cursor) BASELINES to the
-// newest event WITHOUT processing history (so you don't replay months of events
-// or double-grant). Persist the returned cursor after each poll; because we
-// stop at the cursor, events are processed exactly once (handlers that mutate,
-// e.g. token grants, are safe as long as the cursor is saved after handling).
-let _workos = null;
-function getWorkOS() {
-    if (!_workos) {
-        const apiKey = process.env.WORKOS_API_KEY;
-        if (!apiKey)
-            throw new Error("WORKOS_API_KEY is not set");
-        _workos = new WorkOS(apiKey, { clientId: process.env.WORKOS_CLIENT_ID ?? "" });
-    }
-    return _workos;
-}
+import { getWorkOS } from "./workos.js";
 /** Poll Stripe events newer than `after` (last processed event id), oldest
  *  first. No `after` → baseline to the newest event, process nothing. */
 export async function pollStripeEvents(opts) {
@@ -49,17 +30,18 @@ export async function pollStripeEvents(opts) {
  *  No `after` → baseline to the newest event, process nothing. */
 export async function pollWorkOSEvents(opts) {
     const wos = getWorkOS();
-    // WorkOS requires the event-name filter.
+    // WorkOS requires the event-name filter (narrow to the SDK's EventName union).
     const events = opts.events;
     const page = (after) => wos.events.listEvents({ events, order: "asc", limit: 100, ...(after ? { after } : {}) });
     // Baseline (no cursor): page ascending to the very end and take the last id
     // WITHOUT processing. (WorkOS's `order:desc` isn't reliable for "newest", so
     // we walk forward to the end rather than trust a single desc query.)
+    // NOTE: listEvents returns a plain List (not an AutoPaginatable), so this
+    // manual walk is required — see the AGENTS.md "deliberate exceptions".
     if (!opts.after) {
         let cursor = null;
         for (;;) {
-            const p = await page(cursor ?? undefined);
-            const data = p.data;
+            const { data } = await page(cursor ?? undefined);
             if (data.length === 0)
                 break;
             cursor = data[data.length - 1].id;
@@ -72,12 +54,11 @@ export async function pollWorkOSEvents(opts) {
     let cursor = opts.after;
     let count = 0;
     for (;;) {
-        const p = await page(cursor);
-        const data = p.data;
+        const { data } = await page(cursor);
         if (data.length === 0)
             break;
         for (const event of data) {
-            await opts.onEvent(event);
+            await opts.onEvent({ id: event.id, event: event.event, data: event.data });
             cursor = event.id;
             count++;
             if (count >= max)

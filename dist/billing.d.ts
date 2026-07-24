@@ -13,12 +13,15 @@ export interface StripePrice {
     interval: string | null;
     intervalCount: number | null;
 }
-/** All active recurring (subscription) prices on the Stripe account. */
+/** All active recurring (subscription) prices on the Stripe account. Uses the
+ *  SDK's async auto-pagination so accounts with >1 page of prices aren't
+ *  silently truncated. */
 export declare function listSubscriptionPrices(): Promise<StripePrice[]>;
 /** Resolve a single subscription price without any env config. Resolution
  *  order: explicit `priceId` → matching `lookupKey` → the sole recurring price.
  *  Returns null if nothing matches or the choice is ambiguous (multiple prices,
- *  no lookupKey) — the caller can then list options via listSubscriptionPrices. */
+ *  no lookupKey) — the caller can then list options via listSubscriptionPrices.
+ *  The priceId/lookupKey paths query Stripe directly (no full-list scan). */
 export declare function resolveSubscriptionPrice(opts?: {
     priceId?: string;
     lookupKey?: string;
@@ -27,7 +30,10 @@ export declare function getBillingCustomerId(adapter: BillingAdapter, orgId: str
 export declare function ensureStripeCustomer(adapter: BillingAdapter, orgId: string, email: string | undefined, config: ResolvedConfig): Promise<string>;
 export declare function getTokenBalance(stripeCustomerId: string): Promise<number>;
 export declare function deductTokens(stripeCustomerId: string, toolName: string, cost: number, currency: string): Promise<void>;
-export declare function creditTokens(stripeCustomerId: string, amount: number, description: string, currency: string): Promise<void>;
+export declare function creditTokens(stripeCustomerId: string, amount: number, description: string, currency: string, 
+/** Pass a stable key (e.g. the source invoice/session id) so replayed events
+ *  — a re-delivered webhook, an overlapping poll — credit exactly once. */
+idempotencyKey?: string): Promise<void>;
 export declare function createTokenCheckoutSession(stripeCustomerId: string, orgId: string, amountMajor: number, config: ResolvedConfig): Promise<string>;
 export declare function getAutoReloadSettings(stripeCustomerId: string): Promise<{
     enabled: boolean;

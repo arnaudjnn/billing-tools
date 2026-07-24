@@ -25,7 +25,8 @@ export function createStripeWebhookHandler(opts = {}) {
                 const customerId = customerIdOf(session.customer);
                 const tokens = parseInt(session.metadata?.tokens || "0", 10);
                 if (customerId && tokens > 0) {
-                    await creditTokens(customerId, tokens, `Purchase: ${tokens} tokens via Checkout`, currency);
+                    // Idempotency key on the session id: a re-delivered webhook credits once.
+                    await creditTokens(customerId, tokens, `Purchase: ${tokens} tokens via Checkout`, currency, `credit:checkout:${session.id}`);
                 }
             }
         }

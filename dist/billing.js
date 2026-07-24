@@ -3,8 +3,11 @@ import Stripe from "stripe";
 // where a negative balance = available credit. All functions keyed on a
 // stripeCustomerId are pure Stripe math (identical across host apps); the
 // customer-id pointer itself is stored by the host via the adapter.
+// One memoized Stripe client for the whole lib (lazy — never construct at
+// import; STRIPE_SECRET_KEY may be unset at module load in dev).
+let _stripe = null;
 export function getStripe() {
-    return new Stripe(process.env.STRIPE_SECRET_KEY);
+    return (_stripe ??= new Stripe(process.env.STRIPE_SECRET_KEY));
 }
 export function stripeConfigured() {
     return !!process.env.STRIPE_SECRET_KEY;
@@ -25,30 +28,50 @@ function toStripePrice(p) {
         intervalCount: p.recurring?.interval_count ?? null,
     };
 }
-/** All active recurring (subscription) prices on the Stripe account. */
+/** All active recurring (subscription) prices on the Stripe account. Uses the
+ *  SDK's async auto-pagination so accounts with >1 page of prices aren't
+ *  silently truncated. */
 export async function listSubscriptionPrices() {
-    const res = await getStripe().prices.list({
+    const out = [];
+    for await (const p of getStripe().prices.list({
         active: true,
         type: "recurring",
         limit: 100,
         expand: ["data.product"],
-    });
-    return res.data.map(toStripePrice);
+    })) {
+        out.push(toStripePrice(p));
+    }
+    return out;
 }
 /** Resolve a single subscription price without any env config. Resolution
  *  order: explicit `priceId` → matching `lookupKey` → the sole recurring price.
  *  Returns null if nothing matches or the choice is ambiguous (multiple prices,
- *  no lookupKey) — the caller can then list options via listSubscriptionPrices. */
+ *  no lookupKey) — the caller can then list options via listSubscriptionPrices.
+ *  The priceId/lookupKey paths query Stripe directly (no full-list scan). */
 export async function resolveSubscriptionPrice(opts = {}) {
-    const prices = await listSubscriptionPrices();
-    if (opts.priceId)
-        return prices.find((p) => p.id === opts.priceId) ?? null;
-    if (opts.lookupKey) {
-        const match = prices.find((p) => p.lookupKey === opts.lookupKey);
-        if (match)
-            return match;
+    const stripe = getStripe();
+    if (opts.priceId) {
+        try {
+            const p = await stripe.prices.retrieve(opts.priceId, { expand: ["product"] });
+            return p.active ? toStripePrice(p) : null;
+        }
+        catch {
+            return null;
+        }
     }
-    return prices.length === 1 ? prices[0] : null;
+    if (opts.lookupKey) {
+        const r = await stripe.prices.list({
+            lookup_keys: [opts.lookupKey],
+            active: true,
+            limit: 1,
+            expand: ["data.product"],
+        });
+        if (r.data[0])
+            return toStripePrice(r.data[0]);
+        return null;
+    }
+    const all = await listSubscriptionPrices();
+    return all.length === 1 ? all[0] : null;
 }
 export async function getBillingCustomerId(adapter, orgId) {
     return adapter.getBillingCustomerId(orgId);
@@ -65,11 +88,13 @@ export async function ensureStripeCustomer(adapter, orgId, email, config) {
         metadata: { org_id: orgId },
     });
     if (config.freeTokens > 0) {
+        // Idempotency key so a race on first-use (two concurrent callers) can't
+        // grant the welcome bonus twice for the same org.
         await stripe.customers.createBalanceTransaction(customer.id, {
             amount: -config.freeTokens,
             currency: config.currency,
             description: `Welcome bonus: ${config.freeTokens} free tokens`,
-        });
+        }, { idempotencyKey: `welcome:${orgId}` });
     }
     await adapter.setBillingCustomerId(orgId, customer.id);
     return customer.id;
@@ -87,12 +112,15 @@ export async function deductTokens(stripeCustomerId, toolName, cost, currency) {
         description: `Tool call: ${toolName} (${cost} tokens)`,
     });
 }
-export async function creditTokens(stripeCustomerId, amount, description, currency) {
+export async function creditTokens(stripeCustomerId, amount, description, currency, 
+/** Pass a stable key (e.g. the source invoice/session id) so replayed events
+ *  — a re-delivered webhook, an overlapping poll — credit exactly once. */
+idempotencyKey) {
     await getStripe().customers.createBalanceTransaction(stripeCustomerId, {
         amount: -amount, // negative = credit
         currency,
         description,
-    });
+    }, idempotencyKey ? { idempotencyKey } : undefined);
 }
 export async function createTokenCheckoutSession(stripeCustomerId, orgId, amountMajor, config) {
     const amountMinor = Math.round(amountMajor * 100);

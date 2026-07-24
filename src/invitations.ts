@@ -1,6 +1,7 @@
-import { WorkOS } from "@workos-inc/node";
+import { NotFoundException, ConflictException, type Invitation as WorkOSInvitation } from "@workos-inc/node";
 import type { BillingUser } from "./types.js";
 import type { WorkOSOrgMap } from "./adapters/workos-org.js";
+import { getWorkOS } from "./workos.js";
 
 // Shared WorkOS organization-invitation service. WorkOS owns the invitation
 // record + membership; two behaviours are selected by hooks:
@@ -71,22 +72,12 @@ export interface InvitationService {
 }
 
 const PAGE = 100;
-const statusOf = (e: unknown): number | undefined =>
-  typeof e === "object" && e !== null && "status" in e
-    ? (e as { status?: number }).status
-    : undefined;
 
 export function createWorkOSInvitations(
   opts: WorkOSInvitationsOptions = {},
 ): InvitationService {
-  // Lazy: constructing WorkOS eagerly would throw when WORKOS_API_KEY is unset,
-  // which must not break app boot (the service is often instantiated at module
-  // load). The client is built on first actual use instead.
-  let client: WorkOS | null = null;
-  const workos = (): WorkOS =>
-    (client ??= new WorkOS(opts.apiKey ?? process.env.WORKOS_API_KEY, {
-      clientId: opts.clientId ?? process.env.WORKOS_CLIENT_ID ?? "",
-    }));
+  // Shared, lazily-memoized WorkOS client (see workos.ts).
+  const workos = () => getWorkOS({ apiKey: opts.apiKey, clientId: opts.clientId });
   const hooks = opts.hooks ?? {};
   const baseUrl = opts.baseUrl ?? "";
   const acceptPath = opts.acceptPath ?? "/invita";
@@ -96,18 +87,7 @@ export function createWorkOSInvitations(
   const toOrgId = (workosOrgId: string): Promise<string | null> =>
     opts.map ? opts.map.toOrgId(workosOrgId) : Promise.resolve(workosOrgId);
 
-  // WorkOS invitation shape (subset we use).
-  type WosInvitation = {
-    id: string;
-    email: string;
-    roleSlug: string | null;
-    organizationId: string | null;
-    state: Invitation["state"];
-    createdAt: string;
-    expiresAt: string;
-  };
-
-  async function normalize(inv: WosInvitation, orgId?: string): Promise<Invitation> {
+  async function normalize(inv: WorkOSInvitation, orgId?: string): Promise<Invitation> {
     const resolved =
       orgId ?? (inv.organizationId ? await toOrgId(inv.organizationId) : null);
     return {
@@ -123,11 +103,11 @@ export function createWorkOSInvitations(
   }
 
   async function get(invitationId: string): Promise<Invitation | null> {
-    let inv: WosInvitation;
+    let inv: WorkOSInvitation;
     try {
-      inv = (await workos().userManagement.getInvitation(invitationId)) as WosInvitation;
+      inv = await workos().userManagement.getInvitation(invitationId);
     } catch (e) {
-      if (statusOf(e) === 404) return null;
+      if (e instanceof NotFoundException) return null;
       throw e;
     }
     if (inv.state !== "pending") return null;
@@ -141,12 +121,12 @@ export function createWorkOSInvitations(
     inviterUserId?: string,
   ): Promise<Invitation> {
     const organizationId = await toWid(orgId);
-    const inv = (await workos().userManagement.sendInvitation({
+    const inv = await workos().userManagement.sendInvitation({
       email: email.trim().toLowerCase(),
       organizationId,
       roleSlug,
       inviterUserId,
-    })) as WosInvitation;
+    });
     if (hooks.sendEmail) {
       await hooks.sendEmail({
         id: inv.id,
@@ -163,8 +143,8 @@ export function createWorkOSInvitations(
 
   async function list(orgId: string): Promise<Invitation[]> {
     const organizationId = await toWid(orgId);
-    const r = await workos().userManagement.listInvitations({ organizationId, limit: PAGE });
-    const pending = (r.data as WosInvitation[]).filter((i) => i.state === "pending");
+    const paginatable = await workos().userManagement.listInvitations({ organizationId, limit: PAGE });
+    const pending = (await paginatable.autoPagination()).filter((i) => i.state === "pending");
     return Promise.all(pending.map((i) => normalize(i, orgId)));
   }
 
@@ -189,24 +169,24 @@ export function createWorkOSInvitations(
         roleSlug: inv.roleSlug,
       });
     } catch (e) {
-      if (statusOf(e) !== 409) throw e;
+      if (!(e instanceof ConflictException)) throw e;
     }
     // Consume the pending invitation.
     try {
       await workos().userManagement.revokeInvitation(invitationId);
     } catch (e) {
-      if (statusOf(e) !== 404) throw e;
+      if (!(e instanceof NotFoundException)) throw e;
     }
     return { orgId: inv.orgId };
   }
 
   async function revoke(orgId: string, invitationId: string): Promise<void> {
     const organizationId = await toWid(orgId);
-    let inv: WosInvitation;
+    let inv: WorkOSInvitation;
     try {
-      inv = (await workos().userManagement.getInvitation(invitationId)) as WosInvitation;
+      inv = await workos().userManagement.getInvitation(invitationId);
     } catch (e) {
-      if (statusOf(e) === 404) return;
+      if (e instanceof NotFoundException) return;
       throw e;
     }
     // Belongs-to check: the invitation must target this org.

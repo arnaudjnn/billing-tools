@@ -1,5 +1,6 @@
-import { WorkOS, DomainDataState } from "@workos-inc/node";
+import { DomainDataState, OrganizationDomainState, type WorkOS } from "@workos-inc/node";
 import type { BillingAdapter, BillingUser, ApiKeyInfo } from "../types.js";
+import { getWorkOS } from "../workos.js";
 import { lookupCompany } from "../util/clearout.js";
 
 // Built-in adapter: WorkOS is the source of truth. Workspace = WorkOS
@@ -39,26 +40,22 @@ export interface WorkOSOrgAdapterOptions {
 }
 
 export class WorkOSOrgAdapter implements BillingAdapter {
-  private _workos: WorkOS | null = null;
   private apiKey?: string;
-  private clientId: string;
+  private clientId?: string;
   private map?: WorkOSOrgMap;
   private ensureOrg?: (user: BillingUser) => Promise<{ orgId: string }>;
 
   constructor(opts: WorkOSOrgAdapterOptions = {}) {
     this.apiKey = opts.apiKey;
-    this.clientId = opts.clientId ?? process.env.WORKOS_CLIENT_ID ?? "";
+    this.clientId = opts.clientId;
     this.map = opts.map;
     this.ensureOrg = opts.ensureOrg;
   }
 
-  // Lazy: constructing WorkOS eagerly would throw when WORKOS_API_KEY is unset,
-  // which must not break app boot (the adapter is created at module load). The
-  // client is built on first actual use instead.
+  // The shared, lazily-memoized client (see workos.ts). With no explicit creds
+  // this is the process-wide singleton; explicit creds get their own client.
   private get workos(): WorkOS {
-    return (this._workos ??= new WorkOS(this.apiKey ?? process.env.WORKOS_API_KEY, {
-      clientId: this.clientId,
-    }));
+    return getWorkOS({ apiKey: this.apiKey, clientId: this.clientId });
   }
 
   /** app orgId → WorkOS org id (identity when no map is configured). */
@@ -80,7 +77,11 @@ export class WorkOSOrgAdapter implements BillingAdapter {
 
   async getOrgDomains(orgId: string): Promise<string[]> {
     const org = await this.workos.organizations.getOrganization(await this.wid(orgId));
-    return org.domains.map((d) => d.domain);
+    // Only VERIFIED domains count — a pending/failed domain must not unlock the
+    // internal-org unmetered path (see auth.ts isInternalOrg).
+    return org.domains
+      .filter((d) => d.state === OrganizationDomainState.Verified)
+      .map((d) => d.domain);
   }
 
   async getBillingCustomerId(orgId: string): Promise<string | null> {
@@ -129,10 +130,11 @@ export class WorkOSOrgAdapter implements BillingAdapter {
   }
 
   async listApiKeys(orgId: string): Promise<ApiKeyInfo[]> {
-    const keys = await this.workos.apiKeys.listOrganizationApiKeys({
+    const paginatable = await this.workos.apiKeys.listOrganizationApiKeys({
       organizationId: await this.wid(orgId),
     });
-    return keys.data.map((k) => ({
+    const keys = await paginatable.autoPagination();
+    return keys.map((k) => ({
       id: k.id,
       name: k.name,
       obfuscatedValue: k.obfuscatedValue,
@@ -140,10 +142,13 @@ export class WorkOSOrgAdapter implements BillingAdapter {
   }
 
   async revokeApiKey(orgId: string, id: string): Promise<{ id: string; name: string } | null> {
-    const keys = await this.workos.apiKeys.listOrganizationApiKeys({
+    // Full-list scope check (all pages) so a key on a later page isn't mistaken
+    // for "not found"; the SDK delete needs only the id.
+    const paginatable = await this.workos.apiKeys.listOrganizationApiKeys({
       organizationId: await this.wid(orgId),
     });
-    const target = keys.data.find((k) => k.id === id);
+    const keys = await paginatable.autoPagination();
+    const target = keys.find((k) => k.id === id);
     if (!target) return null;
     await this.workos.apiKeys.deleteApiKey(id);
     return { id: target.id, name: target.name };
@@ -151,14 +156,15 @@ export class WorkOSOrgAdapter implements BillingAdapter {
 
   // ── Subscription state + seats (org metadata; used by the billing-sync) ────
 
-  /** Active-member count for the org (per-seat token grants + seat limits). */
+  /** Active-member count for the org (per-seat token grants + seat limits).
+   *  Auto-paginates so orgs with >100 members aren't undercounted. */
   async memberCount(orgId: string): Promise<number> {
-    const memberships = await this.workos.userManagement.listOrganizationMemberships({
+    const paginatable = await this.workos.userManagement.listOrganizationMemberships({
       organizationId: await this.wid(orgId),
       statuses: ["active"],
-      limit: 100,
     });
-    return memberships.data.length;
+    const members = await paginatable.autoPagination();
+    return members.length;
   }
 
   async getSubscription(orgId: string): Promise<{

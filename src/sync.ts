@@ -144,11 +144,14 @@ export function createBillingSync(opts: BillingSyncOptions): BillingSync {
       const seats = await opts.adapter.memberCount(orgId);
       const tokens = includedTokens(opts.plans, plan, seats);
       if (tokens > 0) {
+        // Idempotency key on the invoice id: an overlapping/replayed poll grants
+        // the per-cycle tokens exactly once.
         await creditTokens(
           invoice.customer,
           tokens,
           `Included tokens: ${plan} (${seats} seat${seats === 1 ? "" : "s"})`,
           currency,
+          `credit:invoice:${invoice.id}`,
         );
       }
     }

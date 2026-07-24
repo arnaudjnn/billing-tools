@@ -21,9 +21,8 @@ export interface WorkOSOrgAdapterOptions {
     }>;
 }
 export declare class WorkOSOrgAdapter implements BillingAdapter {
-    private _workos;
     private apiKey?;
-    private clientId;
+    private clientId?;
     private map?;
     private ensureOrg?;
     constructor(opts?: WorkOSOrgAdapterOptions);
@@ -48,7 +47,8 @@ export declare class WorkOSOrgAdapter implements BillingAdapter {
         id: string;
         name: string;
     } | null>;
-    /** Active-member count for the org (per-seat token grants + seat limits). */
+    /** Active-member count for the org (per-seat token grants + seat limits).
+     *  Auto-paginates so orgs with >100 members aren't undercounted. */
     memberCount(orgId: string): Promise<number>;
     getSubscription(orgId: string): Promise<{
         plan: string | null;

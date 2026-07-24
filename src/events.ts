@@ -1,6 +1,7 @@
 import type Stripe from "stripe";
-import { WorkOS } from "@workos-inc/node";
+import type { Event, EventName } from "@workos-inc/node";
 import { getStripe } from "./billing.js";
+import { getWorkOS } from "./workos.js";
 
 // Event-polling sync — the zero-webhook path. Poll the Stripe and WorkOS Events
 // APIs on a schedule (the app runs a loop/cron); no webhook endpoints, no
@@ -11,16 +12,6 @@ import { getStripe } from "./billing.js";
 // or double-grant). Persist the returned cursor after each poll; because we
 // stop at the cursor, events are processed exactly once (handlers that mutate,
 // e.g. token grants, are safe as long as the cursor is saved after handling).
-
-let _workos: WorkOS | null = null;
-function getWorkOS(): WorkOS {
-  if (!_workos) {
-    const apiKey = process.env.WORKOS_API_KEY;
-    if (!apiKey) throw new Error("WORKOS_API_KEY is not set");
-    _workos = new WorkOS(apiKey, { clientId: process.env.WORKOS_CLIENT_ID ?? "" });
-  }
-  return _workos;
-}
 
 export interface PollResult {
   cursor: string | null;
@@ -67,19 +58,20 @@ export async function pollWorkOSEvents(opts: {
   maxPerPoll?: number;
 }): Promise<PollResult> {
   const wos = getWorkOS();
-  // WorkOS requires the event-name filter.
-  const events = opts.events as unknown as Parameters<typeof wos.events.listEvents>[0]["events"];
-  const page = (after?: string) =>
+  // WorkOS requires the event-name filter (narrow to the SDK's EventName union).
+  const events = opts.events as EventName[];
+  const page = (after?: string): Promise<{ data: Event[] }> =>
     wos.events.listEvents({ events, order: "asc", limit: 100, ...(after ? { after } : {}) });
 
   // Baseline (no cursor): page ascending to the very end and take the last id
   // WITHOUT processing. (WorkOS's `order:desc` isn't reliable for "newest", so
   // we walk forward to the end rather than trust a single desc query.)
+  // NOTE: listEvents returns a plain List (not an AutoPaginatable), so this
+  // manual walk is required — see the AGENTS.md "deliberate exceptions".
   if (!opts.after) {
     let cursor: string | null = null;
     for (;;) {
-      const p = await page(cursor ?? undefined);
-      const data = p.data as unknown as Array<{ id: string }>;
+      const { data } = await page(cursor ?? undefined);
       if (data.length === 0) break;
       cursor = data[data.length - 1].id;
       if (data.length < 100) break;
@@ -91,11 +83,10 @@ export async function pollWorkOSEvents(opts: {
   let cursor: string = opts.after;
   let count = 0;
   for (;;) {
-    const p = await page(cursor);
-    const data = p.data as unknown as Array<{ id: string; event: string; data: unknown }>;
+    const { data } = await page(cursor);
     if (data.length === 0) break;
     for (const event of data) {
-      await opts.onEvent(event);
+      await opts.onEvent({ id: event.id, event: event.event, data: event.data });
       cursor = event.id;
       count++;
       if (count >= max) break;

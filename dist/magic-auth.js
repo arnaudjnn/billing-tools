@@ -1,12 +1,7 @@
-import { WorkOS } from "@workos-inc/node";
+import { getWorkOS as workos } from "./workos.js";
 // WorkOS magic-auth — the common auth substrate for billing-tools. The host
 // app's storage (WorkOS orgs vs Postgres) only matters *after* the user is
 // verified; that post-auth step is the adapter's ensureOrgForUser.
-function workos() {
-    return new WorkOS(process.env.WORKOS_API_KEY, {
-        clientId: process.env.WORKOS_CLIENT_ID,
-    });
-}
 // Step 1: ensure the user exists in WorkOS and email them a 6-digit code.
 export async function sendMagicAuth(email) {
     const wos = workos();
