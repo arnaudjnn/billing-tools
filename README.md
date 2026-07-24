@@ -21,7 +21,24 @@
 
 **billing-tools** packages the "get money in" plumbing you'd otherwise rebuild in every SaaS: API-key auth on top of **WorkOS**, token/credit + subscription billing on top of **Stripe**, and — because the next wave of customers is autonomous — first-class **agent** rails (`auth.md` self-registration and `MPP` machine payments). Wire it once; serve humans through a browser and agents through headless HTTP with the same engine. Storage is pluggable behind one small adapter (use the built-in WorkOS store, or mirror into your own Postgres).
 
+## Ship tools, not billing plumbing
+
+The next generation of software is **agents** — and an agent is only as useful as the **tools** it can call. Tools *are* the product now.
+
+But you don't go to war naked. Ship a tool into the wild with no auth and no way to get paid, and you're just donating GPU time to strangers. Someone still has to meter every call, hold a balance, bill the workspace, enforce seats, and cut off the freeloaders — the boring, identical, get-it-wrong-once-and-bleed-money layer that *every* AI product rebuilds from scratch.
+
+**billing-tools is the armor.** Bring a Stripe + WorkOS stack and you inherit — out of the box — the exact monetization model the frontier labs run on. The same shape as **Anthropic, OpenAI, and xAI (Grok)**:
+
+- 💰 **A price per token** — every tool call costs tokens, metered and deducted automatically.
+- 🏢 **Workspaces** — the billable account: one Stripe customer + balance per workspace.
+- 👥 **Users per workspace** — seats, invitations, and roles.
+- 🪙 **Tokens per user** — per-seat grants, seat limits, and auto-reload.
+
+So you do the one thing only you can do — **build great tools** — and monetize them the same afternoon. The get-paid layer is already handled, battle-tested, and agent-ready. 🛡️
+
 ## Table of contents
+
+- [Ship tools, not billing plumbing](#ship-tools-not-billing-plumbing)
 
 - [Key Features](#key-features)
 - [Getting Started](#getting-started)
