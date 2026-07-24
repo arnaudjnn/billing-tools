@@ -4,9 +4,13 @@ const statusOf = (e) => typeof e === "object" && e !== null && "status" in e
     ? e.status
     : undefined;
 export function createWorkOSInvitations(opts = {}) {
-    const workos = new WorkOS(opts.apiKey ?? process.env.WORKOS_API_KEY, {
+    // Lazy: constructing WorkOS eagerly would throw when WORKOS_API_KEY is unset,
+    // which must not break app boot (the service is often instantiated at module
+    // load). The client is built on first actual use instead.
+    let client = null;
+    const workos = () => (client ??= new WorkOS(opts.apiKey ?? process.env.WORKOS_API_KEY, {
         clientId: opts.clientId ?? process.env.WORKOS_CLIENT_ID ?? "",
-    });
+    }));
     const hooks = opts.hooks ?? {};
     const baseUrl = opts.baseUrl ?? "";
     const acceptPath = opts.acceptPath ?? "/invita";
@@ -28,7 +32,7 @@ export function createWorkOSInvitations(opts = {}) {
     async function get(invitationId) {
         let inv;
         try {
-            inv = (await workos.userManagement.getInvitation(invitationId));
+            inv = (await workos().userManagement.getInvitation(invitationId));
         }
         catch (e) {
             if (statusOf(e) === 404)
@@ -41,7 +45,7 @@ export function createWorkOSInvitations(opts = {}) {
     }
     async function send(orgId, email, roleSlug, inviterUserId) {
         const organizationId = await toWid(orgId);
-        const inv = (await workos.userManagement.sendInvitation({
+        const inv = (await workos().userManagement.sendInvitation({
             email: email.trim().toLowerCase(),
             organizationId,
             roleSlug,
@@ -62,7 +66,7 @@ export function createWorkOSInvitations(opts = {}) {
     }
     async function list(orgId) {
         const organizationId = await toWid(orgId);
-        const r = await workos.userManagement.listInvitations({ organizationId, limit: PAGE });
+        const r = await workos().userManagement.listInvitations({ organizationId, limit: PAGE });
         const pending = r.data.filter((i) => i.state === "pending");
         return Promise.all(pending.map((i) => normalize(i, orgId)));
     }
@@ -79,7 +83,7 @@ export function createWorkOSInvitations(opts = {}) {
         const organizationId = await toWid(inv.orgId);
         // Tolerate an already-present membership (never downgrade).
         try {
-            await workos.userManagement.createOrganizationMembership({
+            await workos().userManagement.createOrganizationMembership({
                 organizationId,
                 userId: user.id,
                 roleSlug: inv.roleSlug,
@@ -91,7 +95,7 @@ export function createWorkOSInvitations(opts = {}) {
         }
         // Consume the pending invitation.
         try {
-            await workos.userManagement.revokeInvitation(invitationId);
+            await workos().userManagement.revokeInvitation(invitationId);
         }
         catch (e) {
             if (statusOf(e) !== 404)
@@ -103,7 +107,7 @@ export function createWorkOSInvitations(opts = {}) {
         const organizationId = await toWid(orgId);
         let inv;
         try {
-            inv = (await workos.userManagement.getInvitation(invitationId));
+            inv = (await workos().userManagement.getInvitation(invitationId));
         }
         catch (e) {
             if (statusOf(e) === 404)
@@ -113,7 +117,7 @@ export function createWorkOSInvitations(opts = {}) {
         // Belongs-to check: the invitation must target this org.
         if (inv.organizationId !== organizationId)
             return;
-        await workos.userManagement.revokeInvitation(invitationId);
+        await workos().userManagement.revokeInvitation(invitationId);
     }
     return { send, list, get, accept, revoke };
 }

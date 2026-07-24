@@ -21,11 +21,13 @@ export interface WorkOSOrgAdapterOptions {
     }>;
 }
 export declare class WorkOSOrgAdapter implements BillingAdapter {
-    private workos;
+    private _workos;
+    private apiKey?;
     private clientId;
     private map?;
     private ensureOrg?;
     constructor(opts?: WorkOSOrgAdapterOptions);
+    private get workos();
     /** app orgId → WorkOS org id (identity when no map is configured). */
     private wid;
     validateApiKey(token: string): Promise<{

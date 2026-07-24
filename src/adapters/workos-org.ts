@@ -39,18 +39,26 @@ export interface WorkOSOrgAdapterOptions {
 }
 
 export class WorkOSOrgAdapter implements BillingAdapter {
-  private workos: WorkOS;
+  private _workos: WorkOS | null = null;
+  private apiKey?: string;
   private clientId: string;
   private map?: WorkOSOrgMap;
   private ensureOrg?: (user: BillingUser) => Promise<{ orgId: string }>;
 
   constructor(opts: WorkOSOrgAdapterOptions = {}) {
+    this.apiKey = opts.apiKey;
     this.clientId = opts.clientId ?? process.env.WORKOS_CLIENT_ID ?? "";
-    this.workos = new WorkOS(opts.apiKey ?? process.env.WORKOS_API_KEY, {
-      clientId: this.clientId,
-    });
     this.map = opts.map;
     this.ensureOrg = opts.ensureOrg;
+  }
+
+  // Lazy: constructing WorkOS eagerly would throw when WORKOS_API_KEY is unset,
+  // which must not break app boot (the adapter is created at module load). The
+  // client is built on first actual use instead.
+  private get workos(): WorkOS {
+    return (this._workos ??= new WorkOS(this.apiKey ?? process.env.WORKOS_API_KEY, {
+      clientId: this.clientId,
+    }));
   }
 
   /** app orgId → WorkOS org id (identity when no map is configured). */
