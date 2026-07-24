@@ -52,7 +52,7 @@ export class WorkOSOrgAdapter {
         });
         return { orgId: org.id };
     }
-    async mintApiKey(orgId, name) {
+    async mintApiKey(orgId, name, _createdBy) {
         const key = await this.workos.organizations.createOrganizationApiKey({
             organizationId: orgId,
             name,

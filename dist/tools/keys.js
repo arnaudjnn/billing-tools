@@ -30,7 +30,7 @@ Add the key to your config as: "Authorization": "Bearer <key>"`, {
             if (stripeConfigured()) {
                 await ensureStripeCustomer(adapter, orgId, email, config).catch(() => { });
             }
-            const key = await adapter.mintApiKey(orgId, "API Key");
+            const key = await adapter.mintApiKey(orgId, "API Key", user.id);
             return {
                 content: [
                     {

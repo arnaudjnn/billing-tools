@@ -30,8 +30,10 @@ export interface BillingAdapter {
   setBillingCustomerId(orgId: string, customerId: string): Promise<void>;
   /** After magic-auth: find or create the org/workspace for this user. */
   ensureOrgForUser(user: BillingUser): Promise<{ orgId: string }>;
-  /** Mint a new API key for the org. Returns the raw value (shown once). */
-  mintApiKey(orgId: string, name: string): Promise<{ id: string; value: string }>;
+  /** Mint a new API key for the org. `createdBy` (the acting user id) is
+   *  passed when available; adapters that don't track it may ignore it.
+   *  Returns the raw value (shown once). */
+  mintApiKey(orgId: string, name: string, createdBy?: string): Promise<{ id: string; value: string }>;
   /** List the org's (non-revoked) keys, obfuscated. */
   listApiKeys(orgId: string): Promise<ApiKeyInfo[]>;
   /** Revoke a key by id, scoped to the org (belongs-to check inside). */

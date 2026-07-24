@@ -27,8 +27,10 @@ export interface BillingAdapter {
     ensureOrgForUser(user: BillingUser): Promise<{
         orgId: string;
     }>;
-    /** Mint a new API key for the org. Returns the raw value (shown once). */
-    mintApiKey(orgId: string, name: string): Promise<{
+    /** Mint a new API key for the org. `createdBy` (the acting user id) is
+     *  passed when available; adapters that don't track it may ignore it.
+     *  Returns the raw value (shown once). */
+    mintApiKey(orgId: string, name: string, createdBy?: string): Promise<{
         id: string;
         value: string;
     }>;

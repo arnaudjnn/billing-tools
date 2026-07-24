@@ -18,7 +18,7 @@ export declare class WorkOSOrgAdapter implements BillingAdapter {
     ensureOrgForUser(user: BillingUser): Promise<{
         orgId: string;
     }>;
-    mintApiKey(orgId: string, name: string): Promise<{
+    mintApiKey(orgId: string, name: string, _createdBy?: string): Promise<{
         id: string;
         value: string;
     }>;

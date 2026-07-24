@@ -71,7 +71,7 @@ export class WorkOSOrgAdapter implements BillingAdapter {
     return { orgId: org.id };
   }
 
-  async mintApiKey(orgId: string, name: string): Promise<{ id: string; value: string }> {
+  async mintApiKey(orgId: string, name: string, _createdBy?: string): Promise<{ id: string; value: string }> {
     const key = await this.workos.organizations.createOrganizationApiKey({
       organizationId: orgId,
       name,
