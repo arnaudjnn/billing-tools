@@ -1,21 +1,30 @@
 {
   "name": "@arnaudjnn/billing-tools",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Make your Stripe + WorkOS app ready to get paid: drop-in API-key auth + token/credit billing as MCP tools, a REST API, and a CLI. Storage-agnostic via an adapter.",
   "license": "MIT",
   "type": "module",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
-    "./adapters/workos-org": { "types": "./dist/adapters/workos-org.d.ts", "import": "./dist/adapters/workos-org.js" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./adapters/workos-org": {
+      "types": "./dist/adapters/workos-org.d.ts",
+      "import": "./dist/adapters/workos-org.js"
+    }
   },
-  "files": ["dist", "src"],
+  "files": [
+    "dist",
+    "src"
+  ],
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist"
   },
   "dependencies": {
-    "@workos-inc/node": "^8.6.0",
+    "@workos-inc/node": "^10.7.0",
     "commander": "^13.1.0",
     "stripe": "^20.3.1"
   },
@@ -25,7 +34,9 @@
     "zod": "^3.25.0"
   },
   "peerDependenciesMeta": {
-    "mcp-handler": { "optional": true }
+    "mcp-handler": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "1.25.2",
