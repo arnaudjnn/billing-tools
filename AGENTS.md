@@ -36,9 +36,12 @@ export interface BillingAdapter {
 }
 ```
 
-Two reference adapters:
-- **`WorkOSOrgAdapter`** (shipped) — orgs, org API keys (`sk_`), and `stripeCustomerId` in org metadata. Zero extra storage. Import from `@arnaudjnn/billing-tools/adapters/workos-org`.
-- **Postgres** (implement in your app) — users stay in WorkOS; workspaces/`api_keys`/billing-pointer live in your DB. Keeps the package free of a `pg` dependency.
+**The rule: WorkOS is the source of truth.** `orgId` is always the app's own org handle; the adapter maps it to WorkOS internally. Two patterns, both keeping WorkOS canonical:
+
+- **Pattern A — WorkOS-only** (shipped `WorkOSOrgAdapter`): `orgId` *is* the WorkOS org id. Orgs, org API keys (`sk_`), and `stripeCustomerId` live in WorkOS; no other storage. Import from `@arnaudjnn/billing-tools/adapters/workos-org`. Used by **gtm-tools**.
+- **Pattern B — WorkOS + DB mirror**: the app has its own row (e.g. a `ws_…` workspace) 1:1 with a WorkOS org via a `workos_org_id` column **and** `org.externalId = <local id>` (self-healing reverse map). `orgId` stays the local id; the adapter resolves `local id ↔ org` on every call. Memberships + invitations are WorkOS-native (org memberships + invitations, RBAC role slugs — no DB mirror tables), API keys are WorkOS org keys, and billing is the native `org.stripeCustomerId` + subscription state in org metadata. The DB keeps only what WorkOS can't hold (avatars, secondary emails, local prefs). Used by **scartoffie** (adapter implemented app-side, so the package stays free of a `pg` dependency).
+
+**v8 vs v10 of `@workos-inc/node`** — the org API-key methods moved: v8 `organizations.createOrganizationApiKey` / `validateApiKey` → v10 `apiKeys.createOrganizationApiKey` / `apiKeys.createValidation` (owner org on `.apiKey.owner.id`) / `apiKeys.deleteApiKey` (hard delete). The shipped `WorkOSOrgAdapter` targets **v8** (this package pins `^8`); a v10 consumer supplies its own adapter (scartoffie does). Org `externalId` + native `stripeCustomerId` are v10 fields.
 
 ## Mounting in a Next app
 

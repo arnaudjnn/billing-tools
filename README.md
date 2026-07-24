@@ -46,6 +46,6 @@ const config = { freeTokens: 100, currency: "usd", baseUrl: process.env.APP_URL!
 // REST/webhook: mount the route factories from "@arnaudjnn/billing-tools" (see AGENTS.md)
 ```
 
-Bring your own storage by implementing the `BillingAdapter` interface (see `AGENTS.md`) — e.g. a Postgres-backed adapter where users still live in WorkOS but workspaces/keys/billing-pointer live in your DB.
+**WorkOS is always the source of truth.** Two adapter patterns (see `AGENTS.md`): **Pattern A — WorkOS-only** (`WorkOSOrgAdapter`, above — `orgId` is the WorkOS org id, zero extra storage); **Pattern B — WorkOS + DB mirror** (your app row is 1:1 with a WorkOS org via a `workos_org_id` column + `org.externalId`; memberships/invitations/keys/billing stay in WorkOS, the DB mirrors only what WorkOS can't hold). Note: the shipped adapter targets `@workos-inc/node` v8; v10 moved the org API-key methods (`organizations.*` → `apiKeys.*`), so a v10 consumer writes its own adapter.
 
 See **AGENTS.md** for the full integration guide (adapter interface, route factories, CLI, env, release flow).
