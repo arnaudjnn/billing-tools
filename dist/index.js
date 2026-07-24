@@ -8,6 +8,8 @@ export { getStripe, stripeConfigured, ensureStripeCustomer, getBillingCustomerId
 export { sendMagicAuth, verifyMagicAuth } from "./magic-auth.js";
 // WorkOS organization invitations (shared, hook-configurable)
 export { createWorkOSInvitations, } from "./invitations.js";
+// Generic DB mirror for WorkOS entities (table-agnostic; org + user shapes)
+export { createMirror, } from "./mirror.js";
 // Tool registration
 export { registerBillingTools, installInputLogging, BILLING_TOOL_NAMES, } from "./tools/register.js";
 // REST dispatch bridge

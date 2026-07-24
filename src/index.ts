@@ -50,6 +50,15 @@ export {
   type WorkOSInvitationsOptions,
 } from "./invitations.js";
 
+// Generic DB mirror for WorkOS entities (table-agnostic; org + user shapes)
+export {
+  createMirror,
+  type Mirror,
+  type MirrorOptions,
+  type MirrorQuery,
+  type MirrorQueryResult,
+} from "./mirror.js";
+
 // Tool registration
 export {
   registerBillingTools,
