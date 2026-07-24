@@ -101,5 +101,45 @@ export class WorkOSOrgAdapter {
         await this.workos.apiKeys.deleteApiKey(id);
         return { id: target.id, name: target.name };
     }
+    // ── Subscription state + seats (org metadata; used by the billing-sync) ────
+    /** Active-member count for the org (per-seat token grants + seat limits). */
+    async memberCount(orgId) {
+        const memberships = await this.workos.userManagement.listOrganizationMemberships({
+            organizationId: await this.wid(orgId),
+            statuses: ["active"],
+            limit: 100,
+        });
+        return memberships.data.length;
+    }
+    async getSubscription(orgId) {
+        const org = await this.workos.organizations.getOrganization(await this.wid(orgId));
+        const m = (org.metadata ?? {});
+        return {
+            plan: m.plan ?? null,
+            status: m.subscriptionStatus ?? null,
+            subscriptionId: m.stripeSubscriptionId ?? null,
+            periodEnd: m.subscriptionPeriodEnd ?? null,
+        };
+    }
+    /** Write subscription state onto the org metadata. `plan: undefined` leaves
+     *  the plan as-is; `null` clears it (back to the default plan). */
+    async setSubscription(orgId, sub) {
+        const wid = await this.wid(orgId);
+        const org = await this.workos.organizations.getOrganization(wid);
+        const metadata = { ...(org.metadata ?? {}) };
+        const set = (k, v) => {
+            if (v === undefined)
+                return;
+            if (v === null || v === "")
+                delete metadata[k];
+            else
+                metadata[k] = v;
+        };
+        set("subscriptionStatus", sub.status);
+        set("stripeSubscriptionId", sub.subscriptionId);
+        set("subscriptionPeriodEnd", sub.periodEnd);
+        set("plan", sub.plan);
+        await this.workos.organizations.updateOrganization({ organization: wid, metadata });
+    }
 }
 //# sourceMappingURL=workos-org.js.map

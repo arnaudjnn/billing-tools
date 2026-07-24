@@ -70,6 +70,14 @@ export {
 // Event-polling sync (zero-webhook: poll Stripe + WorkOS Events APIs)
 export { pollStripeEvents, pollWorkOSEvents, type PollResult } from "./events.js";
 
+// Turn-key billing sync engine (owns the poll→dispatch→plan/token/mirror loop)
+export {
+  createBillingSync,
+  type BillingSync,
+  type BillingSyncOptions,
+  type CursorStore,
+} from "./sync.js";
+
 // Generic DB mirror for WorkOS entities (table-agnostic; org + user shapes)
 export {
   createMirror,

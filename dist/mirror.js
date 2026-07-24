@@ -19,7 +19,8 @@ const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export function createMirror(opts) {
     const { table, idColumn, query } = opts;
     const meta = opts.metadataColumn ?? "workos_metadata";
-    for (const ident of [table, idColumn, meta]) {
+    const columns = opts.columns ?? {};
+    for (const ident of [table, idColumn, meta, ...Object.values(columns)]) {
         if (!IDENTIFIER.test(ident)) {
             throw new Error(`createMirror: invalid SQL identifier "${ident}"`);
         }
@@ -42,6 +43,17 @@ export function createMirror(opts) {
                 workosId,
                 JSON.stringify(metadata),
             ]);
+        },
+        async syncResource(workosId, resource) {
+            const params = [workosId];
+            const sets = [];
+            for (const [field, column] of Object.entries(columns)) {
+                params.push(resource[field] ?? null);
+                sets.push(`${column} = $${params.length}`);
+            }
+            params.push(JSON.stringify(resource.metadata ?? {}));
+            sets.push(`${meta} = $${params.length}`);
+            await query(`UPDATE ${table} SET ${sets.join(", ")} WHERE ${idColumn} = $1`, params);
         },
         async remove(workosId) {
             await query(`DELETE FROM ${table} WHERE ${idColumn} = $1`, [workosId]);

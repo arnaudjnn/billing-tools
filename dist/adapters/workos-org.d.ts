@@ -48,5 +48,21 @@ export declare class WorkOSOrgAdapter implements BillingAdapter {
         id: string;
         name: string;
     } | null>;
+    /** Active-member count for the org (per-seat token grants + seat limits). */
+    memberCount(orgId: string): Promise<number>;
+    getSubscription(orgId: string): Promise<{
+        plan: string | null;
+        status: string | null;
+        subscriptionId: string | null;
+        periodEnd: string | null;
+    }>;
+    /** Write subscription state onto the org metadata. `plan: undefined` leaves
+     *  the plan as-is; `null` clears it (back to the default plan). */
+    setSubscription(orgId: string, sub: {
+        plan?: string | null;
+        status: string | null;
+        subscriptionId: string | null;
+        periodEnd: string | null;
+    }): Promise<void>;
 }
 //# sourceMappingURL=workos-org.d.ts.map

@@ -24,6 +24,9 @@ export interface MirrorOptions {
   idColumn: string;
   /** JSON metadata column. Default "workos_metadata". */
   metadataColumn?: string;
+  /** Optional map of WorkOS-resource field → DB column, synced by syncResource
+   *  (e.g. { name: "name" } to keep a workspaces.name column in sync). */
+  columns?: Record<string, string>;
   /** Query executor returning { rows, rowCount }. Keeps this package pg-free. */
   query: MirrorQuery;
 }
@@ -37,6 +40,9 @@ export interface Mirror {
   getMetadata(workosId: string): Promise<Record<string, unknown> | null>;
   /** Overwrite the metadata blob on an existing row. */
   setMetadata(workosId: string, metadata: Record<string, unknown>): Promise<void>;
+  /** Sync a WorkOS resource onto the existing row: the mapped `columns` fields
+   *  + the metadata blob. Update-only (rows are created by the app). */
+  syncResource(workosId: string, resource: Record<string, unknown>): Promise<void>;
   /** Delete the row. */
   remove(workosId: string): Promise<void>;
 }
@@ -48,7 +54,8 @@ const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export function createMirror(opts: MirrorOptions): Mirror {
   const { table, idColumn, query } = opts;
   const meta = opts.metadataColumn ?? "workos_metadata";
-  for (const ident of [table, idColumn, meta]) {
+  const columns = opts.columns ?? {};
+  for (const ident of [table, idColumn, meta, ...Object.values(columns)]) {
     if (!IDENTIFIER.test(ident)) {
       throw new Error(`createMirror: invalid SQL identifier "${ident}"`);
     }
@@ -77,6 +84,17 @@ export function createMirror(opts: MirrorOptions): Mirror {
         workosId,
         JSON.stringify(metadata),
       ]);
+    },
+    async syncResource(workosId, resource) {
+      const params: unknown[] = [workosId];
+      const sets: string[] = [];
+      for (const [field, column] of Object.entries(columns)) {
+        params.push(resource[field] ?? null);
+        sets.push(`${column} = $${params.length}`);
+      }
+      params.push(JSON.stringify(resource.metadata ?? {}));
+      sets.push(`${meta} = $${params.length}`);
+      await query(`UPDATE ${table} SET ${sets.join(", ")} WHERE ${idColumn} = $1`, params);
     },
     async remove(workosId) {
       await query(`DELETE FROM ${table} WHERE ${idColumn} = $1`, [workosId]);

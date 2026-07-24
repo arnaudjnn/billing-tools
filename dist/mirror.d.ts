@@ -10,6 +10,9 @@ export interface MirrorOptions {
     idColumn: string;
     /** JSON metadata column. Default "workos_metadata". */
     metadataColumn?: string;
+    /** Optional map of WorkOS-resource field → DB column, synced by syncResource
+     *  (e.g. { name: "name" } to keep a workspaces.name column in sync). */
+    columns?: Record<string, string>;
     /** Query executor returning { rows, rowCount }. Keeps this package pg-free. */
     query: MirrorQuery;
 }
@@ -22,6 +25,9 @@ export interface Mirror {
     getMetadata(workosId: string): Promise<Record<string, unknown> | null>;
     /** Overwrite the metadata blob on an existing row. */
     setMetadata(workosId: string, metadata: Record<string, unknown>): Promise<void>;
+    /** Sync a WorkOS resource onto the existing row: the mapped `columns` fields
+     *  + the metadata blob. Update-only (rows are created by the app). */
+    syncResource(workosId: string, resource: Record<string, unknown>): Promise<void>;
     /** Delete the row. */
     remove(workosId: string): Promise<void>;
 }

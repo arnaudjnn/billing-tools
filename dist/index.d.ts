@@ -6,6 +6,7 @@ export { ensurePlans, planPriceId, planForPriceId, seatLimit, includedTokens, lo
 export { sendMagicAuth, verifyMagicAuth } from "./magic-auth.js";
 export { createWorkOSInvitations, type InvitationService, type Invitation, type InvitationHooks, type InvitationEmailContext, type WorkOSInvitationsOptions, } from "./invitations.js";
 export { pollStripeEvents, pollWorkOSEvents, type PollResult } from "./events.js";
+export { createBillingSync, type BillingSync, type BillingSyncOptions, type CursorStore, } from "./sync.js";
 export { createMirror, type Mirror, type MirrorOptions, type MirrorQuery, type MirrorQueryResult, } from "./mirror.js";
 export { registerBillingTools, installInputLogging, BILLING_TOOL_NAMES, type RegisterBillingToolsOptions, } from "./tools/register.js";
 export { createDispatcher, ToolValidationError, type RegisterFn } from "./dispatch.js";

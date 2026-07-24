@@ -148,4 +148,58 @@ export class WorkOSOrgAdapter implements BillingAdapter {
     await this.workos.apiKeys.deleteApiKey(id);
     return { id: target.id, name: target.name };
   }
+
+  // ── Subscription state + seats (org metadata; used by the billing-sync) ────
+
+  /** Active-member count for the org (per-seat token grants + seat limits). */
+  async memberCount(orgId: string): Promise<number> {
+    const memberships = await this.workos.userManagement.listOrganizationMemberships({
+      organizationId: await this.wid(orgId),
+      statuses: ["active"],
+      limit: 100,
+    });
+    return memberships.data.length;
+  }
+
+  async getSubscription(orgId: string): Promise<{
+    plan: string | null;
+    status: string | null;
+    subscriptionId: string | null;
+    periodEnd: string | null;
+  }> {
+    const org = await this.workos.organizations.getOrganization(await this.wid(orgId));
+    const m = (org.metadata ?? {}) as Record<string, string>;
+    return {
+      plan: m.plan ?? null,
+      status: m.subscriptionStatus ?? null,
+      subscriptionId: m.stripeSubscriptionId ?? null,
+      periodEnd: m.subscriptionPeriodEnd ?? null,
+    };
+  }
+
+  /** Write subscription state onto the org metadata. `plan: undefined` leaves
+   *  the plan as-is; `null` clears it (back to the default plan). */
+  async setSubscription(
+    orgId: string,
+    sub: {
+      plan?: string | null;
+      status: string | null;
+      subscriptionId: string | null;
+      periodEnd: string | null;
+    },
+  ): Promise<void> {
+    const wid = await this.wid(orgId);
+    const org = await this.workos.organizations.getOrganization(wid);
+    const metadata: Record<string, string> = { ...(org.metadata as Record<string, string> ?? {}) };
+    const set = (k: string, v: string | null | undefined) => {
+      if (v === undefined) return;
+      if (v === null || v === "") delete metadata[k];
+      else metadata[k] = v;
+    };
+    set("subscriptionStatus", sub.status);
+    set("stripeSubscriptionId", sub.subscriptionId);
+    set("subscriptionPeriodEnd", sub.periodEnd);
+    set("plan", sub.plan);
+    await this.workos.organizations.updateOrganization({ organization: wid, metadata });
+  }
 }
