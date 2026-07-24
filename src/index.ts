@@ -1,0 +1,73 @@
+// billing-tools — make your Stripe + WorkOS app ready to get paid.
+
+// Types + config
+export type {
+  BillingAdapter,
+  BillingUser,
+  ApiKeyInfo,
+  BillingConfig,
+  ResolvedConfig,
+  ToolResult,
+  ToolErrorResult,
+} from "./types.js";
+export { resolveConfig } from "./types.js";
+
+// Auth engine
+export {
+  authContext,
+  runWithAuth,
+  runWithResolvedOrg,
+  enforceAccess,
+  enforceTokens,
+} from "./auth.js";
+
+// Billing engine (Stripe math)
+export {
+  getStripe,
+  stripeConfigured,
+  ensureStripeCustomer,
+  getBillingCustomerId,
+  getTokenBalance,
+  deductTokens,
+  creditTokens,
+  createTokenCheckoutSession,
+  getAutoReloadSettings,
+  setAutoReloadSettings,
+  tryAutoReload,
+  listInvoices,
+} from "./billing.js";
+
+// WorkOS magic-auth
+export { sendMagicAuth, verifyMagicAuth } from "./magic-auth.js";
+
+// Tool registration
+export {
+  registerBillingTools,
+  installInputLogging,
+  BILLING_TOOL_NAMES,
+  type RegisterBillingToolsOptions,
+} from "./tools/register.js";
+
+// REST dispatch bridge
+export { createDispatcher, ToolValidationError, type RegisterFn } from "./dispatch.js";
+
+// Next route factories
+export { createToolListHandler, createToolDispatchHandler, type Dispatcher } from "./routes/rest.js";
+export { createMcpTransport, type McpTransportOptions } from "./routes/mcp.js";
+export { createStripeWebhookHandler, type WebhookOptions } from "./routes/webhook.js";
+
+// CLI factory
+export { registerBillingCommands } from "./cli/commands.js";
+export { callTool, listTools, type ApiClientConfig } from "./cli/client.js";
+export {
+  type CliOptions,
+  type CliConfig,
+  configPath,
+  readConfig,
+  writeConfig,
+  resolveBaseUrl,
+  resolveApiKey,
+} from "./cli/config.js";
+
+// Utils
+export { lookupCompany } from "./util/clearout.js";
