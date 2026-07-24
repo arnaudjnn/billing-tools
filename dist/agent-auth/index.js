@@ -101,6 +101,7 @@ export function createAgentAuth(opts) {
                     ? { identity_assertion: { assertion_types_supported: assertionTypes } }
                     : {}),
             },
+            ...(opts.asMetadataExtra ?? {}),
         }, { headers: { "Cache-Control": "public, max-age=3600" } });
     }
     function authMd(request) {

@@ -43,6 +43,10 @@ export interface AgentAuthOptions {
     baseUrl?: string | ((request: Request) => string);
     claimStore?: ClaimStore;
     policy?: AgentAuthPolicy;
+    /** Extra fields merged into the AS-metadata response (spread last, so they
+     *  override defaults). Use for capabilities layered on top of auth.md — e.g.
+     *  an MCP OAuth proxy's `authorization_endpoint` / `registration_endpoint`. */
+    asMetadataExtra?: Record<string, unknown>;
 }
 export declare function createAgentAuth(opts: AgentAuthOptions): {
     protectedResource: (request: Request) => Response;
