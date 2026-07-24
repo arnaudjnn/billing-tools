@@ -3,6 +3,7 @@ export { resolveConfig } from "./types.js";
 export { authContext, runWithAuth, runWithResolvedOrg, enforceAccess, enforceTokens, } from "./auth.js";
 export { getStripe, stripeConfigured, ensureStripeCustomer, getBillingCustomerId, getTokenBalance, deductTokens, creditTokens, createTokenCheckoutSession, getAutoReloadSettings, setAutoReloadSettings, tryAutoReload, listInvoices, } from "./billing.js";
 export { sendMagicAuth, verifyMagicAuth } from "./magic-auth.js";
+export { createWorkOSInvitations, type InvitationService, type Invitation, type InvitationHooks, type InvitationEmailContext, type WorkOSInvitationsOptions, } from "./invitations.js";
 export { registerBillingTools, installInputLogging, BILLING_TOOL_NAMES, type RegisterBillingToolsOptions, } from "./tools/register.js";
 export { createDispatcher, ToolValidationError, type RegisterFn } from "./dispatch.js";
 export { createToolListHandler, createToolDispatchHandler, type Dispatcher } from "./routes/rest.js";

@@ -6,6 +6,8 @@ export { authContext, runWithAuth, runWithResolvedOrg, enforceAccess, enforceTok
 export { getStripe, stripeConfigured, ensureStripeCustomer, getBillingCustomerId, getTokenBalance, deductTokens, creditTokens, createTokenCheckoutSession, getAutoReloadSettings, setAutoReloadSettings, tryAutoReload, listInvoices, } from "./billing.js";
 // WorkOS magic-auth
 export { sendMagicAuth, verifyMagicAuth } from "./magic-auth.js";
+// WorkOS organization invitations (shared, hook-configurable)
+export { createWorkOSInvitations, } from "./invitations.js";
 // Tool registration
 export { registerBillingTools, installInputLogging, BILLING_TOOL_NAMES, } from "./tools/register.js";
 // REST dispatch bridge

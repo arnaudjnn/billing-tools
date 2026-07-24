@@ -40,6 +40,16 @@ export {
 // WorkOS magic-auth
 export { sendMagicAuth, verifyMagicAuth } from "./magic-auth.js";
 
+// WorkOS organization invitations (shared, hook-configurable)
+export {
+  createWorkOSInvitations,
+  type InvitationService,
+  type Invitation,
+  type InvitationHooks,
+  type InvitationEmailContext,
+  type WorkOSInvitationsOptions,
+} from "./invitations.js";
+
 // Tool registration
 export {
   registerBillingTools,
