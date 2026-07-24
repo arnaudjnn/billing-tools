@@ -1,6 +1,6 @@
 {
   "name": "@arnaudjnn/billing-tools",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "Make your Stripe + WorkOS app ready to get paid: drop-in API-key auth + token/credit billing as MCP tools, a REST API, and a CLI. Storage-agnostic via an adapter.",
   "license": "MIT",
   "type": "module",

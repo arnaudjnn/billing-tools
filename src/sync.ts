@@ -86,7 +86,14 @@ const WORKOS_EVENTS = [
 ];
 
 export interface BillingSync {
+  /** Poll + reconcile once. Use this from a serverless cron route. */
   runOnce(): Promise<{ stripe: number; workos: number }>;
+  /** Start an in-process interval scheduler (for a long-lived server — e.g.
+   *  Next's instrumentation register()). Runs immediately, then every
+   *  intervalMs (default 60s), never overlapping. Returns a stop() fn.
+   *  For multi-instance deployments run it on one replica (or use runOnce via
+   *  a single external cron) to avoid duplicate polling. */
+  start(opts?: { intervalMs?: number; onError?: (e: unknown) => void }): () => void;
 }
 
 export function createBillingSync(opts: BillingSyncOptions): BillingSync {
@@ -167,21 +174,76 @@ export function createBillingSync(opts: BillingSyncOptions): BillingSync {
     }
   }
 
-  return {
-    async runOnce() {
-      const s = await pollStripeEvents({
-        after: await cursor.get("stripe"),
-        types: STRIPE_TYPES,
-        onEvent: handleStripe,
-      });
-      await cursor.set("stripe", s.cursor);
-      const w = await pollWorkOSEvents({
-        after: await cursor.get("workos"),
-        events: WORKOS_EVENTS,
-        onEvent: handleWorkOS,
-      });
-      await cursor.set("workos", w.cursor);
-      return { stripe: s.count, workos: w.count };
-    },
+  async function runOnce() {
+    const s = await pollStripeEvents({
+      after: await cursor.get("stripe"),
+      types: STRIPE_TYPES,
+      onEvent: handleStripe,
+    });
+    await cursor.set("stripe", s.cursor);
+    const w = await pollWorkOSEvents({
+      after: await cursor.get("workos"),
+      events: WORKOS_EVENTS,
+      onEvent: handleWorkOS,
+    });
+    await cursor.set("workos", w.cursor);
+    return { stripe: s.count, workos: w.count };
+  }
+
+  function start(opts: { intervalMs?: number; onError?: (e: unknown) => void } = {}) {
+    const intervalMs = opts.intervalMs ?? 60_000;
+    let running = false;
+    let stopped = false;
+    const tick = async () => {
+      if (running || stopped) return; // never overlap
+      running = true;
+      try {
+        await runOnce();
+      } catch (e) {
+        if (opts.onError) opts.onError(e);
+        else console.error(`[billing-sync] ${(e as Error).message}`);
+      } finally {
+        running = false;
+      }
+    };
+    const handle = setInterval(tick, intervalMs);
+    // Don't keep the process alive just for the timer.
+    (handle as { unref?: () => void }).unref?.();
+    void tick(); // run once immediately
+    return () => {
+      stopped = true;
+      clearInterval(handle);
+    };
+  }
+
+  return { runOnce, start };
+}
+
+/** Web-standard (Request → Response) handler that runs one sync cycle — for a
+ *  serverless cron trigger. Framework-agnostic: mount in a Next route
+ *  (`export const GET = createSyncRoute(sync, { secret })`), Hono, Bun, etc.
+ *  If `secret` is set, requests must send it as `Authorization: Bearer <secret>`
+ *  (or an `x-cron-secret` header). */
+export function createSyncRoute(
+  sync: BillingSync,
+  opts: { secret?: string } = {},
+): (request: Request) => Promise<Response> {
+  return async (request) => {
+    if (opts.secret) {
+      const auth =
+        request.headers.get("authorization") ?? request.headers.get("x-cron-secret") ?? "";
+      if (auth !== opts.secret && auth !== `Bearer ${opts.secret}`) {
+        return new Response(JSON.stringify({ error: "unauthorized" }), {
+          status: 401,
+          headers: { "content-type": "application/json" },
+        });
+      }
+    }
+    try {
+      const result = await sync.runOnce();
+      return Response.json({ ok: true, ...result });
+    } catch (e) {
+      return Response.json({ ok: false, error: (e as Error).message }, { status: 500 });
+    }
   };
 }

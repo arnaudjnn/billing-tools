@@ -27,10 +27,28 @@ export interface BillingSyncOptions {
     };
 }
 export interface BillingSync {
+    /** Poll + reconcile once. Use this from a serverless cron route. */
     runOnce(): Promise<{
         stripe: number;
         workos: number;
     }>;
+    /** Start an in-process interval scheduler (for a long-lived server — e.g.
+     *  Next's instrumentation register()). Runs immediately, then every
+     *  intervalMs (default 60s), never overlapping. Returns a stop() fn.
+     *  For multi-instance deployments run it on one replica (or use runOnce via
+     *  a single external cron) to avoid duplicate polling. */
+    start(opts?: {
+        intervalMs?: number;
+        onError?: (e: unknown) => void;
+    }): () => void;
 }
 export declare function createBillingSync(opts: BillingSyncOptions): BillingSync;
+/** Web-standard (Request → Response) handler that runs one sync cycle — for a
+ *  serverless cron trigger. Framework-agnostic: mount in a Next route
+ *  (`export const GET = createSyncRoute(sync, { secret })`), Hono, Bun, etc.
+ *  If `secret` is set, requests must send it as `Authorization: Bearer <secret>`
+ *  (or an `x-cron-secret` header). */
+export declare function createSyncRoute(sync: BillingSync, opts?: {
+    secret?: string;
+}): (request: Request) => Promise<Response>;
 //# sourceMappingURL=sync.d.ts.map

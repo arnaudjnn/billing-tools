@@ -73,6 +73,7 @@ export { pollStripeEvents, pollWorkOSEvents, type PollResult } from "./events.js
 // Turn-key billing sync engine (owns the poll→dispatch→plan/token/mirror loop)
 export {
   createBillingSync,
+  createSyncRoute,
   type BillingSync,
   type BillingSyncOptions,
   type CursorStore,

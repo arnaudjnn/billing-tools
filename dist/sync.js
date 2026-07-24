@@ -109,22 +109,76 @@ export function createBillingSync(opts) {
                 break;
         }
     }
-    return {
-        async runOnce() {
-            const s = await pollStripeEvents({
-                after: await cursor.get("stripe"),
-                types: STRIPE_TYPES,
-                onEvent: handleStripe,
-            });
-            await cursor.set("stripe", s.cursor);
-            const w = await pollWorkOSEvents({
-                after: await cursor.get("workos"),
-                events: WORKOS_EVENTS,
-                onEvent: handleWorkOS,
-            });
-            await cursor.set("workos", w.cursor);
-            return { stripe: s.count, workos: w.count };
-        },
+    async function runOnce() {
+        const s = await pollStripeEvents({
+            after: await cursor.get("stripe"),
+            types: STRIPE_TYPES,
+            onEvent: handleStripe,
+        });
+        await cursor.set("stripe", s.cursor);
+        const w = await pollWorkOSEvents({
+            after: await cursor.get("workos"),
+            events: WORKOS_EVENTS,
+            onEvent: handleWorkOS,
+        });
+        await cursor.set("workos", w.cursor);
+        return { stripe: s.count, workos: w.count };
+    }
+    function start(opts = {}) {
+        const intervalMs = opts.intervalMs ?? 60_000;
+        let running = false;
+        let stopped = false;
+        const tick = async () => {
+            if (running || stopped)
+                return; // never overlap
+            running = true;
+            try {
+                await runOnce();
+            }
+            catch (e) {
+                if (opts.onError)
+                    opts.onError(e);
+                else
+                    console.error(`[billing-sync] ${e.message}`);
+            }
+            finally {
+                running = false;
+            }
+        };
+        const handle = setInterval(tick, intervalMs);
+        // Don't keep the process alive just for the timer.
+        handle.unref?.();
+        void tick(); // run once immediately
+        return () => {
+            stopped = true;
+            clearInterval(handle);
+        };
+    }
+    return { runOnce, start };
+}
+/** Web-standard (Request → Response) handler that runs one sync cycle — for a
+ *  serverless cron trigger. Framework-agnostic: mount in a Next route
+ *  (`export const GET = createSyncRoute(sync, { secret })`), Hono, Bun, etc.
+ *  If `secret` is set, requests must send it as `Authorization: Bearer <secret>`
+ *  (or an `x-cron-secret` header). */
+export function createSyncRoute(sync, opts = {}) {
+    return async (request) => {
+        if (opts.secret) {
+            const auth = request.headers.get("authorization") ?? request.headers.get("x-cron-secret") ?? "";
+            if (auth !== opts.secret && auth !== `Bearer ${opts.secret}`) {
+                return new Response(JSON.stringify({ error: "unauthorized" }), {
+                    status: 401,
+                    headers: { "content-type": "application/json" },
+                });
+            }
+        }
+        try {
+            const result = await sync.runOnce();
+            return Response.json({ ok: true, ...result });
+        }
+        catch (e) {
+            return Response.json({ ok: false, error: e.message }, { status: 500 });
+        }
     };
 }
 //# sourceMappingURL=sync.js.map
