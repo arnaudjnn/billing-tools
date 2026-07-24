@@ -9,6 +9,47 @@ export function getStripe() {
 export function stripeConfigured() {
     return !!process.env.STRIPE_SECRET_KEY;
 }
+function toStripePrice(p) {
+    const product = typeof p.product === "object" && p.product && !("deleted" in p.product)
+        ? p.product
+        : null;
+    return {
+        id: p.id,
+        productId: product?.id ?? (typeof p.product === "string" ? p.product : null),
+        productName: product?.name ?? null,
+        lookupKey: p.lookup_key ?? null,
+        nickname: p.nickname ?? null,
+        unitAmount: p.unit_amount,
+        currency: p.currency,
+        interval: p.recurring?.interval ?? null,
+        intervalCount: p.recurring?.interval_count ?? null,
+    };
+}
+/** All active recurring (subscription) prices on the Stripe account. */
+export async function listSubscriptionPrices() {
+    const res = await getStripe().prices.list({
+        active: true,
+        type: "recurring",
+        limit: 100,
+        expand: ["data.product"],
+    });
+    return res.data.map(toStripePrice);
+}
+/** Resolve a single subscription price without any env config. Resolution
+ *  order: explicit `priceId` → matching `lookupKey` → the sole recurring price.
+ *  Returns null if nothing matches or the choice is ambiguous (multiple prices,
+ *  no lookupKey) — the caller can then list options via listSubscriptionPrices. */
+export async function resolveSubscriptionPrice(opts = {}) {
+    const prices = await listSubscriptionPrices();
+    if (opts.priceId)
+        return prices.find((p) => p.id === opts.priceId) ?? null;
+    if (opts.lookupKey) {
+        const match = prices.find((p) => p.lookupKey === opts.lookupKey);
+        if (match)
+            return match;
+    }
+    return prices.length === 1 ? prices[0] : null;
+}
 export async function getBillingCustomerId(adapter, orgId) {
     return adapter.getBillingCustomerId(orgId);
 }

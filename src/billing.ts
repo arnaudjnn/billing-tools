@@ -14,6 +14,69 @@ export function stripeConfigured(): boolean {
   return !!process.env.STRIPE_SECRET_KEY;
 }
 
+// ── Subscription pricing ────────────────────────────────────────────────────
+// Prices are pulled live from the Stripe account (via the API key) rather than
+// hardcoded in env — create/edit the plan in Stripe and it's picked up. Callers
+// reference a price by its Stripe `lookup_key` (portable across price ids), or
+// rely on the single-recurring-price shortcut for simple one-plan accounts.
+
+export interface StripePrice {
+  id: string;
+  productId: string | null;
+  productName: string | null;
+  lookupKey: string | null;
+  nickname: string | null;
+  unitAmount: number | null;
+  currency: string;
+  interval: string | null;
+  intervalCount: number | null;
+}
+
+function toStripePrice(p: Stripe.Price): StripePrice {
+  const product =
+    typeof p.product === "object" && p.product && !("deleted" in p.product)
+      ? (p.product as Stripe.Product)
+      : null;
+  return {
+    id: p.id,
+    productId: product?.id ?? (typeof p.product === "string" ? p.product : null),
+    productName: product?.name ?? null,
+    lookupKey: p.lookup_key ?? null,
+    nickname: p.nickname ?? null,
+    unitAmount: p.unit_amount,
+    currency: p.currency,
+    interval: p.recurring?.interval ?? null,
+    intervalCount: p.recurring?.interval_count ?? null,
+  };
+}
+
+/** All active recurring (subscription) prices on the Stripe account. */
+export async function listSubscriptionPrices(): Promise<StripePrice[]> {
+  const res = await getStripe().prices.list({
+    active: true,
+    type: "recurring",
+    limit: 100,
+    expand: ["data.product"],
+  });
+  return res.data.map(toStripePrice);
+}
+
+/** Resolve a single subscription price without any env config. Resolution
+ *  order: explicit `priceId` → matching `lookupKey` → the sole recurring price.
+ *  Returns null if nothing matches or the choice is ambiguous (multiple prices,
+ *  no lookupKey) — the caller can then list options via listSubscriptionPrices. */
+export async function resolveSubscriptionPrice(
+  opts: { priceId?: string; lookupKey?: string } = {},
+): Promise<StripePrice | null> {
+  const prices = await listSubscriptionPrices();
+  if (opts.priceId) return prices.find((p) => p.id === opts.priceId) ?? null;
+  if (opts.lookupKey) {
+    const match = prices.find((p) => p.lookupKey === opts.lookupKey);
+    if (match) return match;
+  }
+  return prices.length === 1 ? prices[0] : null;
+}
+
 export async function getBillingCustomerId(
   adapter: BillingAdapter,
   orgId: string,

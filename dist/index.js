@@ -3,7 +3,7 @@ export { resolveConfig } from "./types.js";
 // Auth engine
 export { authContext, runWithAuth, runWithResolvedOrg, enforceAccess, enforceTokens, } from "./auth.js";
 // Billing engine (Stripe math)
-export { getStripe, stripeConfigured, ensureStripeCustomer, getBillingCustomerId, getTokenBalance, deductTokens, creditTokens, createTokenCheckoutSession, getAutoReloadSettings, setAutoReloadSettings, tryAutoReload, listInvoices, } from "./billing.js";
+export { getStripe, stripeConfigured, ensureStripeCustomer, getBillingCustomerId, getTokenBalance, deductTokens, creditTokens, createTokenCheckoutSession, getAutoReloadSettings, setAutoReloadSettings, tryAutoReload, listInvoices, listSubscriptionPrices, resolveSubscriptionPrice, } from "./billing.js";
 // WorkOS magic-auth
 export { sendMagicAuth, verifyMagicAuth } from "./magic-auth.js";
 // WorkOS organization invitations (shared, hook-configurable)

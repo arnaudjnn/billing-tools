@@ -2,6 +2,27 @@ import Stripe from "stripe";
 import type { BillingAdapter, ResolvedConfig } from "./types.js";
 export declare function getStripe(): Stripe;
 export declare function stripeConfigured(): boolean;
+export interface StripePrice {
+    id: string;
+    productId: string | null;
+    productName: string | null;
+    lookupKey: string | null;
+    nickname: string | null;
+    unitAmount: number | null;
+    currency: string;
+    interval: string | null;
+    intervalCount: number | null;
+}
+/** All active recurring (subscription) prices on the Stripe account. */
+export declare function listSubscriptionPrices(): Promise<StripePrice[]>;
+/** Resolve a single subscription price without any env config. Resolution
+ *  order: explicit `priceId` → matching `lookupKey` → the sole recurring price.
+ *  Returns null if nothing matches or the choice is ambiguous (multiple prices,
+ *  no lookupKey) — the caller can then list options via listSubscriptionPrices. */
+export declare function resolveSubscriptionPrice(opts?: {
+    priceId?: string;
+    lookupKey?: string;
+}): Promise<StripePrice | null>;
 export declare function getBillingCustomerId(adapter: BillingAdapter, orgId: string): Promise<string | null>;
 export declare function ensureStripeCustomer(adapter: BillingAdapter, orgId: string, email: string | undefined, config: ResolvedConfig): Promise<string>;
 export declare function getTokenBalance(stripeCustomerId: string): Promise<number>;

@@ -35,6 +35,9 @@ export {
   setAutoReloadSettings,
   tryAutoReload,
   listInvoices,
+  listSubscriptionPrices,
+  resolveSubscriptionPrice,
+  type StripePrice,
 } from "./billing.js";
 
 // WorkOS magic-auth
