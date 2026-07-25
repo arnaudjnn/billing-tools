@@ -8,6 +8,8 @@
 </p>
 
 <p align="center">
+  <a href="https://www.npmjs.com/package/@arnaudjnn/billing-tools"><img alt="npm version" src="https://img.shields.io/npm/v/@arnaudjnn/billing-tools?color=635BFF&label=npm"></a>
+  <a href="https://www.npmjs.com/package/@arnaudjnn/billing-tools"><img alt="npm downloads" src="https://img.shields.io/npm/dm/@arnaudjnn/billing-tools?color=8A8A9A"></a>
   <img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-635BFF.svg">
   <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-strict-3178C6.svg">
   <img alt="Stripe" src="https://img.shields.io/badge/Stripe-635BFF.svg">
