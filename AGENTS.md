@@ -76,7 +76,7 @@ The **payment** sibling of auth.md: Stripe's [MPP](https://mpp.dev) (Machine Pay
 
 ## Mounting in a Next app
 
-**One-call:** `createBilling({ adapter, config, plans?, toolCosts?, registerTools?, agentAuth?, webhook? })` (`src/create-billing.ts`) returns `{ mcp, restList, restDispatch, webhook, agentAuth }` from a single module instance (shared AsyncLocalStorage). It's pure sugar over the factories below (all still exported); `registerTools` registers the app's own product tools alongside the billing tools, and passing `agentAuth` auto-wires `resourceMetadata` onto the REST/MCP 401s. Or wire the factories by hand:
+**One-call:** `createBilling({ adapter, config, plans?, toolCosts?, registerTools?, agentAuth?, webhook?, machinePayment? })` (`src/create-billing.ts`) returns `{ mcp, restList, restDispatch, webhook, agentAuth, machinePayment, paymentMd }` from a single module instance (shared AsyncLocalStorage). It's pure sugar over the factories below (all still exported); `registerTools` registers the app's own product tools alongside the billing tools, passing `agentAuth` auto-wires `resourceMetadata` onto the REST/MCP 401s, and passing `machinePayment` (a `MachinePaymentOptions`) returns the MPP `requirePayment` handler + a `/payment.md` handler (`paymentMd`, branded from `agentAuth.branding.productName`). Or wire the factories by hand:
 
 - **MCP** `app/[transport]/route.ts`: `createMcpTransport({ adapter, config })`.
 - **REST** `app/api/v0/route.ts` + `app/api/v0/[tool]/route.ts`: `createToolListHandler({toolCosts})` / `createToolDispatchHandler()`.

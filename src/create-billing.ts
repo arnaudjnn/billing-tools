@@ -14,6 +14,7 @@ import {
   type AgentIdentityType,
 } from "./agent-auth/index.js";
 import type { ClaimStore } from "./agent-auth/claim-store.js";
+import { createMachinePaymentHandler, createPaymentMd, type MachinePaymentOptions } from "./machine-payment/index.js";
 import type { PlansConfig } from "./plans.js";
 
 // One-call composition helper. Instead of wiring the five factories by hand in
@@ -50,6 +51,8 @@ export interface CreateBillingOptions {
   webhook?: { currency?: string } | false;
   /** MCP transport overrides. */
   mcp?: { apiKeyPrefix?: string; maxDuration?: number };
+  /** Enable MPP machine payments (pay-per-request 402). Omit to leave it off. */
+  machinePayment?: MachinePaymentOptions;
 }
 
 export function createBilling(opts: CreateBillingOptions) {
@@ -92,6 +95,18 @@ export function createBilling(opts: CreateBillingOptions) {
       ? undefined
       : createStripeWebhookHandler({ currency: opts.webhook?.currency ?? resolved.currency });
 
+  // MPP machine payments (pay-per-request) + its /payment.md discovery doc.
+  const machinePayment = opts.machinePayment
+    ? createMachinePaymentHandler(opts.machinePayment)
+    : undefined;
+  const paymentMd = opts.machinePayment
+    ? createPaymentMd({
+        productName: opts.agentAuth?.branding.productName ?? "This service",
+        methods: opts.machinePayment.methods,
+        currency: opts.machinePayment.currency ?? resolved.currency,
+      })
+    : undefined;
+
   return {
     adapter: opts.adapter,
     config: resolved,
@@ -107,5 +122,9 @@ export function createBilling(opts: CreateBillingOptions) {
     webhook,
     /** auth.md handlers (undefined unless `agentAuth` was configured). */
     agentAuth,
+    /** MPP handler `{ requirePayment, buildChallenges }` (undefined unless `machinePayment` was configured). */
+    machinePayment,
+    /** `/payment.md` handler (undefined unless `machinePayment` was configured). */
+    paymentMd,
   };
 }
