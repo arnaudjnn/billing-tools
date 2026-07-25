@@ -2,5 +2,6 @@ node_modules/
 *.tsbuildinfo
 .env
 .env.*
-# NOTE: dist/ is intentionally committed — consumers install via git dependency
-# and import the compiled output. Do not ignore it.
+# dist/ is built fresh in CI (prepublishOnly) and shipped in the npm tarball —
+# no longer committed now that consumers install from npm, not the git repo.
+dist/
