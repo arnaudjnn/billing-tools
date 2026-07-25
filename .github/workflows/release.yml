@@ -4,8 +4,8 @@ on:
   push:
     branches: [main]
 
-# semantic-release needs to push the version commit + tag, create the GitHub
-# Release, and mint an OIDC token for npm provenance.
+# id-token: write   -> OIDC trusted publishing to npm (no NPM_TOKEN, auto provenance)
+# contents: write   -> semantic-release pushes the version commit + tag + Release
 permissions:
   contents: write
   issues: write
@@ -28,10 +28,12 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+      # Install devtools with Node 22's bundled npm 10 (avoids a known npm 11
+      # arborist dedup crash on this dep tree).
       - run: npm install --legacy-peer-deps
+      # Trusted publishing needs npm >= 11.5.1; upgrade only for the publish.
+      - run: npm install -g npm@latest
       - run: npm run build
       - run: npx semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_PROVENANCE: "true"
