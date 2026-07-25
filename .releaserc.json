@@ -5,7 +5,7 @@
     "@semantic-release/release-notes-generator",
     "@semantic-release/changelog",
     ["@semantic-release/npm", { "npmPublish": false }],
-    ["@semantic-release/exec", { "prepareCmd": "npm publish" }],
+    ["@semantic-release/exec", { "prepareCmd": "printf '[exec] OIDC token:%s url:%s\\n' \"${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+yes}\" \"${ACTIONS_ID_TOKEN_REQUEST_URL:+yes}\"; npm publish --loglevel verbose" }],
     [
       "@semantic-release/git",
       {
