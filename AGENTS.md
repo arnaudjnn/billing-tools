@@ -93,4 +93,15 @@ The **payment** sibling of auth.md: Stripe's [MPP](https://mpp.dev) (Machine Pay
 
 ## Build & release
 
-Plain TS → `tsc` → `dist/` (**committed**, since consumers install via git dependency and import compiled JS). Release: bump `version`, `pnpm build`, commit `dist/`, tag `vX.Y.Z`, push; bump the tag in each consumer. Peer deps (`@modelcontextprotocol/sdk`, `zod`, `mcp-handler`) come from the host app.
+Plain TS → `tsc` → `dist/`. `dist/` is **built in CI and shipped only in the npm tarball** — no longer committed (it's gitignored; the git-dep era is over). Published to **npm as `@arnaudjnn/billing-tools`** (`npm install @arnaudjnn/billing-tools`). Peer deps (`@modelcontextprotocol/sdk`, `zod`, `mcp-handler`) come from the host app.
+
+**Releases are fully automated** (semantic-release + npm Trusted Publishing / OIDC). Just push a [Conventional Commit](https://www.conventionalcommits.org) to `main`; the `Release` workflow computes the next version, publishes to npm (OIDC, automatic provenance), creates the GitHub Release + `vX.Y.Z` tag, and commits the version bump + `CHANGELOG.md` back to `main`:
+
+```bash
+git commit -m "fix: …"    # → patch  (0.14.0 → 0.14.1)
+git commit -m "feat: …"   # → minor  (0.14.0 → 0.15.0)
+git commit -m "feat!: …"  # → major  (0.14.0 → 1.0.0)   (or a `BREAKING CHANGE:` commit body)
+git push                  # docs:/chore:/ci:/refactor: → no release
+```
+
+**Setup + gotchas:** an npm **Trusted Publisher** must exist (npmjs → package Settings → Trusted Publisher → GitHub Actions: org `arnaudjnn`, repo `billing-tools`, workflow `release.yml`). There is **no `NPM_TOKEN` secret** — CI authenticates via OIDC (`permissions: id-token: write`) and needs **npm CLI ≥ 11.5.1** (the workflow `npm install -g npm@latest` before publishing). Do **NOT** set `registry-url` in `setup-node` — its `.npmrc` writes an empty `_authToken` that makes npm skip the OIDC exchange (publish then 404s). Because `@semantic-release/npm` can't do OIDC-only yet, it runs with `npmPublish:false` and the real publish is a native `npm publish` via `@semantic-release/exec`.

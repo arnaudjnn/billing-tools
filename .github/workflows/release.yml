@@ -24,10 +24,13 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      # NOTE: no `registry-url` — setup-node's registry-url writes an .npmrc with
+      # `_authToken=${NODE_AUTH_TOKEN}` (empty here), which makes npm attempt
+      # token auth and SKIP the OIDC exchange (publish then 404s). Omitting it
+      # lets `npm publish` do OIDC trusted publishing against the default registry.
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org
       # Install devtools with Node 22's bundled npm 10 (avoids a known npm 11
       # arborist dedup crash on this dep tree).
       - run: npm install --legacy-peer-deps
