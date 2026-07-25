@@ -24,29 +24,24 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      # NOTE: no `registry-url` — setup-node's registry-url writes an .npmrc with
-      # `_authToken=${NODE_AUTH_TOKEN}` (empty here), which makes npm attempt
-      # token auth and SKIP the OIDC exchange (publish then 404s). Omitting it
-      # lets `npm publish` do OIDC trusted publishing against the default registry.
+      # NOTE: no `registry-url`. setup-node's registry-url writes an .npmrc with
+      # `_authToken=${NODE_AUTH_TOKEN}` (empty here), which makes npm try token
+      # auth and skip the OIDC exchange. Omit it so OIDC trusted publishing runs
+      # against the default registry.
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      # Install devtools with Node 22's bundled npm 10 (avoids a known npm 11
-      # arborist dedup crash on this dep tree).
+      # Node 22's bundled npm 10 installs the dep tree cleanly (a known npm 11
+      # arborist dedup crash otherwise). The publish itself forces npm@latest
+      # via `npx` (see .releaserc) because OIDC needs npm >= 11.5.1.
       - run: npm install --legacy-peer-deps
-      # Trusted publishing needs npm >= 11.5.1; upgrade only for the publish.
-      - run: npm install -g npm@latest
-      - name: Diagnostics (npm version + OIDC env)
-        run: |
-          echo "node: $(node --version)"
-          echo "npm:  $(npm --version)"
-          echo "OIDC request url present: ${ACTIONS_ID_TOKEN_REQUEST_URL:+yes}"
       - run: npm run build
-      # semantic-release publishes to npm via exec `npm publish` in the *prepare*
-      # step — BEFORE @semantic-release/git commits and before core tags — so npm
-      # and the git tag/Release can never desync: if the publish fails, no tag,
-      # commit, or Release is created. `--loglevel silly` surfaces the OIDC
-      # trusted-publishing token exchange in the logs.
+      # semantic-release runs `npx --yes npm@latest publish` in its *prepare* step
+      # (see .releaserc exec) — BEFORE @semantic-release/git commits and before it
+      # tags — so npm and the git tag/Release can never desync: a failed publish
+      # creates no tag, commit, or Release. npm@latest (not node_modules/.bin/npm,
+      # which npx shadows onto PATH and is too old for OIDC) does the token-less
+      # OIDC trusted publish with automatic provenance.
       - name: Release (publish to npm + tag + GitHub Release)
         run: npx semantic-release
         env:
