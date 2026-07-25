@@ -10,6 +10,7 @@ export { createBillingSync, createSyncRoute, type BillingSync, type BillingSyncO
 export { createMirror, type Mirror, type MirrorOptions, type MirrorQuery, type MirrorQueryResult, } from "./mirror.js";
 export { registerBillingTools, installInputLogging, BILLING_TOOL_NAMES, type RegisterBillingToolsOptions, } from "./tools/register.js";
 export { createDispatcher, ToolValidationError, type RegisterFn } from "./dispatch.js";
+export { createBilling, type CreateBillingOptions } from "./create-billing.js";
 export { createAgentAuth, CLAIM_GRANT_TYPE, type AgentAuthOptions, type AgentAuthBranding, type AgentAuthPaths, type AgentAuthPolicy, type AgentIdentityType, } from "./agent-auth/index.js";
 export { inMemoryClaimStore, type ClaimStore, type ClaimStatus, type ClaimReadResult, } from "./agent-auth/claim-store.js";
 export { createMachinePaymentHandler, createPaymentMd, type MachinePaymentOptions, type MachinePaymentMethod, type PaymentChallenge, type SettleFn, type PaymentMdOptions, } from "./machine-payment/index.js";

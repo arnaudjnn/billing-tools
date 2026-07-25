@@ -20,6 +20,8 @@ export { createMirror, } from "./mirror.js";
 export { registerBillingTools, installInputLogging, BILLING_TOOL_NAMES, } from "./tools/register.js";
 // REST dispatch bridge
 export { createDispatcher, ToolValidationError } from "./dispatch.js";
+// One-call composition helper (mount every surface from one config)
+export { createBilling } from "./create-billing.js";
 // auth.md — agent self-registration protocol (framework-agnostic handlers)
 export { createAgentAuth, CLAIM_GRANT_TYPE, } from "./agent-auth/index.js";
 export { inMemoryClaimStore, } from "./agent-auth/claim-store.js";

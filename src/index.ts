@@ -100,6 +100,9 @@ export {
 // REST dispatch bridge
 export { createDispatcher, ToolValidationError, type RegisterFn } from "./dispatch.js";
 
+// One-call composition helper (mount every surface from one config)
+export { createBilling, type CreateBillingOptions } from "./create-billing.js";
+
 // auth.md — agent self-registration protocol (framework-agnostic handlers)
 export {
   createAgentAuth,

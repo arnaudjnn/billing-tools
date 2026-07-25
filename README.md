@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/hero.svg" alt="Billing Tools, the get-paid engine for Stripe + WorkOS apps, for humans and AI agents" width="100%">
+  <img src="https://raw.githubusercontent.com/arnaudjnn/billing-tools/main/assets/hero.svg" alt="Billing Tools, the get-paid engine for Stripe + WorkOS apps, for humans and AI agents" width="100%">
 </p>
 
 <p align="center">
@@ -108,16 +108,12 @@ So you do the one thing only you can do (**build great tools**) and monetize the
 
 ### Install
 
-Installed as a Git dependency (ships compiled `dist/`, so **no build step or `transpilePackages`** in the consumer). Pin by commit SHA for reproducibility:
-
-```jsonc
-// package.json
-"dependencies": {
-  "@arnaudjnn/billing-tools": "github:arnaudjnn/billing-tools#<commit-sha>"
-}
+```bash
+npm install @arnaudjnn/billing-tools
+# peers (provide the ones you use): @modelcontextprotocol/sdk mcp-handler zod
 ```
 
-> To upgrade later, run `pnpm update @arnaudjnn/billing-tools` and commit the lockfile. Prefer a commit SHA over a tag: package managers cache the Git tag-to-SHA resolution and can serve a stale commit.
+Ships compiled `dist/`, so there's no build step or `transpilePackages` needed in the consumer.
 
 ### Environment
 
@@ -129,35 +125,30 @@ WORKOS_CLIENT_ID=client_…
 INTERNAL_ORG_DOMAINS=acme.com        # optional: orgs with these verified domains are unmetered
 ```
 
-### Wire it up (Next.js example)
+### Wire it up (one call)
+
+`createBilling()` composes every surface from a single config (one module instance = one shared auth context). You supply the adapter + config; it returns the mounted handlers.
 
 ```ts
-// billing.ts, one composition root (single module instance = one auth context)
-import {
-  registerBillingTools, createDispatcher, resolveConfig,
-  createToolListHandler, createToolDispatchHandler,
-  createMcpTransport, createStripeWebhookHandler,
-} from "@arnaudjnn/billing-tools";
+// billing.ts
+import { createBilling } from "@arnaudjnn/billing-tools";
 import { WorkOSOrgAdapter } from "@arnaudjnn/billing-tools/adapters/workos-org";
 
-export const adapter = new WorkOSOrgAdapter();            // WorkOS is the source of truth
-const config = resolveConfig({ currency: "usd", baseUrl: process.env.APP_URL! });
-
-const register = (server: any) => registerBillingTools(server, { adapter, config });
-const dispatcher = createDispatcher(register);
-
-export const mcp          = createMcpTransport({ register, adapter });        // app/[transport]/route.ts
-export const toolList     = createToolListHandler({ dispatcher });            // app/api/v0/route.ts
-export const toolDispatch = createToolDispatchHandler({ dispatcher });        // app/api/v0/[tool]/route.ts
-export const webhook      = createStripeWebhookHandler();                     // app/api/stripe/webhook/route.ts
+export const { mcp, restList, restDispatch, webhook, agentAuth } = createBilling({
+  adapter: new WorkOSOrgAdapter(),                       // WorkOS is the source of truth
+  config: { currency: "usd", baseUrl: process.env.APP_URL! },
+  agentAuth: { branding: { productName: "Acme" } },     // enables auth.md (optional)
+});
 ```
 
 ```ts
-// app/[transport]/route.ts
-import { mcp } from "@/billing";
-export const GET = mcp.GET;
-export const POST = mcp.POST;
+// app/[transport]/route.ts       →  export const { GET, POST } = mcp
+// app/api/v0/route.ts            →  export const GET = restList
+// app/api/v0/[tool]/route.ts     →  export const POST = restDispatch
+// app/api/stripe/webhook/route.ts→  export const POST = webhook
 ```
+
+Prefer fine-grained control? Every factory is exported individually (`registerBillingTools`, `createMcpTransport`, `createToolListHandler`, `createToolDispatchHandler`, `createStripeWebhookHandler`, `createAgentAuth`, …) so you can build your own composition root.
 
 ### First call
 
@@ -240,7 +231,6 @@ registerBillingCommands(program, { configDir: "~/.acme", envPrefix: "ACME", defa
 
 ## Roadmap
 
-- 🧰 `createBilling()` one-call composition helper (mount every surface from a single config)
 - 🧾 Stripe Tax (`automatic_tax`) opt-in
 - 🪙 x402 machine-payment protocol alongside [MPP](https://mpp.dev/)
 
