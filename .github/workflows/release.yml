@@ -36,7 +36,15 @@ jobs:
       - run: npm install --legacy-peer-deps
       # Trusted publishing needs npm >= 11.5.1; upgrade only for the publish.
       - run: npm install -g npm@latest
+      - name: Diagnostics (npm version + OIDC env)
+        run: |
+          echo "node: $(node --version)"
+          echo "npm:  $(npm --version)"
+          echo "OIDC request url present: ${ACTIONS_ID_TOKEN_REQUEST_URL:+yes}"
       - run: npm run build
+      # exec runs `npm publish` in the *prepare* step (before @semantic-release/git
+      # commits + before core tags), so a publish failure aborts cleanly with no
+      # dangling chore(release) commit or tag pushed.
       - run: npx semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
