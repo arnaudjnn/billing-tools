@@ -42,9 +42,24 @@ jobs:
           echo "npm:  $(npm --version)"
           echo "OIDC request url present: ${ACTIONS_ID_TOKEN_REQUEST_URL:+yes}"
       - run: npm run build
-      # exec runs `npm publish` in the *prepare* step (before @semantic-release/git
-      # commits + before core tags), so a publish failure aborts cleanly with no
-      # dangling chore(release) commit or tag pushed.
-      - run: npx semantic-release
+      # semantic-release computes the next version + writes package.json/CHANGELOG,
+      # commits + tags + creates the GitHub Release. It does NOT publish to npm
+      # (npmPublish:false) — we publish at the top level below so npm sees the full
+      # GitHub OIDC env directly (no execa/lodash-template layer in the way).
+      - name: Version, changelog, tag, GitHub Release
+        run: npx semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Top-level publish → cleanest OIDC trusted-publishing context. Gated on the
+      # semantic-release-bumped local version differing from what's already on npm,
+      # so no-release pushes (docs:/chore:) don't try to republish.
+      - name: Publish to npm (OIDC trusted publishing)
+        run: |
+          LOCAL=$(node -p "require('./package.json').version")
+          REMOTE=$(npm view @arnaudjnn/billing-tools version 2>/dev/null || echo none)
+          echo "local=$LOCAL remote=$REMOTE"
+          if [ "$LOCAL" != "$REMOTE" ]; then
+            npm publish
+          else
+            echo "No new version to publish."
+          fi
