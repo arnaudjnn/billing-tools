@@ -42,6 +42,18 @@ export interface PlanDef {
 export type PlansConfig = Record<string, PlanDef>;
 export type BillingInterval = "monthly" | "yearly";
 
+// Library DEFAULT seat types, priced in USD (the lib's default currency — see
+// ensurePlans `opts.currency ?? "usd"`). Consumers use these as-is or override
+// (scartoffie, for instance, sets currency "eur" and its own EUR amounts).
+// Amounts are cents; `yearly` is the annual total per seat. The `api` seat is
+// the shared agent/API pool (≈ 5× a premium seat). `includedTokens` are example
+// packs — tune per product.
+export const DEFAULT_SEAT_TYPES: Record<string, SeatTypeDef> = {
+  standard: { label: "Standard", price: { monthly: 2500, yearly: 24000 }, includedTokens: 1000 }, // $25/mo · $20/mo annually
+  premium: { label: "Premium", price: { monthly: 12500, yearly: 120000 }, includedTokens: 5000 }, // $125/mo · $100/mo annually
+  api: { label: "API", price: { monthly: 62500, yearly: 600000 }, includedTokens: 25000, seats: 1 }, // ≈ 5× premium, one per workspace
+};
+
 const INTERVALS: BillingInterval[] = ["monthly", "yearly"];
 const STRIPE_INTERVAL: Record<BillingInterval, "month" | "year"> = {
   monthly: "month",

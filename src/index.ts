@@ -51,6 +51,7 @@ export {
   includedTokens,
   includedTokensByType,
   lookupKeyFor,
+  DEFAULT_SEAT_TYPES,
   type PlanDef,
   type SeatTypeDef,
   type PlansConfig,
