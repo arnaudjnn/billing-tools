@@ -44,6 +44,18 @@ export interface BillingAdapter {
   /** Create an org with NO associated user (auth.md `anonymous` registration).
    *  Optional — if absent, anonymous registration reports `anonymous_not_enabled`. */
   createAnonymousOrg?(opts: { name: string; metadata?: Record<string, string> }): Promise<{ orgId: string }>;
+
+  // ── Optional metering-support methods (used by the metering + top-up engine).
+  // They persist to the org's existing store (e.g. WorkOS org metadata) so no
+  // separate database is required. Omit them if the consumer doesn't use
+  // per-seat metering / top-up requests.
+
+  /** Read the org's free-form metadata map (small key→string store). */
+  getOrgMetadata?(orgId: string): Promise<Record<string, string>>;
+  /** Merge a patch into the org metadata (null value = delete the key). */
+  setOrgMetadata?(orgId: string, patch: Record<string, string | null>): Promise<void>;
+  /** Whether a user is an admin/owner of the org (gates auto-top-up + approvals). */
+  isAdmin?(orgId: string, userId: string): Promise<boolean>;
 }
 
 export interface BillingConfig {

@@ -233,4 +233,33 @@ export class WorkOSOrgAdapter implements BillingAdapter {
     set("plan", sub.plan);
     await this.workos.organizations.updateOrganization({ organization: wid, metadata });
   }
+
+  // ── Metering support (org metadata as the store; no separate DB) ───────────
+
+  async getOrgMetadata(orgId: string): Promise<Record<string, string>> {
+    const org = await this.workos.organizations.getOrganization(await this.wid(orgId));
+    return (org.metadata as Record<string, string>) ?? {};
+  }
+
+  /** Merge a patch into the org metadata (null/"" deletes the key). */
+  async setOrgMetadata(orgId: string, patch: Record<string, string | null>): Promise<void> {
+    const wid = await this.wid(orgId);
+    const org = await this.workos.organizations.getOrganization(wid);
+    const metadata: Record<string, string> = { ...((org.metadata as Record<string, string>) ?? {}) };
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === null || v === "") delete metadata[k];
+      else metadata[k] = v;
+    }
+    await this.workos.organizations.updateOrganization({ organization: wid, metadata });
+  }
+
+  /** Admin/owner check via the user's role in the org (WorkOS "admin" slug). */
+  async isAdmin(orgId: string, userId: string): Promise<boolean> {
+    const r = await this.workos.userManagement.listOrganizationMemberships({
+      organizationId: await this.wid(orgId),
+      userId,
+      statuses: ["active"],
+    });
+    return r.data.some((m) => m.role?.slug === "admin");
+  }
 }

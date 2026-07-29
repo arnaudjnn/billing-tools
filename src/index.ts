@@ -69,6 +69,18 @@ export {
   type MeterResult,
 } from "./metering.js";
 
+// Top-up requests (user → owner approval) + admin-gated auto-top-up. Stored in
+// WorkOS org metadata via the adapter — no new backend.
+export {
+  requestTopUp,
+  listTopUpRequests,
+  approveTopUp,
+  denyTopUp,
+  extraAllowance,
+  setAutoTopUp,
+  type TopUpRequest,
+} from "./topup.js";
+
 // WorkOS magic-auth
 export { sendMagicAuth, verifyMagicAuth } from "./magic-auth.js";
 

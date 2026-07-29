@@ -33,6 +33,9 @@ export interface MeterInput {
   /** Start of the current billing cycle, unix seconds — the window for per-seat
    *  usage. */
   cycleStart: number;
+  /** Approved extra allowance for this caller this cycle (owner-granted top-up),
+   *  added on top of the seat pack. Consumer resolves it via `extraAllowance`. */
+  extraAllowance?: number;
   caller?: MeterCaller;
 }
 
@@ -58,6 +61,7 @@ export async function meterUsage(
   input: MeterInput,
 ): Promise<MeterResult> {
   const { orgId, action, cost, plans, plan, cycleStart, caller } = input
+  const extra = input.extraAllowance ?? 0
   if (cost <= 0) return { ok: true }
   if (!stripeConfigured()) return { ok: true }
   if (await isInternalOrg(adapter, orgId, config.internalDomains)) return { ok: true }
@@ -91,7 +95,7 @@ export async function meterUsage(
           ? { callerKind: "api" }
           : { callerKind: "user", callerId: caller.id },
       )
-      if (used + cost > pack && caller.kind === "user") {
+      if (used + cost > pack + extra && caller.kind === "user") {
         // Hard cap for a user seat. (API seat over its pack is allowed — it
         // draws the shared reserve, which is the API pool's top-up.)
         return {
