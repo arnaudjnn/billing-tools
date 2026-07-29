@@ -9,13 +9,34 @@ import { getStripe } from "./billing.js";
 // metadata.managedBy = "billing-tools" so orphans (plans/intervals you removed)
 // get archived too — the Stripe account stays clean.
 
+/** One seat type within a plan (e.g. `standard` vs `premium`). Each type has
+ *  its own recurring per-seat price and included-token allowance, so a plan's
+ *  subscription carries one line item per seat type (quantity = members of that
+ *  type). Introduced for the Claude-style Standard/Premium seat model. */
+export interface SeatTypeDef {
+  /** Per-seat recurring price (cents). 0 = free (no Stripe price). */
+  price: { monthly: number; yearly: number };
+  /** Included tokens granted per seat of THIS type, per billing cycle. */
+  includedTokens: number;
+  /** Optional cap on seats of this type (null/undefined = unlimited). */
+  seats?: number | null;
+  /** Optional display label. */
+  label?: string;
+}
+
 export interface PlanDef {
   /** Max members per workspace. null = unlimited. */
   seats: number | null;
-  /** Included tokens granted per seat, per billing cycle. */
+  /** Included tokens granted per seat, per billing cycle (flat model). */
   tokensPerSeat: number;
   /** Recurring price in the smallest currency unit (cents). 0 = free (no Stripe price). */
   price: { monthly: number; yearly: number };
+  /** Optional multi-seat-type pricing. When present, `ensurePlans` mints one
+   *  Stripe price per (plan, seatType, interval), the subscription carries one
+   *  line item per seat type, and included tokens sum per type
+   *  (`includedTokensByType`). When ABSENT the flat {seats, tokensPerSeat,
+   *  price} model applies unchanged — existing consumers are unaffected. */
+  seatTypes?: Record<string, SeatTypeDef>;
 }
 
 export type PlansConfig = Record<string, PlanDef>;
@@ -28,12 +49,17 @@ const STRIPE_INTERVAL: Record<BillingInterval, "month" | "year"> = {
 };
 const MANAGED_BY = "billing-tools";
 
-export const lookupKeyFor = (plan: string, interval: BillingInterval): string =>
-  `${plan}_${interval}`;
+export const lookupKeyFor = (
+  plan: string,
+  interval: BillingInterval,
+  seatType?: string,
+): string => (seatType ? `${plan}_${seatType}_${interval}` : `${plan}_${interval}`);
 
 export interface EnsuredPrice {
   plan: string;
   interval: BillingInterval;
+  /** Set only for seat-typed plans. */
+  seatType?: string;
   priceId: string;
   productId: string;
   amount: number;
@@ -74,10 +100,23 @@ export async function ensurePlans(
 
   for (const [plan, def] of Object.entries(plans)) {
     let productId = await findPlanProduct(stripe, plan);
-    for (const interval of INTERVALS) {
-      const amount = def.price[interval];
-      if (!amount || amount <= 0) continue; // free interval — no Stripe price
-      const lookupKey = lookupKeyFor(plan, interval);
+    // One spec per Stripe price to ensure. Flat plans: one per interval.
+    // Seat-typed plans: one per (seatType, interval). One managed product per
+    // plan holds all of a plan's prices.
+    const specs: { interval: BillingInterval; amount: number; seatType?: string }[] = [];
+    if (def.seatTypes) {
+      for (const [seatType, st] of Object.entries(def.seatTypes)) {
+        for (const interval of INTERVALS) {
+          specs.push({ interval, amount: st.price[interval], seatType });
+        }
+      }
+    } else {
+      for (const interval of INTERVALS) specs.push({ interval, amount: def.price[interval] });
+    }
+
+    for (const { interval, amount, seatType } of specs) {
+      if (!amount || amount <= 0) continue; // free interval/seat — no Stripe price
+      const lookupKey = lookupKeyFor(plan, interval, seatType);
       wanted.add(lookupKey);
 
       const existing = (
@@ -91,7 +130,7 @@ export async function ensurePlans(
       if (existing && matches) {
         productId =
           typeof existing.product === "string" ? existing.product : existing.product.id;
-        result.push({ plan, interval, priceId: existing.id, productId, amount, lookupKey });
+        result.push({ plan, interval, seatType, priceId: existing.id, productId, amount, lookupKey });
         continue;
       }
 
@@ -111,10 +150,10 @@ export async function ensurePlans(
         recurring: { interval: STRIPE_INTERVAL[interval] },
         lookup_key: lookupKey,
         transfer_lookup_key: true,
-        metadata: { managedBy: MANAGED_BY, plan, interval },
+        metadata: { managedBy: MANAGED_BY, plan, interval, ...(seatType ? { seatType } : {}) },
       });
       if (existing) await stripe.prices.update(existing.id, { active: false });
-      result.push({ plan, interval, priceId: created.id, productId, amount, lookupKey });
+      result.push({ plan, interval, seatType, priceId: created.id, productId, amount, lookupKey });
     }
   }
 
@@ -149,9 +188,10 @@ async function archiveOrphans(stripe: Stripe, wanted: Set<string>): Promise<void
 export async function planPriceId(
   plan: string,
   interval: BillingInterval,
+  seatType?: string,
 ): Promise<string | null> {
   const r = await getStripe().prices.list({
-    lookup_keys: [lookupKeyFor(plan, interval)],
+    lookup_keys: [lookupKeyFor(plan, interval, seatType)],
     active: true,
     limit: 1,
   });
@@ -168,12 +208,23 @@ export async function planForPriceId(priceId: string): Promise<string | null> {
   }
 }
 
+/** Reverse-map a Stripe price id → its seat type (via metadata), or null for a
+ *  flat (non-seat-typed) price. */
+export async function seatTypeForPriceId(priceId: string): Promise<string | null> {
+  try {
+    const price = await getStripe().prices.retrieve(priceId);
+    return price.metadata?.seatType ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Seat limit for a plan (null = unlimited, undefined plan = null). */
 export function seatLimit(plans: PlansConfig, plan: string): number | null {
   return plans[plan]?.seats ?? null;
 }
 
-/** Included tokens for `seatCount` members on a plan (per cycle). */
+/** Included tokens for `seatCount` members on a plan (per cycle, flat model). */
 export function includedTokens(
   plans: PlansConfig,
   plan: string,
@@ -182,4 +233,26 @@ export function includedTokens(
   const def = plans[plan];
   if (!def) return 0;
   return def.tokensPerSeat * Math.max(1, seatCount);
+}
+
+/** Included tokens for a seat-typed plan given member counts per seat type
+ *  (per cycle): Σ seatTypes[t].includedTokens × counts[t]. Falls back to the
+ *  flat `includedTokens` (over the total member count) for plans without seat
+ *  types, so callers can use it uniformly. */
+export function includedTokensByType(
+  plans: PlansConfig,
+  plan: string | null,
+  counts: Record<string, number>,
+): number {
+  const def = plan ? plans[plan] : undefined;
+  if (!def) return 0;
+  if (!def.seatTypes) {
+    const total = Object.values(counts).reduce((a, b) => a + b, 0);
+    return includedTokens(plans, plan!, total);
+  }
+  let sum = 0;
+  for (const [type, st] of Object.entries(def.seatTypes)) {
+    sum += st.includedTokens * (counts[type] ?? 0);
+  }
+  return sum;
 }

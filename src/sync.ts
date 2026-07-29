@@ -1,7 +1,12 @@
 import type Stripe from "stripe";
 import { pollStripeEvents, pollWorkOSEvents } from "./events.js";
 import { creditTokens, getStripe } from "./billing.js";
-import { includedTokens, planForPriceId, type PlansConfig } from "./plans.js";
+import {
+  includedTokens,
+  includedTokensByType,
+  planForPriceId,
+  type PlansConfig,
+} from "./plans.js";
 import type { Mirror, MirrorQuery } from "./mirror.js";
 import type { WorkOSOrgAdapter } from "./adapters/workos-org.js";
 
@@ -143,18 +148,41 @@ export function createBillingSync(opts: BillingSyncOptions): BillingSync {
       const sub = await getStripe().subscriptions.retrieve(invoice.subscription);
       const orgId = sub.metadata?.org_id;
       if (!orgId) return;
+      // All line items of a subscription share one plan (only the seat type
+      // varies), so the first item resolves the plan.
       const priceId = sub.items?.data?.[0]?.price?.id;
       const plan = priceId ? await planForPriceId(priceId) : null;
       if (!plan) return; // unknown price → no grant
-      const seats = await opts.adapter.memberCount(orgId);
-      const tokens = includedTokens(opts.plans, plan, seats);
+      const planDef = opts.plans[plan];
+
+      // Seat-typed plan → grant from the PURCHASED seats (one line item per
+      // seat type, quantity = seats of that type read off the price metadata),
+      // so tokens track what's actually paid for. Flat plan → per active member.
+      let tokens: number;
+      let seatSummary: string;
+      if (planDef?.seatTypes) {
+        const counts: Record<string, number> = {};
+        for (const item of sub.items.data) {
+          const seatType = item.price?.metadata?.seatType;
+          if (!seatType) continue;
+          counts[seatType] = (counts[seatType] ?? 0) + (item.quantity ?? 0);
+        }
+        tokens = includedTokensByType(opts.plans, plan, counts);
+        const totalSeats = Object.values(counts).reduce((a, b) => a + b, 0);
+        seatSummary = `${totalSeats} seat${totalSeats === 1 ? "" : "s"}`;
+      } else {
+        const seats = await opts.adapter.memberCount(orgId);
+        tokens = includedTokens(opts.plans, plan, seats);
+        seatSummary = `${seats} seat${seats === 1 ? "" : "s"}`;
+      }
+
       if (tokens > 0) {
         // Idempotency key on the invoice id: an overlapping/replayed poll grants
         // the per-cycle tokens exactly once.
         await creditTokens(
           invoice.customer,
           tokens,
-          `Included tokens: ${plan} (${seats} seat${seats === 1 ? "" : "s"})`,
+          `Included tokens: ${plan} (${seatSummary})`,
           currency,
           `credit:invoice:${invoice.id}`,
         );
