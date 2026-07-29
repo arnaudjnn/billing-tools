@@ -37,6 +37,12 @@ export interface PlanDef {
    *  (`includedTokensByType`). When ABSENT the flat {seats, tokensPerSeat,
    *  price} model applies unchanged — existing consumers are unaffected. */
   seatTypes?: Record<string, SeatTypeDef>;
+  /** How usage is metered against the plan's seats (default `per_seat`):
+   *   • `per_seat` — each seat has its own per-cycle pack (user seats capped
+   *     personally; the API seat is a shared pool + top-up).
+   *   • `global`   — pay per seat, but NO per-seat cap: all usage draws one
+   *     committed workspace token pool (e.g. an Enterprise annual commitment). */
+  allowanceMode?: "per_seat" | "global";
 }
 
 export type PlansConfig = Record<string, PlanDef>;

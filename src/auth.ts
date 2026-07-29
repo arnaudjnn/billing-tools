@@ -58,7 +58,7 @@ export async function enforceAccess(
   return { authorized: true, orgId: resolved.orgId };
 }
 
-async function isInternalOrg(
+export async function isInternalOrg(
   adapter: BillingAdapter,
   orgId: string,
   internalDomains: string[],

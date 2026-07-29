@@ -30,6 +30,7 @@ export {
   getTokenBalance,
   deductTokens,
   creditTokens,
+  usageSince,
   createTokenCheckoutSession,
   createBillingPortalSession,
   getAutoReloadSettings,
@@ -58,6 +59,15 @@ export {
   type BillingInterval,
   type EnsuredPrice,
 } from "./plans.js";
+
+// Per-execution metering engine (prepaid balance; per-seat packs or a global
+// pool; usage summed from Stripe balance-transaction metadata — no new backend).
+export {
+  meterUsage,
+  type MeterCaller,
+  type MeterInput,
+  type MeterResult,
+} from "./metering.js";
 
 // WorkOS magic-auth
 export { sendMagicAuth, verifyMagicAuth } from "./magic-auth.js";

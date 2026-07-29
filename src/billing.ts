@@ -151,12 +151,43 @@ export async function deductTokens(
   toolName: string,
   cost: number,
   currency: string,
+  /** Who ran it — written as balance-transaction metadata so per-seat / per-
+   *  caller cycle usage can be summed with `usageSince` (no separate ledger). */
+  caller?: { kind: string; id?: string },
 ): Promise<void> {
   await getStripe().customers.createBalanceTransaction(stripeCustomerId, {
     amount: cost, // positive = debit
     currency,
     description: `Tool call: ${toolName} (${cost} tokens)`,
+    metadata: {
+      action: toolName,
+      ...(caller?.kind ? { caller_kind: caller.kind } : {}),
+      ...(caller?.id ? { caller_id: caller.id } : {}),
+    },
   });
+}
+
+// Sum debited tokens on a customer since `since` (unix seconds — the cycle
+// start), optionally filtered to a caller via balance-transaction metadata.
+// This is the Stripe-native usage ledger: debits are positive amounts, credits
+// (grants / top-ups) are negative and excluded. The list is newest-first, so we
+// stop as soon as we pass the window — only recent transactions are read.
+export async function usageSince(
+  stripeCustomerId: string,
+  since: number,
+  filter?: { callerKind?: string; callerId?: string },
+): Promise<number> {
+  let total = 0;
+  for await (const tx of getStripe().customers.listBalanceTransactions(stripeCustomerId, {
+    limit: 100,
+  })) {
+    if (tx.created < since) break;
+    if (tx.amount <= 0) continue; // credits/grants aren't usage
+    if (filter?.callerKind && tx.metadata?.caller_kind !== filter.callerKind) continue;
+    if (filter?.callerId && tx.metadata?.caller_id !== filter.callerId) continue;
+    total += tx.amount;
+  }
+  return total;
 }
 
 export async function creditTokens(
