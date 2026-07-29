@@ -7,6 +7,7 @@ import { createToolListHandler, createToolDispatchHandler } from "./routes/rest.
 import { createMcpTransport } from "./routes/mcp.js";
 import { createStripeWebhookHandler } from "./routes/webhook.js";
 import {
+  CLAIM_GRANT_TYPE,
   createAgentAuth,
   type AgentAuthBranding,
   type AgentAuthPaths,
@@ -15,6 +16,7 @@ import {
 } from "./agent-auth/index.js";
 import type { ClaimStore } from "./agent-auth/claim-store.js";
 import { createMachinePaymentHandler, createPaymentMd, type MachinePaymentOptions } from "./machine-payment/index.js";
+import { createOAuthProxy, type OAuthProxyOptions } from "./oauth-proxy/index.js";
 import type { PlansConfig } from "./plans.js";
 
 // One-call composition helper. Instead of wiring the five factories by hand in
@@ -53,14 +55,62 @@ export interface CreateBillingOptions {
   mcp?: { apiKeyPrefix?: string; maxDuration?: number };
   /** Enable MPP machine payments (pay-per-request 402). Omit to leave it off. */
   machinePayment?: MachinePaymentOptions;
+  /** Enable the MCP OAuth 2.1 + Dynamic Client Registration proxy, so MCP
+   *  clients (Claude Desktop, Claude.ai) can connect without an API key. When
+   *  set, the authorization_code + refresh_token grants are advertised, the
+   *  authorization/registration endpoints appear in AS metadata, and
+   *  `billing.oauth` exposes the four route handlers. Requires
+   *  REFRESH_TOKEN_SECRET. */
+  oauthProxy?: OAuthProxyOptions | true;
 }
 
 export function createBilling(opts: CreateBillingOptions) {
   const resolved = resolveConfig(opts.config);
 
-  const agentAuth = opts.agentAuth
-    ? createAgentAuth({ adapter: opts.adapter, config: resolved, ...opts.agentAuth })
+  // MCP OAuth 2.1 + DCR proxy (opt-in). Built first so agentAuth can advertise
+  // its endpoints and grants in the discovery document.
+  // eslint-disable-next-line prefer-const -- assigned below; the closure reads it lazily
+  let agentAuthRef: ReturnType<typeof createAgentAuth> | undefined;
+  const oauthProxy = opts.oauthProxy
+    ? createOAuthProxy({
+        ...(opts.oauthProxy === true ? {} : opts.oauthProxy),
+        baseUrl:
+          (opts.oauthProxy === true ? undefined : opts.oauthProxy.baseUrl) ??
+          opts.agentAuth?.baseUrl,
+        // Late-bound: agentAuth is built after this (it needs the endpoints
+        // above for discovery), and the getter runs per request.
+        claimGrant: () =>
+          agentAuthRef
+            ? { type: CLAIM_GRANT_TYPE, handle: agentAuthRef.handleClaimGrant }
+            : undefined,
+      })
     : undefined;
+
+  const agentAuth = opts.agentAuth
+    ? createAgentAuth({
+        adapter: opts.adapter,
+        config: resolved,
+        ...opts.agentAuth,
+        // An OAuth proxy adds two grants and two endpoints to discovery. Merged
+        // here (not asked of the caller) so enabling `oauthProxy` is the only
+        // thing needed for a client to discover the flow.
+        ...(oauthProxy
+          ? {
+              policy: {
+                ...opts.agentAuth.policy,
+                extraGrantTypes: [
+                  ...(opts.agentAuth.policy?.extraGrantTypes ?? []),
+                  ...oauthProxy.grantTypes,
+                ],
+              },
+              asMetadataExtra: (request: Request) => ({
+                ...oauthProxy.asMetadata(request),
+              }),
+            }
+          : {}),
+      })
+    : undefined;
+  agentAuthRef = agentAuth;
   const resourceMetadata = agentAuth
     ? (request: Request) => agentAuth.resourceMetadataUrl(request)
     : undefined;
@@ -126,5 +176,16 @@ export function createBilling(opts: CreateBillingOptions) {
     machinePayment,
     /** `/payment.md` handler (undefined unless `machinePayment` was configured). */
     paymentMd,
+    /** MCP OAuth proxy handlers (undefined unless `oauthProxy` was configured).
+     *  Mount as app/oauth/{authorize,register,callback,token}/route.ts. `token`
+     *  also serves the auth.md claim grant, so it replaces agentAuth.token. */
+    oauth: oauthProxy
+      ? {
+          authorize: oauthProxy.authorize,
+          register: oauthProxy.register,
+          callback: oauthProxy.callback,
+          token: oauthProxy.token,
+        }
+      : undefined,
   };
 }

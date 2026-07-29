@@ -31,6 +31,7 @@
 - [How it works](#how-it-works)
 - [Agent auth (auth.md)](#agent-auth-authmd)
 - [Machine payments (MPP)](#machine-payments-mpp)
+- [MCP OAuth proxy (dynamic clients)](#mcp-oauth-proxy-dynamic-clients)
 - [CLI](#cli)
 - [Configuration](#configuration)
 - [Roadmap](#roadmap)
@@ -208,6 +209,42 @@ if (gate instanceof Response) return gate;   // 402 + WWW-Authenticate: Payment 
 ```
 
 The 402 challenge + credential parsing ship ready and are offline-testable. Actual settlement (card via shared payment tokens, or crypto/USDC) is injected via a `settle` function once your Stripe account is enabled for machine payments; until then the gate returns a clean "settlement not enabled" 402 (never a crash). `createPaymentMd()` serves an agent-facing `/payment.md`.
+
+## MCP OAuth proxy (dynamic clients)
+
+MCP clients like Claude Desktop and Claude.ai can't be handed an API key — they
+register themselves (RFC 7591) and expect an OAuth 2.1 authorization-code flow.
+`oauthProxy` gives you that on top of WorkOS AuthKit, in one option:
+
+```ts
+const billing = createBilling({
+  adapter, config,
+  agentAuth: { branding: { productName: "Acme" } },
+  oauthProxy: true,          // needs REFRESH_TOKEN_SECRET
+});
+
+// app/oauth/authorize/route.ts   export const GET  = billing.oauth!.authorize
+// app/oauth/register/route.ts    export const POST = billing.oauth!.register
+// app/oauth/callback/route.ts    export const GET  = billing.oauth!.callback
+// app/oauth/token/route.ts       export const POST = billing.oauth!.token
+```
+
+The user authenticates with AuthKit; the client receives the WorkOS access token
+plus an HS256 refresh token that wraps the WorkOS one and is bound to the
+`client_id` that obtained it. PKCE (S256) is enforced whenever the client sends a
+challenge, authorization codes are single-use, and the `/oauth/token` route also
+serves the auth.md claim grant so one route covers both flows.
+
+Enabling it also makes discovery honest: `authorization_endpoint` and
+`registration_endpoint` appear in `/.well-known/oauth-authorization-server` only
+when the proxy is on, and `authorization_code`/`refresh_token` join
+`grant_types_supported`. Consumers without the proxy no longer advertise an
+`/oauth/authorize` they don't implement.
+
+**`REFRESH_TOKEN_SECRET` is required and has no fallback.** Falling back to
+`WORKOS_CLIENT_ID` — a public identifier — would let anyone who knows it forge a
+30-day refresh token. Without the secret the token endpoint returns
+`server_error` rather than signing with something guessable.
 
 ## CLI
 

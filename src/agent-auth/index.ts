@@ -64,8 +64,11 @@ export interface AgentAuthOptions {
   policy?: AgentAuthPolicy;
   /** Extra fields merged into the AS-metadata response (spread last, so they
    *  override defaults). Use for capabilities layered on top of auth.md — e.g.
-   *  an MCP OAuth proxy's `authorization_endpoint` / `registration_endpoint`. */
-  asMetadataExtra?: Record<string, unknown>;
+   *  an MCP OAuth proxy's `authorization_endpoint` / `registration_endpoint`.
+   *  A function is resolved per request, for fields derived from the base URL. */
+  asMetadataExtra?:
+    | Record<string, unknown>
+    | ((request: Request) => Record<string, unknown>);
 }
 
 const YEAR = 365 * 24 * 60 * 60;
@@ -151,7 +154,14 @@ export function createAgentAuth(opts: AgentAuthOptions) {
     return Response.json(
       {
         issuer: b,
-        authorization_endpoint: `${b}/oauth/authorize`,
+        // Only advertised when the consumer opted into the authorization_code
+        // grant — i.e. it runs an OAuth proxy (see createOAuthProxy). Emitting
+        // it unconditionally made every consumer claim an /oauth/authorize it
+        // might not implement, and a spec-following MCP client dead-ended on a
+        // 404 during discovery.
+        ...(policy.extraGrantTypes?.includes("authorization_code")
+          ? { authorization_endpoint: `${b}/oauth/authorize` }
+          : {}),
         token_endpoint: `${b}${p.token}`,
         revocation_endpoint: `${b}${p.revoke}`,
         response_types_supported: ["code"],
@@ -168,7 +178,9 @@ export function createAgentAuth(opts: AgentAuthOptions) {
             ? { identity_assertion: { assertion_types_supported: assertionTypes } }
             : {}),
         },
-        ...(opts.asMetadataExtra ?? {}),
+        ...(typeof opts.asMetadataExtra === "function"
+          ? opts.asMetadataExtra(request)
+          : (opts.asMetadataExtra ?? {})),
       },
       { headers: { "Cache-Control": "public, max-age=3600" } },
     );

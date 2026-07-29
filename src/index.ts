@@ -131,6 +131,16 @@ export {
   type PaymentMdOptions,
 } from "./machine-payment/index.js";
 
+// MCP OAuth 2.1 + Dynamic Client Registration proxy (opt-in via
+// createBilling({ oauthProxy }) or standalone).
+export {
+  createOAuthProxy,
+  type OAuthProxy,
+  type OAuthProxyOptions,
+  type OAuthProxyPaths,
+  type ClaimGrantChain,
+} from "./oauth-proxy/index.js";
+
 // Next route factories
 export { createToolListHandler, createToolDispatchHandler, type Dispatcher } from "./routes/rest.js";
 export { createMcpTransport, type McpTransportOptions } from "./routes/mcp.js";
