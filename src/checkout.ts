@@ -135,3 +135,84 @@ export async function createSeatSubscription(opts: {
     clientSecret: invoice?.confirmation_secret?.client_secret ?? null,
   };
 }
+
+/**
+ * Re-price an EXISTING still-incomplete subscription for a new basket.
+ *
+ * The alternative — create a fresh subscription every time the seat count or
+ * interval changes — litters Stripe with abandoned incompletes (cleared only by
+ * ~23h auto-expiry). Updating the one subscription in place keeps a single object
+ * per checkout session: the draft invoice is re-priced and Stripe mints a new
+ * confirmation secret for the browser to confirm.
+ *
+ * `proration_behavior: "none"` because nothing has been paid yet — there is no
+ * prior amount to prorate against, only a draft to overwrite.
+ */
+export async function updateSeatSubscription(opts: {
+  subscriptionId: string;
+  plans: PlansConfig;
+  plan: string;
+  interval: BillingInterval;
+  seats: SeatQuantities;
+  currency?: string;
+}): Promise<{ subscriptionId: string; clientSecret: string | null }> {
+  const stripe = getStripe();
+
+  const wanted = Object.entries(opts.seats).filter(([, qty]) => qty > 0);
+  if (wanted.length === 0) throw new Error("No seats selected");
+
+  await ensurePlans(opts.plans, { currency: opts.currency });
+
+  // Desired priceId → quantity for the new basket.
+  const desired = new Map<string, number>();
+  for (const [seatType, quantity] of wanted) {
+    const price = await planPriceId(opts.plan, opts.interval, seatType);
+    if (!price) {
+      throw new Error(
+        `No Stripe price for ${lookupKeyFor(opts.plan, opts.interval, seatType)}`,
+      );
+    }
+    desired.set(price, quantity);
+  }
+
+  // Diff against the live items: bump quantities, delete removed lines, add new.
+  const sub = await stripe.subscriptions.retrieve(opts.subscriptionId);
+  const items: Stripe.SubscriptionUpdateParams.Item[] = [];
+  const seen = new Set<string>();
+  for (const it of sub.items.data) {
+    const priceId = it.price.id;
+    const quantity = desired.get(priceId);
+    if (quantity != null) {
+      items.push({ id: it.id, quantity });
+      seen.add(priceId);
+    } else {
+      items.push({ id: it.id, deleted: true });
+    }
+  }
+  for (const [priceId, quantity] of desired) {
+    if (!seen.has(priceId)) items.push({ price: priceId, quantity });
+  }
+
+  const updated = await stripe.subscriptions.update(opts.subscriptionId, {
+    items,
+    proration_behavior: "none",
+    payment_behavior: "default_incomplete",
+    expand: ["latest_invoice.confirmation_secret"],
+  });
+
+  const invoice = updated.latest_invoice as Stripe.Invoice | null;
+  return {
+    subscriptionId: updated.id,
+    clientSecret: invoice?.confirmation_secret?.client_secret ?? null,
+  };
+}
+
+/** Cancel an abandoned still-incomplete subscription. Idempotent: a subscription
+ *  that is already gone (or was paid in the meantime) is left as-is. */
+export async function cancelSeatSubscription(subscriptionId: string): Promise<void> {
+  try {
+    await getStripe().subscriptions.cancel(subscriptionId);
+  } catch {
+    /* already canceled / not cancelable — nothing to clean up */
+  }
+}
