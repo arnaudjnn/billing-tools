@@ -329,9 +329,23 @@ export type BillingCheckoutSessionFormProps = {
    *
    * The element is a public preview and is SKIPPED unless the account has been
    * granted it (see `taxIdAvailable` below) — leaving this on costs nothing if it
-   * hasn't been.
+   * hasn't been. Measured on an account without access: the checkout SDK exposes
+   * `createPaymentElement` but `createTaxIdElement` is undefined, WITH the beta
+   * flag as well as without it. So a missing tax ID field is account access to
+   * request from Stripe, never a client-side option to find.
    */
   collectTaxId?: boolean;
+  /**
+   * Offer Link — Stripe's one-click wallet, which appears INSIDE the card form as
+   * a "save my info for faster checkout" block asking for email, phone and name.
+   *
+   * OFF by default, to match `createCheckoutSession`'s card-only default. It is a
+   * separate switch because Link is not a payment method type: restricting
+   * `payment_method_types` to ["card"] does not remove it, so a checkout that
+   * asked for card-only was still showing a Link signup and collecting a phone
+   * number nobody asked for.
+   */
+  link?: boolean;
   /** Rendered as the submit button. Receives the live submitting state. */
   children: (state: { submitting: boolean }) => React.ReactNode;
   /** Called once the session is confirmed without a redirect. */
@@ -355,6 +369,7 @@ export type BillingCheckoutSessionFormProps = {
 export function BillingCheckoutSessionForm({
   collectAddress = true,
   collectTaxId = true,
+  link = false,
   children,
   onSuccess,
   onError,
@@ -397,7 +412,9 @@ export function BillingCheckoutSessionForm({
   return (
     <form onSubmit={onSubmit} className={className}>
       {collectAddress && <BillingAddressElement />}
-      <CheckoutPaymentElement />
+      <CheckoutPaymentElement
+        options={{ wallets: { link: link ? "auto" : "never" } }}
+      />
       {collectTaxId && taxIdAvailable && <CheckoutTaxIdElement options={{}} />}
       {children({ submitting })}
     </form>
