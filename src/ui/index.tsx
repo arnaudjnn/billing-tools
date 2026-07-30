@@ -9,9 +9,13 @@ import * as React from "react";
 //
 // Imported from a SEPARATE entry point — `@arnaudjnn/billing-tools/ui` — because
 // the rest of this package is server-side (WorkOS, Stripe secret key, MCP tools)
-// and must never reach a browser bundle. React and the Stripe browser SDKs are
-// declared as OPTIONAL peer dependencies, so the CLI and the MCP server keep
-// installing without them; only an app that imports `/ui` needs them present.
+// and must never reach a browser bundle. The Stripe BROWSER SDKs
+// (@stripe/stripe-js, @stripe/react-stripe-js) are regular dependencies of this
+// package, so a consumer app imports `<BillingCheckoutProvider>` from here WITHOUT
+// installing Stripe itself — the whole point of centralising checkout here. Only
+// `react` stays an (optional) peer, so it resolves to the host app's single
+// instance; a CLI/server consumer that never imports `/ui` simply doesn't load
+// these modules (they tree-shake out of any non-UI bundle).
 //
 // The provider owns exactly two things a consumer shouldn't have to rediscover:
 // the publishable-key singleton (loadStripe must be called once per page, not
