@@ -1,3 +1,10 @@
+# [0.27.0](https://github.com/arnaudjnn/billing-tools/compare/v0.26.2...v0.27.0) (2026-07-30)
+
+
+### Features
+
+* **checkout:** fixed-rate VAT option, since automatic_tax needs an address first ([2827786](https://github.com/arnaudjnn/billing-tools/commit/2827786897498b647824cc6fb45c1138840ae090))
+
 ## [0.26.2](https://github.com/arnaudjnn/billing-tools/compare/v0.26.1...v0.26.2) (2026-07-30)
 
 
