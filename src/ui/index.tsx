@@ -18,7 +18,13 @@ import {
   TaxIdElement as CheckoutTaxIdElement,
   useCheckoutElements,
 } from "@stripe/react-stripe-js/checkout";
-import { loadStripe, type Appearance, type Stripe, type StripeElementLocale } from "@stripe/stripe-js";
+import {
+  loadStripe,
+  type Appearance,
+  type Stripe,
+  type StripeCheckoutTaxIdType,
+  type StripeElementLocale,
+} from "@stripe/stripe-js";
 import * as React from "react";
 
 // The checkout UI, so every consumer app mounts the SAME payment form instead of
@@ -428,6 +434,131 @@ export {
   CheckoutTaxIdElement,
   useCheckoutElements,
 };
+
+// ── Tax ID without the preview ───────────────────────────────────────────────
+//
+// Stripe's Tax ID Element is a public preview granted per ACCOUNT, and no
+// client-side option substitutes for it: measured on an account without access,
+// the checkout SDK exposes `createPaymentElement` but `createTaxIdElement` is
+// undefined, with the beta flag as well as without it.
+//
+// `updateTaxIdInfo` on the session, however, is available to everyone. So the
+// capability is never actually blocked — only Stripe's rendered widget is. This
+// hook is the difference: the app renders its own input (with its own design
+// system, which tends to look better than an iframe anyway) and this pushes the
+// value to the session, where Stripe Tax applies reverse charge exactly as it
+// would have.
+//
+// It is HEADLESS on purpose. A styled input shipped from here would be the one
+// piece of the form that matches neither Stripe's elements nor the host app.
+//
+// `handledByStripe` is the whole reason this doesn't become dead code: when the
+// account does get the preview, BillingCheckoutSessionForm renders the real
+// element and this hook reports true, so the app's own field disappears without
+// anyone editing it.
+
+/** Which tax ID type applies in a country, for the countries where collecting
+ *  one is routine. Anything not listed reports `type: null`, meaning "don't show
+ *  a field" — the same default as the Element's `visibility: "auto"`. */
+const TAX_ID_TYPE_BY_COUNTRY: Record<string, StripeCheckoutTaxIdType> = {
+  // EU: one type for the whole single market, which is what makes intra-EU
+  // reverse charge work.
+  AT: "eu_vat", BE: "eu_vat", BG: "eu_vat", CY: "eu_vat", CZ: "eu_vat",
+  DE: "eu_vat", DK: "eu_vat", EE: "eu_vat", ES: "eu_vat", FI: "eu_vat",
+  FR: "eu_vat", GR: "eu_vat", HR: "eu_vat", HU: "eu_vat", IE: "eu_vat",
+  IT: "eu_vat", LT: "eu_vat", LU: "eu_vat", LV: "eu_vat", MT: "eu_vat",
+  NL: "eu_vat", PL: "eu_vat", PT: "eu_vat", RO: "eu_vat", SE: "eu_vat",
+  SI: "eu_vat", SK: "eu_vat",
+  // Non-EU Europe + the majors.
+  GB: "gb_vat", CH: "ch_vat", NO: "no_vat",
+  AU: "au_abn", NZ: "nz_gst", CA: "ca_bn", US: "us_ein",
+  JP: "jp_cn", SG: "sg_gst", IN: "in_gst", BR: "br_cnpj", MX: "mx_rfc",
+  ZA: "za_vat", AE: "ae_trn", SA: "sa_vat", TR: "tr_tin", KR: "kr_brn",
+};
+
+export type BillingTaxIdState = {
+  /** Stripe's own element is rendering the field — render nothing yourself. */
+  handledByStripe: boolean;
+  /** The type for the current billing country, or null when there is none to
+   *  collect (also null before a country is chosen). Hide the field when null. */
+  type: StripeCheckoutTaxIdType | null;
+  /** Two-letter country the type was derived from, for labelling. */
+  country: string | null;
+  value: string;
+  setValue: (value: string) => void;
+  /**
+   * Push the value to the session — call on blur, not per keystroke. Resolves to
+   * an error message (Stripe's own, e.g. an invalid VAT format) or null on
+   * success. An empty value clears the tax ID rather than erroring.
+   */
+  apply: (businessName?: string) => Promise<string | null>;
+  /** Last error from `apply`, cleared as soon as the value changes. */
+  error: string | null;
+  applying: boolean;
+  /** Already accepted by Stripe for this session. */
+  applied: boolean;
+};
+
+/** Collect a business tax ID without Stripe's preview element. Call inside
+ *  BillingCheckoutSessionProvider. */
+export function useBillingTaxId(): BillingTaxIdState {
+  const result = useCheckoutElements();
+  const [value, setValueRaw] = React.useState("");
+  const [error, setError] = React.useState<string | null>(null);
+  const [applying, setApplying] = React.useState(false);
+
+  const checkout = result.type === "success" ? result.checkout : null;
+  const handledByStripe = typeof checkout?.createTaxIdElement === "function";
+  // The country comes from the session, so the field follows the address element
+  // without the app having to wire the two together.
+  const country = checkout?.billingAddress?.address?.country ?? null;
+
+  const setValue = React.useCallback((next: string) => {
+    setValueRaw(next);
+    setError(null);
+  }, []);
+
+  const apply = React.useCallback(
+    async (businessName?: string) => {
+      if (!checkout) return null;
+      const type = country ? TAX_ID_TYPE_BY_COUNTRY[country.toUpperCase()] : undefined;
+      const trimmed = value.trim();
+      // Clearing is a legitimate outcome: the customer typed a number, thought
+      // better of it, and the session must forget it too.
+      if (!trimmed || !type) {
+        const cleared = await checkout.updateTaxIdInfo(null);
+        return cleared.type === "error" ? (cleared.error.message ?? "Invalid tax ID") : null;
+      }
+      setApplying(true);
+      try {
+        const r = await checkout.updateTaxIdInfo({
+          taxId: { type, value: trimmed },
+          // Stripe requires a business name alongside the id; the name already on
+          // the session (the address element's) is the sensible default.
+          businessName: businessName ?? checkout.billingAddress?.name ?? "",
+        });
+        const message = r.type === "error" ? (r.error.message ?? "Invalid tax ID") : null;
+        setError(message);
+        return message;
+      } finally {
+        setApplying(false);
+      }
+    },
+    [checkout, country, value],
+  );
+
+  return {
+    handledByStripe,
+    type: country ? (TAX_ID_TYPE_BY_COUNTRY[country.toUpperCase()] ?? null) : null,
+    country,
+    value,
+    setValue,
+    apply,
+    error,
+    applying,
+    applied: Boolean(checkout?.taxIdInfo?.taxId?.value),
+  };
+}
 
 // ── useCheckout ──────────────────────────────────────────────────────────────
 // Owns the subscription LIFECYCLE for an embedded checkout so the consumer app
