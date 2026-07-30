@@ -119,8 +119,12 @@ export async function createCheckoutSession(opts: {
 
   const session = await stripe.checkout.sessions.create({
     mode: "subscription",
-    // "custom" is this API version's name for what the docs now call elements
-    // mode: Stripe hosts no page, we mount the elements and own the layout.
+    // Elements mode: Stripe hosts no page, we mount the elements and own the
+    // layout. The value was RENAMED "custom" → "elements"; the pinned SDK still
+    // sends "custom" (and its types only allow that), and the API accepts it and
+    // echoes back `ui_mode: "elements"`. A newer API version rejects it outright —
+    // "The ui_mode value `custom` is no longer supported. Use `elements` instead."
+    // So when the stripe dependency is bumped, this line changes with it.
     ui_mode: "custom",
     line_items,
     customer: customerId,
