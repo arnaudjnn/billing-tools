@@ -1,3 +1,10 @@
+## [0.26.2](https://github.com/arnaudjnn/billing-tools/compare/v0.26.1...v0.26.2) (2026-07-30)
+
+
+### Bug Fixes
+
+* **plans:** don't reuse a matching price whose product is archived ([d5bcb22](https://github.com/arnaudjnn/billing-tools/commit/d5bcb22671589316f4f4bde8fc53a833e6d70392))
+
 ## [0.26.1](https://github.com/arnaudjnn/billing-tools/compare/v0.26.0...v0.26.1) (2026-07-30)
 
 
