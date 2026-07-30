@@ -39,6 +39,11 @@
       "types": "./dist/adapters/workos-org.d.ts",
       "import": "./dist/adapters/workos-org.js",
       "default": "./dist/adapters/workos-org.js"
+    },
+    "./cli": {
+      "types": "./dist/cli/index.d.ts",
+      "import": "./dist/cli/index.js",
+      "default": "./dist/cli/index.js"
     }
   },
   "files": [
