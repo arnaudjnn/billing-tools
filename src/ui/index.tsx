@@ -323,10 +323,13 @@ export type BillingCheckoutSessionFormProps = {
   /**
    * Render Stripe's Tax ID Element — the "Business tax ID (optional)" field.
    *
-   * ON by default, matching `taxIdCollection` on the server. Needs the provider's
-   * `taxIdBeta` (also on by default). Unlike the fixed-rate path, the ID reaches a
-   * real Stripe Tax calculation here, so a valid EU VAT number from another member
-   * state actually applies reverse charge.
+   * ON by default, matching `taxIdCollection` on the server. Unlike the
+   * fixed-rate path, the ID reaches a real Stripe Tax calculation here, so a valid
+   * EU VAT number from another member state actually applies reverse charge.
+   *
+   * The element is a public preview and is SKIPPED unless the account has been
+   * granted it (see `taxIdAvailable` below) — leaving this on costs nothing if it
+   * hasn't been.
    */
   collectTaxId?: boolean;
   /** Rendered as the submit button. Receives the live submitting state. */
@@ -360,6 +363,15 @@ export function BillingCheckoutSessionForm({
   const result = useCheckoutElements();
   const [submitting, setSubmitting] = React.useState(false);
 
+  // The Tax ID Element is a PUBLIC PREVIEW: Stripe.js only exposes it to accounts
+  // that have been granted it, and the beta flag alone doesn't grant it. Rendering
+  // it anyway throws `createTaxIdElement is not a function` mid-render and takes
+  // the whole payment form down with it, so ask the SDK rather than assume. When
+  // it's missing the checkout still works — no tax ID field, and B2B customers
+  // enter their VAT number on the invoice side instead.
+  const taxIdAvailable =
+    result.type === "success" && typeof result.checkout.createTaxIdElement === "function";
+
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (result.type !== "success" || submitting) return;
@@ -386,7 +398,7 @@ export function BillingCheckoutSessionForm({
     <form onSubmit={onSubmit} className={className}>
       {collectAddress && <BillingAddressElement />}
       <CheckoutPaymentElement />
-      {collectTaxId && <CheckoutTaxIdElement options={{}} />}
+      {collectTaxId && taxIdAvailable && <CheckoutTaxIdElement options={{}} />}
       {children({ submitting })}
     </form>
   );
