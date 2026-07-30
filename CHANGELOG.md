@@ -1,3 +1,10 @@
+# [0.34.0](https://github.com/arnaudjnn/billing-tools/compare/v0.33.0...v0.34.0) (2026-07-30)
+
+
+### Features
+
+* **ui:** collect a tax ID without Stripe's preview element ([6910a4c](https://github.com/arnaudjnn/billing-tools/commit/6910a4c2d089bb890a46b36cc2321f9dcac38ec9))
+
 # [0.33.0](https://github.com/arnaudjnn/billing-tools/compare/v0.32.1...v0.33.0) (2026-07-30)
 
 
