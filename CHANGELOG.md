@@ -1,3 +1,10 @@
+# [0.28.0](https://github.com/arnaudjnn/billing-tools/compare/v0.27.0...v0.28.0) (2026-07-30)
+
+
+### Features
+
+* **checkout:** updateSeatSubscription + cancelSeatSubscription ([3a4a4fa](https://github.com/arnaudjnn/billing-tools/commit/3a4a4fa8ad34b59d0c9fb3a80d172706ef041539))
+
 # [0.27.0](https://github.com/arnaudjnn/billing-tools/compare/v0.26.2...v0.27.0) (2026-07-30)
 
 
