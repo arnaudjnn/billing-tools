@@ -1,3 +1,10 @@
+# [0.33.0](https://github.com/arnaudjnn/billing-tools/compare/v0.32.1...v0.33.0) (2026-07-30)
+
+
+### Features
+
+* **ui:** don't offer Link by default in the session form ([60a5e52](https://github.com/arnaudjnn/billing-tools/commit/60a5e52d1f92abcd1b3d6d86511d20d04f3e5a34))
+
 ## [0.32.1](https://github.com/arnaudjnn/billing-tools/compare/v0.32.0...v0.32.1) (2026-07-30)
 
 
