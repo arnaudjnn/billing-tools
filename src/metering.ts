@@ -230,3 +230,58 @@ export function createMeter<R extends Record<string, number> = Record<string, nu
     })
   }
 }
+
+// ── The API route guard ──────────────────────────────────────────────────────
+// The other reusable half: a first-line guard for a public HTTP route that must
+// require a workspace API key and meter one execution before the handler runs.
+// It's pure Web-standard glue (parse Bearer → validateApiKey → meter → 401/402),
+// so it lives here once instead of in every consumer's routes. Returns a Response
+// to short-circuit, or null to proceed:
+//   const gate = await meterRequest(req, "api_request"); if (gate) return gate
+export type ApiMeterGuard<R extends Record<string, number>> = (
+  req: Request,
+  action: keyof R & string,
+  opts?: { units?: number },
+) => Promise<Response | null>
+
+export function createApiMeterGuard<R extends Record<string, number>>(
+  adapter: BillingAdapter,
+  meter: Meter<R>,
+  cfg?: { realm?: string },
+): ApiMeterGuard<R> {
+  const realm = cfg?.realm ?? "api"
+  return async function meterRequest(req, action, opts) {
+    const token = req.headers
+      .get("authorization")
+      ?.replace(/^Bearer\s+/i, "")
+      .trim()
+    if (!token) return unauthorized(realm)
+    const auth = await adapter.validateApiKey(token)
+    if (!auth) return unauthorized(realm)
+    const res = await meter(auth.orgId, action, {
+      caller: { kind: "api", id: auth.orgId },
+      units: opts?.units,
+    })
+    if (!res.ok) return jsonResponse(402, { error: res.message ?? "Insufficient balance." })
+    return null
+  }
+}
+
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  })
+}
+function unauthorized(realm: string): Response {
+  return new Response(
+    JSON.stringify({ error: "Unauthorized: provide a workspace API key as a Bearer token." }),
+    {
+      status: 401,
+      headers: {
+        "content-type": "application/json",
+        "www-authenticate": `Bearer realm="${realm}"`,
+      },
+    },
+  )
+}

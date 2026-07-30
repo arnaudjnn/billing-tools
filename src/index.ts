@@ -65,12 +65,14 @@ export {
 export {
   meterUsage,
   createMeter,
+  createApiMeterGuard,
   type MeterCaller,
   type MeterInput,
   type MeterResult,
   type MeterConfig,
   type MeterCallOpts,
   type Meter,
+  type ApiMeterGuard,
 } from "./metering.js";
 
 // Top-up requests (user → owner approval) + admin-gated auto-top-up. Stored in

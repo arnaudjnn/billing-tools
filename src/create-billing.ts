@@ -17,6 +17,7 @@ import {
 import type { ClaimStore } from "./agent-auth/claim-store.js";
 import { createMachinePaymentHandler, createPaymentMd, type MachinePaymentOptions } from "./machine-payment/index.js";
 import { createOAuthProxy, type OAuthProxyOptions } from "./oauth-proxy/index.js";
+import { createMeter, createApiMeterGuard } from "./metering.js";
 import type { PlansConfig } from "./plans.js";
 
 // One-call composition helper. Instead of wiring the five factories by hand in
@@ -62,6 +63,24 @@ export interface CreateBillingOptions {
    *  `billing.oauth` exposes the four route handlers. Requires
    *  REFRESH_TOKEN_SECRET. */
   oauthProxy?: OAuthProxyOptions | true;
+  /** Enable the bound call-site meter (`billing.meter`) + the API route guard
+   *  (`billing.meterRequest`). Pass your rate card; the meter uses `plans` above
+   *  for seat packs. Plan resolution defaults to the org's `plan` metadata key
+   *  (override via `resolvePlan`). Omit to leave metering off. */
+  meter?: {
+    /** action → token cost (per unit). Consumer-authored product data. */
+    rateCard?: Record<string, number>;
+    /** Resolve the org's current plan key. Default: the org's `plan` metadata
+     *  (via adapter.getOrgMetadata). Override to read a subscription, etc. */
+    resolvePlan?: (orgId: string) => Promise<string | null>;
+    /** Seat-type keys a caller maps to by identity. Default standard / api. */
+    seatDefaults?: { user?: string; api?: string };
+    /** Plan-cache TTL (ms). Default 60_000. */
+    planCacheTtlMs?: number;
+    /** Cycle window (unix s) + key. Default: 1st-of-month UTC / "YYYY-MM". */
+    cycleStart?: () => number;
+    cycleKey?: () => string;
+  };
 }
 
 export function createBilling(opts: CreateBillingOptions) {
@@ -157,6 +176,26 @@ export function createBilling(opts: CreateBillingOptions) {
       })
     : undefined;
 
+  // Bound call-site meter + API route guard (opt-in). Plan resolution defaults to
+  // the org's `plan` metadata so the common case needs no resolver.
+  const meter = opts.meter
+    ? createMeter(opts.adapter, resolved, {
+        plans: opts.plans ?? {},
+        rateCard: opts.meter.rateCard,
+        resolvePlan:
+          opts.meter.resolvePlan ??
+          (async (orgId: string) =>
+            (await opts.adapter.getOrgMetadata?.(orgId))?.plan ?? null),
+        seatDefaults: opts.meter.seatDefaults,
+        planCacheTtlMs: opts.meter.planCacheTtlMs,
+        cycleStart: opts.meter.cycleStart,
+        cycleKey: opts.meter.cycleKey,
+      })
+    : undefined;
+  const meterRequest = meter
+    ? createApiMeterGuard(opts.adapter, meter, { realm: opts.realm })
+    : undefined;
+
   return {
     adapter: opts.adapter,
     config: resolved,
@@ -170,6 +209,12 @@ export function createBilling(opts: CreateBillingOptions) {
     restDispatch,
     /** Stripe webhook POST handler (undefined if `webhook: false`). */
     webhook,
+    /** Bound call-site meter (undefined unless `meter` was configured):
+     *  `await meter(orgId, action, { caller })`. */
+    meter,
+    /** API route guard (undefined unless `meter` was configured):
+     *  `const gate = await meterRequest(req, action); if (gate) return gate`. */
+    meterRequest,
     /** auth.md handlers (undefined unless `agentAuth` was configured). */
     agentAuth,
     /** MPP handler `{ requirePayment, buildChallenges }` (undefined unless `machinePayment` was configured). */
