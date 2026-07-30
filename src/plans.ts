@@ -146,10 +146,28 @@ export async function ensurePlans(
       wanted.add(lookupKey);
 
       const existing = (
-        await stripe.prices.list({ lookup_keys: [lookupKey], active: true, limit: 1 })
+        await stripe.prices.list({
+          lookup_keys: [lookupKey],
+          active: true,
+          limit: 1,
+          // Needed to tell a reusable price from one on an archived product.
+          expand: ["data.product"],
+        })
       ).data[0];
+      // A price on an ARCHIVED product looks perfectly reusable — same amount,
+      // currency and interval, still active — but Stripe refuses new
+      // subscriptions against it. Reusing it also adopted the dead product as
+      // `productId` for every later spec in this loop. Treating it as a
+      // non-match falls through to the create branch below, which already moves
+      // the lookup key onto a fresh price (transfer_lookup_key) and archives the
+      // old one.
+      const productLive =
+        !existing ||
+        typeof existing.product === "string" ||
+        (!existing.product.deleted && existing.product.active);
       const matches =
         existing &&
+        productLive &&
         existing.unit_amount === amount &&
         existing.currency === currency &&
         existing.recurring?.interval === STRIPE_INTERVAL[interval];
