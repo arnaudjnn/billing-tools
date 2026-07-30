@@ -46,9 +46,25 @@ export async function createSeatSubscription(opts: {
   customerId?: string;
   email?: string;
   currency?: string;
-  /** Let Stripe compute VAT/sales tax. Needs a customer address, which the
-   *  AddressElement in the UI collects. */
+  /**
+   * Let Stripe compute the tax itself (Stripe Tax).
+   *
+   * CAVEAT: this requires the customer to ALREADY have a recognised address when
+   * the subscription is created — "The customer's location isn't recognized" —
+   * which a pay-then-provision flow doesn't have, because the address is
+   * collected by the form that the client secret mounts. Use it only when you
+   * collect a country BEFORE calling this; otherwise use `vat` below.
+   */
   automaticTax?: boolean;
+  /**
+   * Apply a FIXED tax rate instead, so the invoice total matches a figure the UI
+   * already showed. Deterministic and needs no address up front, which is what a
+   * signup checkout needs; the trade is that it applies the same rate to
+   * everyone, so it's right for a single-country product and wrong for
+   * cross-border B2B (no reverse charge). Move to Stripe Tax once you collect the
+   * country first.
+   */
+  vat?: { percent: number; country: string; displayName?: string };
   metadata?: Record<string, string>;
 }): Promise<SeatSubscriptionResult> {
   const stripe = getStripe();
@@ -75,6 +91,27 @@ export async function createSeatSubscription(opts: {
     opts.customerId ??
     (await stripe.customers.create({ email: opts.email, metadata: opts.metadata })).id;
 
+  // Reuse a matching rate rather than creating one per checkout: Stripe tax
+  // rates are immutable and accumulate forever otherwise.
+  let defaultTaxRates: string[] | undefined;
+  if (opts.vat) {
+    const { percent, country, displayName } = opts.vat;
+    const existing = (await stripe.taxRates.list({ active: true, limit: 100 })).data.find(
+      (r) => r.percentage === percent && r.country === country && r.inclusive === false,
+    );
+    defaultTaxRates = [
+      existing?.id ??
+        (
+          await stripe.taxRates.create({
+            display_name: displayName ?? "VAT",
+            percentage: percent,
+            country,
+            inclusive: false,
+          })
+        ).id,
+    ];
+  }
+
   const subscription = await stripe.subscriptions.create({
     customer: customerId,
     items,
@@ -82,6 +119,7 @@ export async function createSeatSubscription(opts: {
     // Keep the card on file, so renewals don't re-prompt.
     payment_settings: { save_default_payment_method: "on_subscription" },
     ...(opts.automaticTax ? { automatic_tax: { enabled: true } } : {}),
+    ...(defaultTaxRates ? { default_tax_rates: defaultTaxRates } : {}),
     metadata: opts.metadata,
     // `confirmation_secret`, not the older `latest_invoice.payment_intent`: on
     // current Stripe API versions the invoice exposes the secret directly and the
