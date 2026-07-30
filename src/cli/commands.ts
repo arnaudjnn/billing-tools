@@ -105,4 +105,62 @@ export function registerBillingCommands(program: Command, opts: CliOptions) {
     .command("revoke <id>")
     .description("Revoke an API key by id")
     .action(async (id: string) => print(await callTool(requireConfig(), "revoke_api_key", { api_key_id: id })));
+
+  // ── Usage & seats ─────────────────────────────────────────────────────────
+  program
+    .command("usage")
+    .description("Get workspace token usage for the current cycle")
+    .option("--caller-kind <kind>", "Filter by caller kind: user | api")
+    .option("--caller-id <id>", "Filter by caller id (member or API-key id)")
+    .option("--since-days <n>", "Look back N days instead of the calendar month", (v) => parseInt(v, 10))
+    .action(async (o: { callerKind?: string; callerId?: string; sinceDays?: number }) => {
+      const args: Record<string, unknown> = {};
+      if (o.callerKind) args.caller_kind = o.callerKind;
+      if (o.callerId) args.caller_id = o.callerId;
+      if (o.sinceDays) args.since_days = o.sinceDays;
+      print(await callTool(requireConfig(), "get_usage", args));
+    });
+
+  program
+    .command("seats")
+    .description("List per-member seat-type assignments")
+    .action(async () => print(await callTool(requireConfig(), "list_seats")));
+
+  program
+    .command("assign-seat <member_id> [seat_type]")
+    .description("Assign a member to a seat type (omit seat_type to clear → default seat)")
+    .action(async (memberId: string, seatType: string | undefined) =>
+      print(
+        await callTool(requireConfig(), "assign_seat_type", {
+          member_id: memberId,
+          seat_type: seatType ?? "",
+        }),
+      ),
+    );
+
+  // ── Token top-up requests ─────────────────────────────────────────────────
+  const topup = program
+    .command("topup")
+    .description("Token top-up requests (a seat over its cap → owner approval)");
+  topup
+    .command("list")
+    .description("List top-up requests (pending and handled)")
+    .action(async () => print(await callTool(requireConfig(), "list_top_up_requests")));
+  topup
+    .command("request <member_id> <amount>")
+    .description("Request extra tokens for a member's seat this cycle")
+    .option("--cycle <cycle>", 'Cycle key the grant applies to (default current "YYYY-MM")')
+    .action(async (memberId: string, amount: string, o: { cycle?: string }) => {
+      const args: Record<string, unknown> = { member_id: memberId, amount: parseInt(amount, 10) };
+      if (o.cycle) args.cycle = o.cycle;
+      print(await callTool(requireConfig(), "request_top_up", args));
+    });
+  topup
+    .command("approve <request_id>")
+    .description("Approve a pending top-up request (grants the extra tokens)")
+    .action(async (id: string) => print(await callTool(requireConfig(), "approve_top_up", { request_id: id })));
+  topup
+    .command("deny <request_id>")
+    .description("Deny a pending top-up request")
+    .action(async (id: string) => print(await callTool(requireConfig(), "deny_top_up", { request_id: id })));
 }
