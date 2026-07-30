@@ -17,9 +17,9 @@ import type { BillingInterval, PlansConfig } from "./plans.js";
 // a signup flow that collects payment BEFORE provisioning has no org yet. The
 // caller provisions on success and stores the returned customer id then.
 
-export type SeatQuantities = Record<string, number>;
+export type Quantities = Record<string, number>;
 
-export type SeatSubscriptionResult = {
+export type SubscriptionResult = {
   subscriptionId: string;
   customerId: string;
   /** Pass to BillingCheckoutProvider. Null only if Stripe returned no intent. */
@@ -37,11 +37,11 @@ export type SeatSubscriptionResult = {
  * Quantities of 0 are dropped rather than sent — Stripe rejects a zero-quantity
  * line, and "no Premium seats" must mean "no Premium line".
  */
-export async function createSeatSubscription(opts: {
+export async function createSubscription(opts: {
   plans: PlansConfig;
   plan: string;
   interval: BillingInterval;
-  seats: SeatQuantities;
+  seats: Quantities;
   /** Reuse an existing customer, else one is created from `email`. */
   customerId?: string;
   email?: string;
@@ -66,7 +66,7 @@ export async function createSeatSubscription(opts: {
    */
   vat?: { percent: number; country: string; displayName?: string };
   metadata?: Record<string, string>;
-}): Promise<SeatSubscriptionResult> {
+}): Promise<SubscriptionResult> {
   const stripe = getStripe();
 
   const wanted = Object.entries(opts.seats).filter(([, qty]) => qty > 0);
@@ -148,12 +148,12 @@ export async function createSeatSubscription(opts: {
  * `proration_behavior: "none"` because nothing has been paid yet — there is no
  * prior amount to prorate against, only a draft to overwrite.
  */
-export async function updateSeatSubscription(opts: {
+export async function updateSubscription(opts: {
   subscriptionId: string;
   plans: PlansConfig;
   plan: string;
   interval: BillingInterval;
-  seats: SeatQuantities;
+  seats: Quantities;
   currency?: string;
 }): Promise<{ subscriptionId: string; clientSecret: string | null }> {
   const stripe = getStripe();
@@ -209,7 +209,7 @@ export async function updateSeatSubscription(opts: {
 
 /** Cancel an abandoned still-incomplete subscription. Idempotent: a subscription
  *  that is already gone (or was paid in the meantime) is left as-is. */
-export async function cancelSeatSubscription(subscriptionId: string): Promise<void> {
+export async function cancelSubscription(subscriptionId: string): Promise<void> {
   try {
     await getStripe().subscriptions.cancel(subscriptionId);
   } catch {

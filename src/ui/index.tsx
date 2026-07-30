@@ -146,3 +146,101 @@ export function BillingPaymentForm({
 }
 
 export { AddressElement, PaymentElement, useElements, useStripe };
+
+// ── useCheckout ──────────────────────────────────────────────────────────────
+// Owns the subscription LIFECYCLE for an embedded checkout so the consumer app
+// writes none of it: as the basket changes it creates the pending subscription,
+// then re-prices that same one (createSubscription → updateSubscription), and
+// cancels it on unmount (cancelSubscription). Debounced, race-guarded, and
+// staleness-gated — the client secret it hands back always matches the CURRENT
+// basket, so a stale amount can never be confirmed.
+//
+// The Stripe calls happen on the server (secret key), so the app passes them as
+// `create`/`update`/`cancel` — thin actions over billing-tools' checkout helpers.
+// The app owns the UI + copy (its natural home) and just renders from the state
+// this returns: wrap the form in <BillingCheckoutProvider clientSecret={…}> once
+// `status === "ready"`.
+
+export type CheckoutSync =
+  | { ok: true; clientSecret: string; subscriptionId: string }
+  | { ok: false; error: string };
+
+export type CheckoutStatus = "idle" | "syncing" | "ready" | "error";
+
+export function useCheckout(opts: {
+  /** Identity of the current basket (seats + interval). The hook re-syncs
+   *  whenever it changes; the app computes it, so the hook needs no pricing. */
+  basket: string;
+  /** Create the pending subscription for the current basket. */
+  create: () => Promise<CheckoutSync>;
+  /** Re-price the existing pending subscription (falls back to create if absent). */
+  update?: (subscriptionId: string) => Promise<CheckoutSync>;
+  /** Cancel the pending subscription on unmount / abandon. */
+  cancel?: (subscriptionId: string) => Promise<void>;
+  /** Debounce before syncing, ms. Default 500 (so holding a stepper doesn't
+   *  fire per click). */
+  debounceMs?: number;
+  /** Skip syncing while true — e.g. an empty basket below the minimum. */
+  paused?: boolean;
+}): {
+  clientSecret: string | null;
+  subscriptionId: string | null;
+  status: CheckoutStatus;
+  error: string | null;
+} {
+  const { basket, create, update, cancel, debounceMs = 500, paused = false } = opts;
+
+  const [state, setState] = React.useState<
+    { basket: string; clientSecret: string; subscriptionId: string } | null
+  >(null);
+  const [status, setStatus] = React.useState<CheckoutStatus>("idle");
+  const [error, setError] = React.useState<string | null>(null);
+
+  const latest = React.useRef(0);
+  // The live subscription to update/cancel. Kept in a ref so a change mid-flight
+  // still targets the right object.
+  const subIdRef = React.useRef<string | null>(null);
+  if (state) subIdRef.current = state.subscriptionId;
+
+  React.useEffect(() => {
+    if (paused) return;
+    const ticket = ++latest.current;
+    setStatus("syncing");
+    setError(null);
+    const timer = setTimeout(async () => {
+      const existing = subIdRef.current;
+      const r = existing && update ? await update(existing) : await create();
+      if (ticket !== latest.current) return; // superseded by a newer basket
+      if (r.ok) {
+        subIdRef.current = r.subscriptionId;
+        setState({ basket, clientSecret: r.clientSecret, subscriptionId: r.subscriptionId });
+        setStatus("ready");
+      } else {
+        setError(r.error);
+        setStatus("error");
+      }
+    }, debounceMs);
+    return () => clearTimeout(timer);
+    // Keyed by the basket it prices; the callbacks are treated as stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [basket, paused]);
+
+  // Abandon: cancel the still-pending subscription when the flow unmounts.
+  React.useEffect(() => {
+    return () => {
+      const id = subIdRef.current;
+      if (id && cancel) void cancel(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Only surface the secret when it matches the CURRENT basket; while a change is
+  // in flight the previous secret is withheld (status stays "syncing").
+  const current = state?.basket === basket ? state : null;
+  return {
+    clientSecret: current?.clientSecret ?? null,
+    subscriptionId: current?.subscriptionId ?? null,
+    status: current ? "ready" : status,
+    error,
+  };
+}
