@@ -260,6 +260,20 @@ export type BillingCheckoutSessionProviderProps = {
    * false to drop the beta along with the element.
    */
   taxIdBeta?: boolean;
+  /**
+   * Two-letter country to start the billing address on, e.g. "IT".
+   *
+   * Set this for a single-market product. Without it Stripe geolocates by IP,
+   * which is right often enough to be dangerous: when it guesses wrong the
+   * customer is quoted their WRONG country's tax — and if it lands on a country
+   * you have no registration in, Stripe computes ZERO tax and the total silently
+   * drops to the pre-tax amount unless they notice the dropdown.
+   *
+   * It reaches the SESSION, not just the field, so tax is computed from the first
+   * render (`tax.status: "ready"`) instead of after the address is filled in. The
+   * customer can still change it.
+   */
+  defaultCountry?: string;
   children: React.ReactNode;
 };
 
@@ -271,6 +285,7 @@ export function BillingCheckoutSessionProvider({
   appearance,
   locale,
   taxIdBeta = true,
+  defaultCountry,
   children,
 }: BillingCheckoutSessionProviderProps) {
   const stripe = React.useMemo(
@@ -280,7 +295,13 @@ export function BillingCheckoutSessionProvider({
   return (
     <CheckoutElementsProvider
       stripe={stripe}
-      options={{ clientSecret, elementsOptions: { appearance } }}
+      options={{
+        clientSecret,
+        elementsOptions: { appearance },
+        ...(defaultCountry
+          ? { defaultValues: { billingAddress: { address: { country: defaultCountry } } } }
+          : {}),
+      }}
     >
       {children}
     </CheckoutElementsProvider>
