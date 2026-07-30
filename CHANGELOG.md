@@ -1,3 +1,10 @@
+# [0.30.0](https://github.com/arnaudjnn/billing-tools/compare/v0.29.0...v0.30.0) (2026-07-30)
+
+
+### Features
+
+* **checkout:** card-only by default; opt in to other payment methods ([865a4b5](https://github.com/arnaudjnn/billing-tools/commit/865a4b56084884d2b40f14459548c51863b55d94))
+
 # [0.29.0](https://github.com/arnaudjnn/billing-tools/compare/v0.28.0...v0.29.0) (2026-07-30)
 
 
