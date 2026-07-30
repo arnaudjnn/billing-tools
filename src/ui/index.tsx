@@ -4,6 +4,7 @@ import {
   AddressElement,
   Elements,
   PaymentElement,
+  TaxIdElement,
   useElements,
   useStripe,
 } from "@stripe/react-stripe-js";
@@ -34,11 +35,22 @@ import * as React from "react";
 // instance per key rather than one forever.
 const stripeCache = new Map<string, Promise<Stripe | null>>();
 
-function stripeFor(publishableKey: string): Promise<Stripe | null> {
-  const hit = stripeCache.get(publishableKey);
+// The Tax ID Element is in PUBLIC PREVIEW and only loads when Stripe.js is
+// instantiated with this beta. It is opted into per-provider rather than always,
+// because a beta can change without notice.
+const TAX_ID_BETA = "elements_tax_id_1";
+
+function stripeFor(publishableKey: string, betas?: string[]): Promise<Stripe | null> {
+  // The betas are part of the cache key: loadStripe is memoised per page, so
+  // keying on the publishable key alone would let whichever provider mounted
+  // FIRST decide whether the beta is active for every later one.
+  const key = `${publishableKey}|${(betas ?? []).join(",")}`;
+  const hit = stripeCache.get(key);
   if (hit) return hit;
-  const p = loadStripe(publishableKey);
-  stripeCache.set(publishableKey, p);
+  const p = betas?.length
+    ? loadStripe(publishableKey, { betas })
+    : loadStripe(publishableKey);
+  stripeCache.set(key, p);
   return p;
 }
 
@@ -51,6 +63,12 @@ export type BillingCheckoutProviderProps = {
   appearance?: Appearance;
   /** e.g. "it" — defaults to the browser's locale. */
   locale?: StripeElementLocale;
+  /**
+   * Load the beta that the Tax ID Element needs. Set this on the provider AND
+   * pass `collectTaxId` to BillingPaymentForm — the element cannot render unless
+   * Stripe.js was instantiated with the beta, so the two go together.
+   */
+  taxIdBeta?: boolean;
   children: React.ReactNode;
 };
 
@@ -60,9 +78,13 @@ export function BillingCheckoutProvider({
   clientSecret,
   appearance,
   locale,
+  taxIdBeta,
   children,
 }: BillingCheckoutProviderProps) {
-  const stripe = React.useMemo(() => stripeFor(publishableKey), [publishableKey]);
+  const stripe = React.useMemo(
+    () => stripeFor(publishableKey, taxIdBeta ? [TAX_ID_BETA] : undefined),
+    [publishableKey, taxIdBeta],
+  );
   return (
     <Elements stripe={stripe} options={{ clientSecret, appearance, locale }}>
       {children}
@@ -77,6 +99,20 @@ export type BillingPaymentFormProps = {
    * tax line stays 0 and the total silently disagrees with the summary above.
    */
   collectAddress?: boolean;
+  /**
+   * Render Stripe's Tax ID Element — the "Business tax ID (Optional)" field with
+   * its type selector.
+   *
+   * Requires `taxIdBeta` on the provider (it is a public-preview feature). Paired
+   * with `collectAddress`, Stripe infers the tax ID type and whether to show the
+   * field at all from the country, so an Italian customer is offered IT VAT
+   * rather than a global list.
+   *
+   * NOTE: collecting a tax ID does not by itself change what is charged. Reverse
+   * charge is applied only when the IDs reach a Stripe Tax calculation — with a
+   * fixed tax rate the ID is recorded on the invoice and nothing more.
+   */
+  collectTaxId?: boolean;
   /** Where Stripe returns the browser after an off-site step (3DS, bank redirect). */
   returnUrl: string;
   /** Rendered as the submit button. Receives the live submitting state. */
@@ -100,6 +136,7 @@ export type BillingPaymentFormProps = {
  */
 export function BillingPaymentForm({
   collectAddress = false,
+  collectTaxId = false,
   returnUrl,
   children,
   onSuccess,
@@ -140,12 +177,13 @@ export function BillingPaymentForm({
     <form onSubmit={onSubmit} className={className}>
       {collectAddress && <AddressElement options={{ mode: "billing" }} />}
       <PaymentElement />
+      {collectTaxId && <TaxIdElement options={{}} />}
       {children({ submitting })}
     </form>
   );
 }
 
-export { AddressElement, PaymentElement, useElements, useStripe };
+export { AddressElement, PaymentElement, TaxIdElement, useElements, useStripe };
 
 // ── useCheckout ──────────────────────────────────────────────────────────────
 // Owns the subscription LIFECYCLE for an embedded checkout so the consumer app
