@@ -99,7 +99,15 @@ async function findPlanProduct(
       expand: ["data.product"],
     });
     const p = found.data[0];
-    if (p) return typeof p.product === "string" ? p.product : p.product.id;
+    if (!p) continue;
+    // Skip an ARCHIVED product. Stripe keeps its prices listable and `active`,
+    // but refuses new subscriptions against them ("product … is marked as
+    // inactive"), so reusing it here would create a plan that can never be sold.
+    // Returning null instead makes ensurePlans mint a fresh product.
+    if (typeof p.product !== "string" && !p.product.deleted && !p.product.active) {
+      continue;
+    }
+    return typeof p.product === "string" ? p.product : p.product.id;
   }
   return null;
 }
@@ -211,9 +219,18 @@ export async function planPriceId(
   const r = await getStripe().prices.list({
     lookup_keys: [lookupKeyFor(plan, interval, seatType)],
     active: true,
-    limit: 1,
+    limit: 10,
+    // The product matters as much as the price: `active: true` above filters
+    // PRICES, and a price on an archived product stays active and listable while
+    // being unusable for a new subscription.
+    expand: ["data.product"],
   });
-  return r.data[0]?.id ?? null;
+  const usable = r.data.find(
+    (p) =>
+      typeof p.product === "string" ||
+      (!p.product.deleted && p.product.active),
+  );
+  return usable?.id ?? null;
 }
 
 /** Reverse-map a Stripe price id → plan key (via the price's metadata). */
