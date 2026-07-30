@@ -1,6 +1,12 @@
 "use client";
 
-import { Elements, PaymentElement, useElements, useStripe } from "@stripe/react-stripe-js";
+import {
+  AddressElement,
+  Elements,
+  PaymentElement,
+  useElements,
+  useStripe,
+} from "@stripe/react-stripe-js";
 import { loadStripe, type Appearance, type Stripe, type StripeElementLocale } from "@stripe/stripe-js";
 import * as React from "react";
 
@@ -65,6 +71,12 @@ export function BillingCheckoutProvider({
 }
 
 export type BillingPaymentFormProps = {
+  /**
+   * Collect a billing address. Required when the subscription was created with
+   * automatic_tax: Stripe needs a location to compute VAT, and without it the
+   * tax line stays 0 and the total silently disagrees with the summary above.
+   */
+  collectAddress?: boolean;
   /** Where Stripe returns the browser after an off-site step (3DS, bank redirect). */
   returnUrl: string;
   /** Rendered as the submit button. Receives the live submitting state. */
@@ -87,6 +99,7 @@ export type BillingPaymentFormProps = {
  * for methods that genuinely need it (3DS challenge, bank redirects).
  */
 export function BillingPaymentForm({
+  collectAddress = false,
   returnUrl,
   children,
   onSuccess,
@@ -125,10 +138,11 @@ export function BillingPaymentForm({
 
   return (
     <form onSubmit={onSubmit} className={className}>
+      {collectAddress && <AddressElement options={{ mode: "billing" }} />}
       <PaymentElement />
       {children({ submitting })}
     </form>
   );
 }
 
-export { PaymentElement, useElements, useStripe };
+export { AddressElement, PaymentElement, useElements, useStripe };

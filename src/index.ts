@@ -199,3 +199,7 @@ export {
 
 // Utils
 export { lookupCompany } from "./util/clearout.js";
+
+// Embedded-checkout server side (pairs with @arnaudjnn/billing-tools/ui).
+export { createSeatSubscription } from "./checkout.js";
+export type { SeatQuantities, SeatSubscriptionResult } from "./checkout.js";
