@@ -8,6 +8,7 @@ import {
 } from "./billing.js";
 import { isInternalOrg } from "./auth.js";
 import { extraAllowance } from "./topup.js";
+import { getSeatType } from "./seats.js";
 import type { PlansConfig } from "./plans.js";
 import type { BillingAdapter, ResolvedConfig } from "./types.js";
 
@@ -206,13 +207,16 @@ export function createMeter<R extends Record<string, number> = Record<string, nu
 
   return async function meter(orgId, action, opts = {}) {
     const cost = opts.cost ?? (rateCard?.[action] ?? 0) * (opts.units ?? 1)
-    const caller = opts.caller
-      ? {
-          kind: opts.caller.kind,
-          id: opts.caller.id,
-          seatType: opts.caller.kind === "api" ? apiSeat : userSeat,
-        }
-      : undefined
+    // Seat type by auth identity: an API key → the shared api seat; a member →
+    // their assigned seat type (falling back to the default user seat).
+    let caller: { kind: "user" | "api"; id?: string; seatType: string } | undefined
+    if (opts.caller) {
+      const seatType =
+        opts.caller.kind === "api"
+          ? apiSeat
+          : (opts.caller.id && (await getSeatType(adapter, orgId, opts.caller.id))) || userSeat
+      caller = { kind: opts.caller.kind, id: opts.caller.id, seatType }
+    }
     // Owner-approved extra allowance for a user seat this cycle (top-up flow).
     const extra =
       caller?.kind === "user" && caller.id

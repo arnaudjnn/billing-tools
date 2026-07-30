@@ -83,9 +83,15 @@ export {
   approveTopUp,
   denyTopUp,
   extraAllowance,
-  setAutoTopUp,
   type TopUpRequest,
 } from "./topup.js";
+
+// Seat-type assignments (per-member seat, stored in org metadata)
+export {
+  assignSeatType,
+  listSeatAssignments,
+  getSeatType,
+} from "./seats.js";
 
 // WorkOS magic-auth
 export { sendMagicAuth, verifyMagicAuth } from "./magic-auth.js";

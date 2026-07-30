@@ -1,11 +1,12 @@
-import { getBillingCustomerId, setAutoReloadSettings } from "./billing.js";
-import type { BillingAdapter, ResolvedConfig } from "./types.js";
+import type { BillingAdapter } from "./types.js";
 
-// Top-up + admin helpers, stored entirely in the org's WorkOS metadata via the
-// adapter (no new database). Two things live here:
-//   • User-seat top-up requests → owner/admin approval → a per-member EXTRA
-//     ALLOWANCE for the current cycle that the meter adds on top of the seat pack.
-//   • Admin-gated auto-top-up (auto-reload) for the shared reserve.
+// Top-up requests, stored entirely in the org's metadata via the adapter (no new
+// database): a user-seat over its cap requests extra tokens → an owner approves →
+// a per-member EXTRA ALLOWANCE for the current cycle that the meter adds on top of
+// the seat pack. Actions are ORG-SCOPED (the caller already holds an org key /
+// authenticated session); a consumer that wants a per-user admin gate on approval
+// checks adapter.isAdmin(orgId, userId) itself before calling. Auto-top-up for the
+// shared reserve is just `setAutoReloadSettings` (the set_auto_reload tool).
 
 const REQUESTS_KEY = "topUpRequests"; // org metadata → JSON TopUpRequest[]
 const GRANTS_KEY = "topUpGrants"; // org metadata → JSON { [memberId]: { [cycle]: tokens } }
@@ -52,14 +53,13 @@ export async function listTopUpRequests(adapter: BillingAdapter, orgId: string):
   return readJson<TopUpRequest[]>(adapter, orgId, REQUESTS_KEY, []);
 }
 
-/** Owner/admin approves a request → adds its amount to the member's cycle grant. */
+/** Approve a request → adds its amount to the member's cycle grant. Org-scoped;
+ *  gate on adapter.isAdmin(orgId, userId) upstream if you need a per-user check. */
 export async function approveTopUp(
   adapter: BillingAdapter,
   orgId: string,
-  actingUserId: string,
   requestId: string,
-): Promise<{ ok: boolean; reason?: "forbidden" | "not_found" }> {
-  if (!(await adapter.isAdmin?.(orgId, actingUserId))) return { ok: false, reason: "forbidden" };
+): Promise<{ ok: boolean; reason?: "not_found" }> {
   const list = await readJson<TopUpRequest[]>(adapter, orgId, REQUESTS_KEY, []);
   const req = list.find((r) => r.id === requestId);
   if (!req || req.status !== "pending") return { ok: false, reason: "not_found" };
@@ -75,10 +75,8 @@ export async function approveTopUp(
 export async function denyTopUp(
   adapter: BillingAdapter,
   orgId: string,
-  actingUserId: string,
   requestId: string,
-): Promise<{ ok: boolean; reason?: "forbidden" | "not_found" }> {
-  if (!(await adapter.isAdmin?.(orgId, actingUserId))) return { ok: false, reason: "forbidden" };
+): Promise<{ ok: boolean; reason?: "not_found" }> {
   const list = await readJson<TopUpRequest[]>(adapter, orgId, REQUESTS_KEY, []);
   const req = list.find((r) => r.id === requestId);
   if (!req || req.status !== "pending") return { ok: false, reason: "not_found" };
@@ -98,21 +96,4 @@ export async function extraAllowance(
 ): Promise<number> {
   const grants = await readJson<Grants>(adapter, orgId, GRANTS_KEY, {});
   return grants[memberId]?.[cycle] ?? 0;
-}
-
-/** Enable/disable auto-top-up (auto-reload) for the shared reserve — admin only.
- *  The card itself is added via the Stripe billing portal / a saved payment
- *  method; this just sets the reload threshold + target. */
-export async function setAutoTopUp(
-  adapter: BillingAdapter,
-  _config: ResolvedConfig,
-  orgId: string,
-  actingUserId: string,
-  opts: { threshold: number; reloadTo: number; enabled: boolean },
-): Promise<{ ok: boolean; reason?: "forbidden" | "no_billing" }> {
-  if (!(await adapter.isAdmin?.(orgId, actingUserId))) return { ok: false, reason: "forbidden" };
-  const customerId = await getBillingCustomerId(adapter, orgId);
-  if (!customerId) return { ok: false, reason: "no_billing" };
-  await setAutoReloadSettings(customerId, opts.threshold, opts.reloadTo, opts.enabled);
-  return { ok: true };
 }

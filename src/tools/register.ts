@@ -3,6 +3,7 @@ import type { BillingAdapter, BillingConfig } from "../types.js";
 import { resolveConfig } from "../types.js";
 import { registerKeyTools } from "./keys.js";
 import { registerBillingOnlyTools } from "./billing.js";
+import { registerManagementTools } from "./management.js";
 import { ensurePlans, type PlansConfig } from "../plans.js";
 
 // Keys whose values must never hit the logs (magic-auth codes, API keys, etc.).
@@ -69,6 +70,7 @@ export function registerBillingTools(server: McpServer, opts: RegisterBillingToo
   if (opts.installLogging !== false) installInputLogging(server);
   registerKeyTools(server, opts.adapter, config);
   registerBillingOnlyTools(server, opts.adapter, config, opts.toolCosts ?? {});
+  registerManagementTools(server, opts.adapter, config, { plans: opts.plans });
   if (opts.plans) registerPlanTools(server, opts.plans, opts.defaultPlan, config.currency);
 }
 
@@ -112,4 +114,12 @@ export const BILLING_TOOL_NAMES = [
   "set_auto_reload",
   "get_billing_portal",
   "list_invoices",
+  // Workspace-management tools (registerManagementTools).
+  "get_usage",
+  "list_seats",
+  "assign_seat_type",
+  "list_top_up_requests",
+  "request_top_up",
+  "approve_top_up",
+  "deny_top_up",
 ] as const;
