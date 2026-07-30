@@ -65,6 +65,14 @@ export async function createSubscription(opts: {
    * country first.
    */
   vat?: { percent: number; country: string; displayName?: string };
+  /**
+   * Which payment methods the form offers. Defaults to CARD ONLY — no Link,
+   * Klarna, wallets — because that's what most subscription checkouts want, and
+   * Stripe otherwise shows every method enabled on the account. The developer
+   * never sees the others unless they opt in: pass a list to add methods
+   * (e.g. ["card", "klarna"]) or "automatic" to defer to the account's dashboard.
+   */
+  paymentMethods?: string[] | "automatic";
   metadata?: Record<string, string>;
 }): Promise<SubscriptionResult> {
   const stripe = getStripe();
@@ -117,7 +125,17 @@ export async function createSubscription(opts: {
     items,
     payment_behavior: "default_incomplete",
     // Keep the card on file, so renewals don't re-prompt.
-    payment_settings: { save_default_payment_method: "on_subscription" },
+    payment_settings: {
+      save_default_payment_method: "on_subscription",
+      // Card-only by default; setting the types is what suppresses Link/Klarna/
+      // wallets. An explicit list overrides; "automatic" defers to the account.
+      ...(opts.paymentMethods === "automatic"
+        ? {}
+        : {
+            payment_method_types: (opts.paymentMethods ??
+              ["card"]) as Stripe.SubscriptionCreateParams.PaymentSettings.PaymentMethodType[],
+          }),
+    },
     ...(opts.automaticTax ? { automatic_tax: { enabled: true } } : {}),
     ...(defaultTaxRates ? { default_tax_rates: defaultTaxRates } : {}),
     metadata: opts.metadata,
