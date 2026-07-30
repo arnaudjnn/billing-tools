@@ -134,10 +134,16 @@ export class WorkOSOrgAdapter implements BillingAdapter {
       organizationId: await this.wid(orgId),
     });
     const keys = await paginatable.autoPagination();
+    // WorkOS returns createdAt/lastUsedAt/permissions on every key; pass them
+    // through so a management UI can show "created"/"last used"/scope columns
+    // without a second round trip.
     return keys.map((k) => ({
       id: k.id,
       name: k.name,
       obfuscatedValue: k.obfuscatedValue,
+      createdAt: k.createdAt,
+      lastUsedAt: k.lastUsedAt ?? null,
+      permissions: k.permissions ?? [],
     }));
   }
 

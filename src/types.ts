@@ -15,6 +15,13 @@ export interface ApiKeyInfo {
   id: string;
   name: string;
   obfuscatedValue: string;
+  /** ISO timestamp the key was created. Optional so third-party adapters that
+   *  don't track it stay source-compatible. */
+  createdAt?: string;
+  /** ISO timestamp of the key's last successful use, or null if never used. */
+  lastUsedAt?: string | null;
+  /** Scopes granted to the key; empty/absent means full access. */
+  permissions?: string[];
 }
 
 export interface BillingAdapter {
