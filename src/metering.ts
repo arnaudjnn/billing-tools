@@ -7,6 +7,7 @@ import {
   usageSince,
 } from "./billing.js";
 import { isInternalOrg } from "./auth.js";
+import { extraAllowance } from "./topup.js";
 import type { PlansConfig } from "./plans.js";
 import type { BillingAdapter, ResolvedConfig } from "./types.js";
 
@@ -117,4 +118,115 @@ export async function meterUsage(
   )
   tryAutoReload(customerId, config.currency).catch(() => {})
   return { ok: true }
+}
+
+// ── The bound call-site meter ────────────────────────────────────────────────
+// `meterUsage` is the low-level engine: it wants an already-resolved cost, plan,
+// cycle window, seat type, and top-up grant. Every consumer would otherwise write
+// the SAME glue to produce those (rate-card lookup, caller→seat mapping, plan
+// resolution + cache, calendar-month cycle, extra-allowance lookup). `createMeter`
+// is that glue, once. Call it a single time with your rate card + plans + a
+// plan resolver, re-export the returned `meter`, and every surface (UI/API/MCP/
+// CLI) calls `meter(orgId, action, { caller })` — no per-app wrapper.
+
+export interface MeterConfig<R extends Record<string, number> = Record<string, number>> {
+  /** Plan catalog (for seat packs + allowance mode). */
+  plans: PlansConfig
+  /** action → token cost (per unit). Consumer-authored product data. Omit to
+   *  always pass an explicit `cost` at the call site. */
+  rateCard?: R
+  /** Resolve the org's current plan key. Source varies per app (subscription
+   *  metadata, WorkOS org metadata, …) so the consumer supplies it; the result
+   *  is cached here for `planCacheTtlMs`. */
+  resolvePlan: (orgId: string) => Promise<string | null>
+  /** Seat-type keys a caller maps to by identity. Default standard / api (the
+   *  DEFAULT_SEAT_TYPES convention). */
+  seatDefaults?: { user?: string; api?: string }
+  /** Plan-cache TTL (ms). Default 60_000. The plan changes rarely; a brief stale
+   *  read only affects which allowance mode applies, never the debit. */
+  planCacheTtlMs?: number
+  /** Start of the current billing cycle, unix seconds. Default: 1st of the month
+   *  UTC. Override to align to the Stripe subscription period. */
+  cycleStart?: () => number
+  /** Cycle key top-up grants are stored under. Default "YYYY-MM" UTC. Must move
+   *  in lockstep with `cycleStart`. */
+  cycleKey?: () => string
+}
+
+function defaultCycleStart(): number {
+  const d = new Date()
+  return Math.floor(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1) / 1000)
+}
+function defaultCycleKey(): string {
+  const d = new Date()
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`
+}
+
+export interface MeterCallOpts {
+  /** Who is spending — decides which seat pack the debit draws (by auth identity,
+   *  NOT surface). Omit for an org-level debit with no seat cap. */
+  caller?: { kind: "user" | "api"; id?: string }
+  /** Executions this call represents (cost = rateCard[action] × units). Default 1. */
+  units?: number
+  /** Explicit token cost, bypassing the rate card (e.g. a dynamically-priced op). */
+  cost?: number
+}
+
+export type Meter<R extends Record<string, number>> = (
+  orgId: string,
+  action: keyof R & string,
+  opts?: MeterCallOpts,
+) => Promise<MeterResult>
+
+export function createMeter<R extends Record<string, number> = Record<string, number>>(
+  adapter: BillingAdapter,
+  config: ResolvedConfig,
+  meterCfg: MeterConfig<R>,
+): Meter<R> {
+  const {
+    plans,
+    rateCard,
+    resolvePlan,
+    seatDefaults,
+    planCacheTtlMs = 60_000,
+    cycleStart = defaultCycleStart,
+    cycleKey = defaultCycleKey,
+  } = meterCfg
+  const userSeat = seatDefaults?.user ?? "standard"
+  const apiSeat = seatDefaults?.api ?? "api"
+
+  const planCache = new Map<string, { plan: string | null; at: number }>()
+  async function currentPlan(orgId: string): Promise<string | null> {
+    const hit = planCache.get(orgId)
+    if (hit && Date.now() - hit.at < planCacheTtlMs) return hit.plan
+    const plan = await resolvePlan(orgId)
+    planCache.set(orgId, { plan, at: Date.now() })
+    return plan
+  }
+
+  return async function meter(orgId, action, opts = {}) {
+    const cost = opts.cost ?? (rateCard?.[action] ?? 0) * (opts.units ?? 1)
+    const caller = opts.caller
+      ? {
+          kind: opts.caller.kind,
+          id: opts.caller.id,
+          seatType: opts.caller.kind === "api" ? apiSeat : userSeat,
+        }
+      : undefined
+    // Owner-approved extra allowance for a user seat this cycle (top-up flow).
+    const extra =
+      caller?.kind === "user" && caller.id
+        ? await extraAllowance(adapter, orgId, caller.id, cycleKey())
+        : 0
+    return meterUsage(adapter, config, {
+      orgId,
+      action,
+      cost,
+      plans,
+      plan: await currentPlan(orgId),
+      cycleStart: cycleStart(),
+      extraAllowance: extra,
+      caller,
+    })
+  }
 }

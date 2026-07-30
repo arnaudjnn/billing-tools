@@ -64,9 +64,13 @@ export {
 // pool; usage summed from Stripe balance-transaction metadata — no new backend).
 export {
   meterUsage,
+  createMeter,
   type MeterCaller,
   type MeterInput,
   type MeterResult,
+  type MeterConfig,
+  type MeterCallOpts,
+  type Meter,
 } from "./metering.js";
 
 // Top-up requests (user → owner approval) + admin-gated auto-top-up. Stored in
