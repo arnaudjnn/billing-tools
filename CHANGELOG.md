@@ -1,3 +1,10 @@
+# [0.35.0](https://github.com/arnaudjnn/billing-tools/compare/v0.34.0...v0.35.0) (2026-07-30)
+
+
+### Features
+
+* **ui:** defaultCountry on the session provider ([b58740a](https://github.com/arnaudjnn/billing-tools/commit/b58740aa3aaeb4dd52dc33ae7e42c0481ddc20d3))
+
 # [0.34.0](https://github.com/arnaudjnn/billing-tools/compare/v0.33.0...v0.34.0) (2026-07-30)
 
 
