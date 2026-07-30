@@ -1,3 +1,10 @@
+# [0.25.0](https://github.com/arnaudjnn/billing-tools/compare/v0.24.0...v0.25.0) (2026-07-30)
+
+
+### Features
+
+* **ui:** ship the Stripe browser SDKs as deps so consumers don't install Stripe ([49ed663](https://github.com/arnaudjnn/billing-tools/commit/49ed66315fd8b80fdbe29654576c13eea073f88c))
+
 # [0.24.0](https://github.com/arnaudjnn/billing-tools/compare/v0.23.0...v0.24.0) (2026-07-30)
 
 
