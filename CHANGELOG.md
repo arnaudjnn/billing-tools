@@ -1,3 +1,10 @@
+# [0.32.0](https://github.com/arnaudjnn/billing-tools/compare/v0.31.0...v0.32.0) (2026-07-30)
+
+
+### Features
+
+* **checkout:** Stripe Tax by default via Checkout Sessions ([e4e4234](https://github.com/arnaudjnn/billing-tools/commit/e4e4234fafbf2d267a9cc3ed2b605d536384271c))
+
 # [0.31.0](https://github.com/arnaudjnn/billing-tools/compare/v0.30.0...v0.31.0) (2026-07-30)
 
 
