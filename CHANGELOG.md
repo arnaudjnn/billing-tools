@@ -1,3 +1,10 @@
+# [0.29.0](https://github.com/arnaudjnn/billing-tools/compare/v0.28.0...v0.29.0) (2026-07-30)
+
+
+### Features
+
+* **ui:** useCheckout hook + drop "seat" from the checkout API ([de38a23](https://github.com/arnaudjnn/billing-tools/commit/de38a23a3355db0db358a1cd68222076347246a1))
+
 # [0.28.0](https://github.com/arnaudjnn/billing-tools/compare/v0.27.0...v0.28.0) (2026-07-30)
 
 
