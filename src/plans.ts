@@ -117,10 +117,19 @@ async function findPlanProduct(
  *  prices 0) create no Stripe objects. Safe to call on every boot / first use. */
 export async function ensurePlans(
   plans: PlansConfig,
-  opts: { currency?: string } = {},
+  opts: { currency?: string; taxBehavior?: Stripe.Price.TaxBehavior } = {},
 ): Promise<EnsuredPrice[]> {
   const stripe = getStripe();
   const currency = (opts.currency ?? "usd").toLowerCase();
+  // EXCLUSIVE by default: the listed amount is pre-tax and tax is added on top.
+  //
+  // This has to be stated, not left to Stripe. Stripe Tax REFUSES to calculate on
+  // a price whose tax_behavior is `unspecified`, and the account-level default is
+  // `inferred_by_currency` — which for EUR infers INCLUSIVE, silently turning a
+  // "€42,08 + IVA" listing into "€42,08 including IVA" (same charge, less revenue).
+  // Exclusive matches how a "+ IVA" price is quoted, which is what these seat
+  // prices are.
+  const taxBehavior = opts.taxBehavior ?? "exclusive";
   const result: EnsuredPrice[] = [];
   const wanted = new Set<string>();
 
@@ -172,6 +181,14 @@ export async function ensurePlans(
         existing.currency === currency &&
         existing.recurring?.interval === STRIPE_INTERVAL[interval];
       if (existing && matches) {
+        // Backfill: prices minted before this package set tax_behavior are
+        // `unspecified`, which Stripe Tax won't calculate on. It is settable once
+        // (unspecified → inclusive|exclusive) and immutable after, so this
+        // upgrades old prices in place rather than replacing them and moving
+        // every subscriber onto a new price id.
+        if (existing.tax_behavior === "unspecified") {
+          await stripe.prices.update(existing.id, { tax_behavior: taxBehavior });
+        }
         productId =
           typeof existing.product === "string" ? existing.product : existing.product.id;
         result.push({ plan, interval, seatType, priceId: existing.id, productId, amount, lookupKey });
@@ -194,6 +211,7 @@ export async function ensurePlans(
         recurring: { interval: STRIPE_INTERVAL[interval] },
         lookup_key: lookupKey,
         transfer_lookup_key: true,
+        tax_behavior: taxBehavior,
         metadata: { managedBy: MANAGED_BY, plan, interval, ...(seatType ? { seatType } : {}) },
       });
       if (existing) await stripe.prices.update(existing.id, { active: false });

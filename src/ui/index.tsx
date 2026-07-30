@@ -8,6 +8,16 @@ import {
   useElements,
   useStripe,
 } from "@stripe/react-stripe-js";
+// The session-bound variants: same elements, but they read and mutate the
+// Checkout Session. Aliased where the name collides with the root export above —
+// mixing the two families inside one provider renders nothing at all.
+import {
+  BillingAddressElement,
+  CheckoutElementsProvider,
+  PaymentElement as CheckoutPaymentElement,
+  TaxIdElement as CheckoutTaxIdElement,
+  useCheckoutElements,
+} from "@stripe/react-stripe-js/checkout";
 import { loadStripe, type Appearance, type Stripe, type StripeElementLocale } from "@stripe/stripe-js";
 import * as React from "react";
 
@@ -40,15 +50,20 @@ const stripeCache = new Map<string, Promise<Stripe | null>>();
 // because a beta can change without notice.
 const TAX_ID_BETA = "elements_tax_id_1";
 
-function stripeFor(publishableKey: string, betas?: string[]): Promise<Stripe | null> {
-  // The betas are part of the cache key: loadStripe is memoised per page, so
-  // keying on the publishable key alone would let whichever provider mounted
-  // FIRST decide whether the beta is active for every later one.
-  const key = `${publishableKey}|${(betas ?? []).join(",")}`;
+function stripeFor(
+  publishableKey: string,
+  betas?: string[],
+  locale?: StripeElementLocale,
+): Promise<Stripe | null> {
+  // The betas and locale are part of the cache key: loadStripe is memoised per
+  // page, so keying on the publishable key alone would let whichever provider
+  // mounted FIRST decide both for every later one.
+  const key = `${publishableKey}|${(betas ?? []).join(",")}|${locale ?? ""}`;
   const hit = stripeCache.get(key);
   if (hit) return hit;
-  const p = betas?.length
-    ? loadStripe(publishableKey, { betas })
+  const options = { ...(betas?.length ? { betas } : {}), ...(locale ? { locale } : {}) };
+  const p = Object.keys(options).length
+    ? loadStripe(publishableKey, options)
     : loadStripe(publishableKey);
   stripeCache.set(key, p);
   return p;
@@ -184,6 +199,206 @@ export function BillingPaymentForm({
 }
 
 export { AddressElement, PaymentElement, TaxIdElement, useElements, useStripe };
+
+// ── Checkout Sessions (elements mode) — the DEFAULT ──────────────────────────
+//
+// Pairs with `createCheckoutSession` on the server. Same shape as the provider +
+// form above, with the difference that makes it the default: the session is live,
+// so entering an address recalculates the tax and the page can render STRIPE'S
+// total instead of arithmetic it did itself. Two sources of truth for what is
+// owed is how a checkout ends up displaying one number and charging another.
+//
+// The elements come from `@stripe/react-stripe-js/checkout`, not the package
+// root: they are the session-bound variants (they read and mutate the session)
+// and mixing them with the root ones inside this provider silently renders
+// nothing.
+
+/** Amounts as Stripe computed them for the current session. */
+export type CheckoutTotals = {
+  /** Pre-tax, in the smallest currency unit. */
+  subtotalCents: number;
+  /** Tax added on top. Zero until Stripe can compute it — see `taxPending`. */
+  taxCents: number;
+  /** What will actually be charged. */
+  totalCents: number;
+  /** e.g. "eur". */
+  currency: string;
+  /** Stripe's own formatted strings, already localised. */
+  formatted: { subtotal: string; tax: string; total: string };
+  /**
+   * Stripe has no location yet, so `taxCents` is not the real tax — the customer
+   * hasn't entered an address. Show "calculated at payment" rather than "€0,00".
+   */
+  taxPending: boolean;
+  /** Tax rate Stripe applied, when it computed one (e.g. 22). */
+  taxPercent?: number;
+};
+
+export type BillingCheckoutSessionProviderProps = {
+  /** Stripe publishable key (pk_…). Safe in the browser by design. */
+  publishableKey: string;
+  /** `clientSecret` from `createCheckoutSession`. Cannot be changed once set —
+   *  to price a new basket, create a new session and remount (key on it). */
+  clientSecret: string;
+  /** Stripe Elements appearance, so the form inherits the host app's theme. */
+  appearance?: Appearance;
+  /**
+   * e.g. "it" — defaults to the browser's locale. In elements mode this is a
+   * Stripe.js load-time option, not an Elements one, so it is baked into the
+   * cached Stripe instance rather than passed per-provider.
+   */
+  locale?: StripeElementLocale;
+  /**
+   * Load the beta the Tax ID Element needs (public preview). Defaults to ON,
+   * because `createCheckoutSession` enables tax ID collection by default; pass
+   * false to drop the beta along with the element.
+   */
+  taxIdBeta?: boolean;
+  children: React.ReactNode;
+};
+
+/** Wraps Stripe's <CheckoutElementsProvider> with the publishable-key singleton
+ *  and options shape every consumer would otherwise repeat. */
+export function BillingCheckoutSessionProvider({
+  publishableKey,
+  clientSecret,
+  appearance,
+  locale,
+  taxIdBeta = true,
+  children,
+}: BillingCheckoutSessionProviderProps) {
+  const stripe = React.useMemo(
+    () => stripeFor(publishableKey, taxIdBeta ? [TAX_ID_BETA] : undefined, locale),
+    [publishableKey, taxIdBeta, locale],
+  );
+  return (
+    <CheckoutElementsProvider
+      stripe={stripe}
+      options={{ clientSecret, elementsOptions: { appearance } }}
+    >
+      {children}
+    </CheckoutElementsProvider>
+  );
+}
+
+/**
+ * Live totals for the surrounding session, or null while it loads.
+ *
+ * Call from inside BillingCheckoutSessionProvider — including from the order
+ * summary, which is the point: the summary and the payment form then read the
+ * same numbers from the same place.
+ */
+export function useCheckoutTotals(): CheckoutTotals | null {
+  const result = useCheckoutElements();
+  if (result.type !== "success") return null;
+  const { total, taxAmounts, tax, currency } = result.checkout;
+  // `taxAmounts` is null (not []) before a location is known, and the status says
+  // why. Either way the tax line is not yet real.
+  const taxPending =
+    tax.status === "requires_billing_address" || taxAmounts === null;
+  // Stripe hands each amount over twice: `minorUnitsAmount` is the integer,
+  // `amount` is its already-localised display string.
+  return {
+    subtotalCents: total.subtotal.minorUnitsAmount,
+    taxCents: total.taxExclusive.minorUnitsAmount,
+    totalCents: total.total.minorUnitsAmount,
+    currency,
+    formatted: {
+      subtotal: total.subtotal.amount,
+      tax: total.taxExclusive.amount,
+      total: total.total.amount,
+    },
+    taxPending,
+    taxPercent: taxAmounts?.[0]?.percentage,
+  };
+}
+
+export type BillingCheckoutSessionFormProps = {
+  /**
+   * Collect a full billing address. ON by default: Stripe Tax needs a location,
+   * and `createCheckoutSession` sets `billing_address_collection: "required"`,
+   * which this element is what satisfies.
+   */
+  collectAddress?: boolean;
+  /**
+   * Render Stripe's Tax ID Element — the "Business tax ID (optional)" field.
+   *
+   * ON by default, matching `taxIdCollection` on the server. Needs the provider's
+   * `taxIdBeta` (also on by default). Unlike the fixed-rate path, the ID reaches a
+   * real Stripe Tax calculation here, so a valid EU VAT number from another member
+   * state actually applies reverse charge.
+   */
+  collectTaxId?: boolean;
+  /** Rendered as the submit button. Receives the live submitting state. */
+  children: (state: { submitting: boolean }) => React.ReactNode;
+  /** Called once the session is confirmed without a redirect. */
+  onSuccess?: () => void;
+  /** Called with a human-readable message when Stripe declines or validation fails. */
+  onError?: (message: string) => void;
+  className?: string;
+};
+
+/**
+ * The payment form for a Checkout Session: address, payment method, tax ID.
+ *
+ * The button is passed in as a render prop rather than styled here, so the host
+ * app's own Button keeps the design system consistent — this component owns the
+ * Stripe wiring, not the look.
+ *
+ * `redirect: "if_required"` keeps the common card case on-page and only leaves for
+ * methods that genuinely need it (3DS challenge, bank redirects); the session's
+ * `return_url` is where Stripe comes back to.
+ */
+export function BillingCheckoutSessionForm({
+  collectAddress = true,
+  collectTaxId = true,
+  children,
+  onSuccess,
+  onError,
+  className,
+}: BillingCheckoutSessionFormProps) {
+  const result = useCheckoutElements();
+  const [submitting, setSubmitting] = React.useState(false);
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (result.type !== "success" || submitting) return;
+    setSubmitting(true);
+    try {
+      // Surface field-level problems before touching the session.
+      const validated = await result.checkout.validateElements();
+      if (validated.type === "error") {
+        onError?.(validated.error.message ?? "Payment details are incomplete");
+        return;
+      }
+      const confirmed = await result.checkout.confirm({ redirect: "if_required" });
+      if (confirmed.type === "error") {
+        onError?.(confirmed.error.message ?? "Payment failed");
+        return;
+      }
+      onSuccess?.();
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <form onSubmit={onSubmit} className={className}>
+      {collectAddress && <BillingAddressElement />}
+      <CheckoutPaymentElement />
+      {collectTaxId && <CheckoutTaxIdElement options={{}} />}
+      {children({ submitting })}
+    </form>
+  );
+}
+
+export {
+  BillingAddressElement,
+  CheckoutElementsProvider,
+  CheckoutPaymentElement,
+  CheckoutTaxIdElement,
+  useCheckoutElements,
+};
 
 // ── useCheckout ──────────────────────────────────────────────────────────────
 // Owns the subscription LIFECYCLE for an embedded checkout so the consumer app

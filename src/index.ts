@@ -201,9 +201,18 @@ export {
 export { lookupCompany } from "./util/clearout.js";
 
 // Embedded-checkout server side (pairs with @arnaudjnn/billing-tools/ui).
+// createCheckoutSession is the default path — Stripe Tax calculates the tax;
+// createSubscription is the older fixed-rate one.
 export {
+  createCheckoutSession,
+  checkoutSessionOutcome,
+  expireCheckoutSession,
   createSubscription,
   updateSubscription,
   cancelSubscription,
 } from "./checkout.js";
-export type { Quantities, SubscriptionResult } from "./checkout.js";
+export type {
+  Quantities,
+  CheckoutSessionResult,
+  SubscriptionResult,
+} from "./checkout.js";
