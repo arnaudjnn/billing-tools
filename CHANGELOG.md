@@ -1,3 +1,10 @@
+# [0.24.0](https://github.com/arnaudjnn/billing-tools/compare/v0.23.0...v0.24.0) (2026-07-30)
+
+
+### Features
+
+* **ui:** checkout components on a /ui entry point ([6c2a36a](https://github.com/arnaudjnn/billing-tools/commit/6c2a36ab2be59011426a562bfacafaaa2fa24439))
+
 # [0.23.0](https://github.com/arnaudjnn/billing-tools/compare/v0.22.0...v0.23.0) (2026-07-30)
 
 
