@@ -1,3 +1,10 @@
+# [0.31.0](https://github.com/arnaudjnn/billing-tools/compare/v0.30.0...v0.31.0) (2026-07-30)
+
+
+### Features
+
+* **ui:** Tax ID Element support (opt-in, public preview) ([5679f4c](https://github.com/arnaudjnn/billing-tools/commit/5679f4ca927ebbb2a4da80b46c024332796c3d7a))
+
 # [0.30.0](https://github.com/arnaudjnn/billing-tools/compare/v0.29.0...v0.30.0) (2026-07-30)
 
 
