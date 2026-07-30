@@ -1,3 +1,10 @@
+## [0.32.1](https://github.com/arnaudjnn/billing-tools/compare/v0.32.0...v0.32.1) (2026-07-30)
+
+
+### Bug Fixes
+
+* **ui:** skip the Tax ID Element when the account lacks the preview ([bc3d82f](https://github.com/arnaudjnn/billing-tools/commit/bc3d82f3e2bf646526036a4dfee5b1352aeee8bf))
+
 # [0.32.0](https://github.com/arnaudjnn/billing-tools/compare/v0.31.0...v0.32.0) (2026-07-30)
 
 
