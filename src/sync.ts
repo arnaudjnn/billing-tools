@@ -87,6 +87,13 @@ const STRIPE_TYPES = [
   "customer.subscription.deleted",
   "invoice.paid",
   "invoice.payment_failed",
+  // Token top-ups, which the webhook route ALSO handles. Deliberate overlap:
+  // it makes the webhook an optimisation (instant credit) rather than a
+  // dependency, so a developer can run the whole product locally with no
+  // endpoint, no tunnel and no signing secret. Double-processing is safe —
+  // both paths credit under the same `credit:checkout:<session>` idempotency
+  // key, so whichever arrives second is a no-op.
+  "checkout.session.completed",
 ];
 const WORKOS_EVENTS = [
   "organization.updated",
@@ -134,6 +141,26 @@ export function createBillingSync(opts: BillingSyncOptions): BillingSync {
           ? new Date(sub.current_period_end * 1000).toISOString()
           : null,
       });
+      return;
+    }
+
+    // Same credit the webhook route performs, reached by polling instead. Only
+    // one-time top-ups (`mode: "payment"`); a subscription checkout grants its
+    // tokens through invoice.paid below.
+    if (event.type === "checkout.session.completed") {
+      const session = event.data.object as Stripe.Checkout.Session;
+      if (session.mode !== "payment") return;
+      const customerId =
+        typeof session.customer === "string" ? session.customer : session.customer?.id;
+      const tokens = parseInt(session.metadata?.tokens || "0", 10);
+      if (!customerId || tokens <= 0) return;
+      await creditTokens(
+        customerId,
+        tokens,
+        `Purchase: ${tokens} tokens via Checkout`,
+        currency,
+        `credit:checkout:${session.id}`,
+      );
       return;
     }
 

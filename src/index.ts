@@ -183,6 +183,12 @@ export {
 export { createToolListHandler, createToolDispatchHandler, type Dispatcher } from "./routes/rest.js";
 export { createMcpTransport, type McpTransportOptions } from "./routes/mcp.js";
 export { createStripeWebhookHandler, type WebhookOptions } from "./routes/webhook.js";
+// Register the endpoint from a deploy script instead of the Dashboard.
+export {
+  ensureWebhookEndpoint,
+  BILLING_WEBHOOK_EVENTS,
+  type EnsureWebhookResult,
+} from "./webhook-setup.js";
 
 // CLI factory
 export { registerBillingCommands } from "./cli/commands.js";
