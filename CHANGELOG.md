@@ -1,3 +1,10 @@
+# [0.42.0](https://github.com/arnaudjnn/billing-tools/compare/v0.41.0...v0.42.0) (2026-07-31)
+
+
+### Features
+
+* **tax:** compute tax locally with sales-tax instead of paying Stripe Tax ([7540301](https://github.com/arnaudjnn/billing-tools/commit/75403012c19dbb598d56283b644a24650a5e8364))
+
 # [0.41.0](https://github.com/arnaudjnn/billing-tools/compare/v0.40.1...v0.41.0) (2026-07-31)
 
 
