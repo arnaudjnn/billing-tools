@@ -1,3 +1,10 @@
+# [0.37.0](https://github.com/arnaudjnn/billing-tools/compare/v0.36.3...v0.37.0) (2026-07-31)
+
+
+### Features
+
+* payments on the webhook, state on the poller ([9225f4f](https://github.com/arnaudjnn/billing-tools/commit/9225f4f02e210afda87aa99ff4e15f3dad5a6f6b))
+
 ## [0.36.3](https://github.com/arnaudjnn/billing-tools/compare/v0.36.2...v0.36.3) (2026-07-31)
 
 
