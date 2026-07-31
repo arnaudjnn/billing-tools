@@ -1,3 +1,10 @@
+# [0.40.0](https://github.com/arnaudjnn/billing-tools/compare/v0.39.0...v0.40.0) (2026-07-31)
+
+
+### Features
+
+* **dev:** one command to receive webhooks locally — CLI included ([3c983a5](https://github.com/arnaudjnn/billing-tools/commit/3c983a52e72b0cbb4e782480541424025d8beee0))
+
 # [0.39.0](https://github.com/arnaudjnn/billing-tools/compare/v0.38.0...v0.39.0) (2026-07-31)
 
 
