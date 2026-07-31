@@ -113,6 +113,11 @@ export { pollStripeEvents, pollWorkOSEvents, type PollResult } from "./events.js
 export {
   createBillingSync,
   createSyncRoute,
+  // Shared handlers: wire into a webhook (payments) and/or let the sync poll
+  // them (state). One implementation, either trigger.
+  createStripeEventHandler,
+  PAYMENT_EVENT_TYPES,
+  SYNC_EVENT_TYPES,
   type BillingSync,
   type BillingSyncOptions,
   type CursorStore,

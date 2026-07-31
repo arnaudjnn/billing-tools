@@ -8,16 +8,26 @@ import { getStripe } from "./billing.js";
 // habit. This makes it a deploy step: run it against each environment's secret
 // key and the endpoint exists, with the right events, in test and in live.
 //
-// WHEN YOU NEED IT AT ALL: less often than you'd think. Subscription state,
-// invoices and token grants are reconciled by `createBillingSync`, which POLLS
-// the Events API on a cursor, and a seat checkout is confirmed synchronously by
-// reading the session back. The webhook's only job is crediting a one-time
-// top-up the instant it completes — the poller does the same within its interval.
-// So: skip it locally, add it in production for the latency.
+// YOU DO NEED THIS IN PRODUCTION. Payment events — credits and dunning — are
+// delivered by webhook, because that is Stripe's recommendation and because a
+// late credit means a customer paid and got nothing. Subscription STATE is a
+// separate concern the poller mirrors (see PAYMENT_EVENT_TYPES / SYNC_EVENT_TYPES
+// in sync.ts), so it doesn't belong on this endpoint.
+//
+// Locally, use the Stripe CLI rather than an endpoint and a tunnel:
+//   stripe listen --forward-to localhost:3000/api/stripe/webhook
 
-/** The events this package's handlers actually consume. */
+/**
+ * The events the webhook must deliver: the ones that move money.
+ *
+ * Mirrors PAYMENT_EVENT_TYPES in sync.ts. Subscription state is deliberately
+ * absent — it's a projection the poller mirrors, and a minute of staleness there
+ * costs nothing, whereas a missed credit is a customer who paid and got nothing.
+ */
 export const BILLING_WEBHOOK_EVENTS = [
   "checkout.session.completed",
+  "invoice.paid",
+  "invoice.payment_failed",
 ] as const satisfies readonly Stripe.WebhookEndpointCreateParams.EnabledEvent[];
 
 export type EnsureWebhookResult = {

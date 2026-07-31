@@ -37,6 +37,19 @@ export interface BillingSyncOptions {
   currency?: string;
   /** Override cursor persistence (advanced). Defaults to the query-backed table. */
   cursor?: CursorStore;
+  /**
+   * Also poll PAYMENT events, as a catch-up sweep behind the webhook.
+   *
+   * Off by default: payments are the webhook's job (Stripe's recommendation, and
+   * a late credit is a customer who paid and didn't get what they bought), and a
+   * poller shadowing it every minute is duplicated infrastructure rather than a
+   * safety net — Stripe already retries failed deliveries for three days.
+   *
+   * Turn it on for a LOW-FREQUENCY reconciliation run (a nightly cron) if you
+   * want recovery from an endpoint that was disabled or misconfigured. Safe at
+   * any frequency: the handlers are idempotent.
+   */
+  reconcilePayments?: boolean;
   /** Mirror of the WorkOS Organization (e.g. a workspaces table). */
   orgMirror?: Mirror;
   /** Mirror of the WorkOS User (e.g. a users table). */
@@ -81,19 +94,27 @@ function queryCursorStore(query: MirrorQuery): CursorStore {
   };
 }
 
-const STRIPE_TYPES = [
+// The split that decides what is delivered how.
+//
+// MONEY GOES ON THE WEBHOOK. Anything that credits tokens or reacts to a failed
+// charge is delivered by Stripe, because that is what Stripe recommends and
+// because a payment that lands late is a customer who paid and didn't get what
+// they bought. `ensureWebhookEndpoint` registers exactly this list.
+export const PAYMENT_EVENT_TYPES = [
+  "checkout.session.completed",
+  "invoice.paid",
+  "invoice.payment_failed",
+];
+
+// STATE MIRRORING GOES ON THE POLLER. Plan and status are a projection of
+// Stripe's state, not money moving: a cancellation reflected a minute late is a
+// stale row, not a lost payment. Polling suits it — no endpoint, no signing
+// secret, and it self-heals, because each event re-asserts current state rather
+// than applying a delta.
+export const SYNC_EVENT_TYPES = [
   "customer.subscription.created",
   "customer.subscription.updated",
   "customer.subscription.deleted",
-  "invoice.paid",
-  "invoice.payment_failed",
-  // Token top-ups, which the webhook route ALSO handles. Deliberate overlap:
-  // it makes the webhook an optimisation (instant credit) rather than a
-  // dependency, so a developer can run the whole product locally with no
-  // endpoint, no tunnel and no signing secret. Double-processing is safe —
-  // both paths credit under the same `credit:checkout:<session>` idempotency
-  // key, so whichever arrives second is a no-op.
-  "checkout.session.completed",
 ];
 const WORKOS_EVENTS = [
   "organization.updated",
@@ -113,11 +134,27 @@ export interface BillingSync {
   start(opts?: { intervalMs?: number; onError?: (e: unknown) => void }): () => void;
 }
 
-export function createBillingSync(opts: BillingSyncOptions): BillingSync {
+/**
+ * The Stripe event handlers, independent of how the event arrived.
+ *
+ * Extracted so the WEBHOOK and the POLLER run the exact same code. That is the
+ * property that matters: two delivery mechanisms are fine, two implementations
+ * are how the rarely-exercised one silently rots. Wire it into a webhook via
+ * `createStripeWebhookHandler({ onOtherEvent })`, and/or let `createBillingSync`
+ * poll it.
+ *
+ * Every handler is idempotent — credits carry an idempotency key and state
+ * writes assign current state rather than applying deltas — so an event
+ * processed twice (webhook plus a reconciliation sweep) is a no-op.
+ */
+export function createStripeEventHandler(opts: {
+  adapter: WorkOSOrgAdapter;
+  plans: PlansConfig;
+  currency?: string;
+  hooks?: BillingSyncOptions["hooks"];
+}): (event: Stripe.Event) => Promise<void> {
   const currency = opts.currency ?? "usd";
-  const cursor = opts.cursor ?? queryCursorStore(opts.query);
-
-  async function handleStripe(event: Stripe.Event): Promise<void> {
+  return async function handleStripe(event: Stripe.Event): Promise<void> {
     if (event.type.startsWith("customer.subscription.")) {
       const sub = event.data.object as Stripe.Subscription & { current_period_end?: number };
       const orgId = sub.metadata?.org_id;
@@ -231,7 +268,18 @@ export function createBillingSync(opts: BillingSyncOptions): BillingSync {
       });
       await opts.hooks?.onPaymentFailed?.(orgId);
     }
-  }
+  };
+}
+
+export function createBillingSync(opts: BillingSyncOptions): BillingSync {
+  const currency = opts.currency ?? "usd";
+  const cursor = opts.cursor ?? queryCursorStore(opts.query);
+  const handleStripe = createStripeEventHandler({
+    adapter: opts.adapter,
+    plans: opts.plans,
+    currency,
+    hooks: opts.hooks,
+  });
 
   async function handleWorkOS(event: { event: string; data: unknown }): Promise<void> {
     const data = event.data as { id?: string };
@@ -253,10 +301,21 @@ export function createBillingSync(opts: BillingSyncOptions): BillingSync {
     }
   }
 
+  // State mirroring only. Payment events are delivered by the webhook — see the
+  // PAYMENT_EVENT_TYPES / SYNC_EVENT_TYPES split above. `reconcilePayments` adds
+  // them back for an occasional catch-up sweep (a nightly cron, say): the
+  // handlers are idempotent, so replaying a payment event the webhook already
+  // processed changes nothing, and anything the webhook never delivered is
+  // recovered. It is deliberately NOT the default — a 60-second loop shadowing
+  // the webhook is duplicated infrastructure, not a safety net.
+  const stripeTypes = opts.reconcilePayments
+    ? [...SYNC_EVENT_TYPES, ...PAYMENT_EVENT_TYPES]
+    : SYNC_EVENT_TYPES;
+
   async function runOnce() {
     const s = await pollStripeEvents({
       after: await cursor.get("stripe"),
-      types: STRIPE_TYPES,
+      types: stripeTypes,
       onEvent: handleStripe,
     });
     await cursor.set("stripe", s.cursor);
