@@ -1,3 +1,10 @@
+## [0.40.1](https://github.com/arnaudjnn/billing-tools/compare/v0.40.0...v0.40.1) (2026-07-31)
+
+
+### Bug Fixes
+
+* **webhook:** forward subscription checkouts; expose session metadata ([1815d0b](https://github.com/arnaudjnn/billing-tools/commit/1815d0bbacbcb9421f3ec7dd177355173fa6cd9c))
+
 # [0.40.0](https://github.com/arnaudjnn/billing-tools/compare/v0.39.0...v0.40.0) (2026-07-31)
 
 
