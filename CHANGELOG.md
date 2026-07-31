@@ -1,3 +1,10 @@
+# [0.38.0](https://github.com/arnaudjnn/billing-tools/compare/v0.37.0...v0.38.0) (2026-07-31)
+
+
+### Features
+
+* **create-billing:** forward webhook options, notably onOtherEvent ([2274ca8](https://github.com/arnaudjnn/billing-tools/commit/2274ca843e46014fb76c51d21cc90f44d57db756))
+
 # [0.37.0](https://github.com/arnaudjnn/billing-tools/compare/v0.36.3...v0.37.0) (2026-07-31)
 
 
