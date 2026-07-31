@@ -194,6 +194,15 @@ export {
   BILLING_WEBHOOK_EVENTS,
   type EnsureWebhookResult,
 } from "./webhook-setup.js";
+// Tax computed locally (sales-tax + VIES) and applied to Stripe as an explicit
+// rate — the alternative to paying Stripe Tax for the calculation.
+export {
+  resolveTax,
+  ensureStripeTaxRate,
+  taxRatesFor,
+  updateCheckoutSessionTaxRates,
+  type TaxDecision,
+} from "./tax.js";
 // Stripe Tax configuration as code (origin address, defaults, registrations).
 export {
   ensureTaxSetup,

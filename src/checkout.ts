@@ -79,8 +79,21 @@ export async function createCheckoutSession(opts: {
   customerId?: string;
   email?: string;
   currency?: string;
-  /** Stripe Tax. On by default — the whole point of this path. */
+  /**
+   * Stripe Tax. On by default, UNLESS you pass `taxRates` — supplying your own
+   * rate means you've decided to compute tax yourself, and enabling both would
+   * tax the same line twice.
+   */
   automaticTax?: boolean;
+  /**
+   * Apply these Stripe TaxRate ids instead of Stripe Tax (see src/tax.ts).
+   *
+   * The rate has to be chosen before the customer types an address, so pass the
+   * one for your own country and re-apply with `updateCheckoutSessionTaxRates`
+   * when the billing country turns out to be different. That handoff is the
+   * work Stripe Tax would otherwise do for 0.5%.
+   */
+  taxRates?: string[];
   /** Collect a business tax ID (VAT number). On by default. */
   taxIdCollection?: boolean;
   /**
@@ -110,7 +123,11 @@ export async function createCheckoutSession(opts: {
         `No Stripe price for ${lookupKeyFor(opts.plan, opts.interval, seatType)}`,
       );
     }
-    line_items.push({ price, quantity });
+    line_items.push({
+      price,
+      quantity,
+      ...(opts.taxRates?.length ? { tax_rates: opts.taxRates } : {}),
+    });
   }
 
   const customerId =
@@ -133,7 +150,7 @@ export async function createCheckoutSession(opts: {
     // location for the customer and the tax is computed as zero. Required
     // whenever `customer` is passed rather than `customer_email`.
     customer_update: { address: "auto", name: "auto" },
-    automatic_tax: { enabled: opts.automaticTax ?? true },
+    automatic_tax: { enabled: opts.automaticTax ?? !opts.taxRates?.length },
     tax_id_collection: { enabled: opts.taxIdCollection ?? true },
     // A full address, collected by the billing-address element. The alternative
     // ("auto", country + postal code inside the payment element) is enough for
