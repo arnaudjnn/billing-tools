@@ -35,18 +35,63 @@ export async function pollStripeEvents(opts: {
   }
 
   const max = opts.maxPerPoll ?? 500;
-  const fresh: Stripe.Event[] = [];
-  for await (const event of stripe.events.list(listParams)) {
-    if (event.id === opts.after) break; // caught up
-    fresh.push(event);
-    if (fresh.length >= max) break;
+  const PAGE = 100;
+
+  // Walk FORWARD from the cursor, page by page, advancing it only across events
+  // actually processed.
+  //
+  // The obvious implementation — list newest-first and collect until you reach
+  // the cursor — loses events. Stripe returns newest first, so once a backlog
+  // exceeds the per-poll cap you collect the NEWEST `max`, never reach the
+  // cursor, and then move the cursor to the newest event: everything between the
+  // old cursor and that window is skipped, silently and permanently. It fires
+  // precisely when this path matters — the poller was down, so the backlog is
+  // large — which is the worst possible time to drop events.
+  //
+  // Paging with `ending_before` returns the page immediately NEWER than an id,
+  // so each batch is contiguous with the cursor. The cap then bounds throughput
+  // per poll instead of discarding history: whatever is left is picked up by the
+  // next one.
+  let cursor: string | null = opts.after;
+  let count = 0;
+
+  for (;;) {
+    let page: Stripe.ApiList<Stripe.Event>;
+    try {
+      page = await stripe.events.list({
+        ...listParams,
+        limit: PAGE,
+        ending_before: cursor!,
+      });
+    } catch (err) {
+      // Stripe keeps events for 30 days. A cursor older than that no longer
+      // resolves, and every future poll would raise the same error forever —
+      // so re-baseline to the newest event and carry on. History that aged out
+      // is unrecoverable either way; wedging the sync on top of it is not.
+      if ((err as { code?: string }).code === "resource_missing") {
+        const latest = await stripe.events.list({ ...listParams, limit: 1 });
+        return { cursor: latest.data[0]?.id ?? null, count };
+      }
+      throw err;
+    }
+
+    const asc = [...page.data].reverse(); // Stripe pages newest-first
+    if (asc.length === 0) break;
+
+    for (const event of asc) {
+      await opts.onEvent(event);
+      // Advance per event: a throw mid-page leaves the caller's stored cursor
+      // untouched, so the page is retried rather than half-skipped.
+      cursor = event.id;
+      count++;
+    }
+
+    if (count >= max) break;
+    // A short page means we've reached the newest event.
+    if (asc.length < PAGE) break;
   }
-  fresh.reverse(); // oldest → newest
-  for (const event of fresh) await opts.onEvent(event);
-  return {
-    cursor: fresh.length ? fresh[fresh.length - 1].id : opts.after,
-    count: fresh.length,
-  };
+
+  return { cursor, count };
 }
 
 /** Poll WorkOS events of the given types newer than `after`, oldest first.
