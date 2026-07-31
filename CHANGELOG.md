@@ -1,3 +1,10 @@
+# [0.36.0](https://github.com/arnaudjnn/billing-tools/compare/v0.35.0...v0.36.0) (2026-07-31)
+
+
+### Features
+
+* make the webhook optional, and registrable from code ([39174c0](https://github.com/arnaudjnn/billing-tools/commit/39174c098175384a7f5dbe2c2ee5fa189c8c78f8))
+
 # [0.35.0](https://github.com/arnaudjnn/billing-tools/compare/v0.34.0...v0.35.0) (2026-07-30)
 
 
