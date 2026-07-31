@@ -1,3 +1,10 @@
+# [0.41.0](https://github.com/arnaudjnn/billing-tools/compare/v0.40.1...v0.41.0) (2026-07-31)
+
+
+### Features
+
+* ensureTaxSetup — Stripe Tax configuration as code ([7ecaf99](https://github.com/arnaudjnn/billing-tools/commit/7ecaf9906e70344901b5d5d0672ec91521e50317))
+
 ## [0.40.1](https://github.com/arnaudjnn/billing-tools/compare/v0.40.0...v0.40.1) (2026-07-31)
 
 
