@@ -59,9 +59,17 @@ export function createStripeWebhookHandler(opts: WebhookOptions = {}) {
       return Response.json({ error: `Webhook signature verification failed: ${message}` }, { status: 400 });
     }
 
-    if (event.type === "checkout.session.completed") {
+    // Only a one-time top-up is credited here. A SUBSCRIPTION checkout falls
+    // through to onOtherEvent, because fulfilling one is app-specific work
+    // (provisioning) that this route can't do — and silently swallowing it, as
+    // this did, left the webhook unable to fulfil anything at all.
+    const isTopUp =
+      event.type === "checkout.session.completed" &&
+      (event.data.object as Stripe.Checkout.Session).mode === "payment";
+
+    if (isTopUp) {
       const session = event.data.object as Stripe.Checkout.Session;
-      if (session.mode === "payment") {
+      {
         const customerId = customerIdOf(session.customer as string | { id: string });
         const tokens = parseInt(session.metadata?.tokens || "0", 10);
         if (customerId && tokens > 0) {

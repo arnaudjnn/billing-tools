@@ -166,6 +166,17 @@ export async function checkoutSessionOutcome(sessionId: string): Promise<{
   paid: boolean;
   subscriptionId: string | null;
   customerId: string | null;
+  /**
+   * The metadata the session was created with.
+   *
+   * This is what makes fulfilment possible from a WEBHOOK and not just from the
+   * browser: whatever provisioning needs — a workspace name, the user it belongs
+   * to — has to travel with the session, because the tab that knew it may be
+   * gone by the time payment completes.
+   */
+  metadata: Record<string, string>;
+  /** "subscription" | "payment" | "setup". */
+  mode: string | null;
 }> {
   const session = await getStripe().checkout.sessions.retrieve(sessionId, {
     expand: ["subscription"],
@@ -180,6 +191,8 @@ export async function checkoutSessionOutcome(sessionId: string): Promise<{
       typeof session.customer === "string"
         ? session.customer
         : (session.customer?.id ?? null),
+    metadata: (session.metadata ?? {}) as Record<string, string>,
+    mode: session.mode ?? null,
   };
 }
 
