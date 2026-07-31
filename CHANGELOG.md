@@ -1,3 +1,10 @@
+## [0.36.1](https://github.com/arnaudjnn/billing-tools/compare/v0.36.0...v0.36.1) (2026-07-31)
+
+
+### Bug Fixes
+
+* **webhook-setup:** union events by default, and surface duplicate endpoints ([6575e28](https://github.com/arnaudjnn/billing-tools/commit/6575e281269b9dab273dc1253820f2b6936fee25))
+
 # [0.36.0](https://github.com/arnaudjnn/billing-tools/compare/v0.35.0...v0.36.0) (2026-07-31)
 
 
