@@ -1,3 +1,10 @@
+## [0.36.2](https://github.com/arnaudjnn/billing-tools/compare/v0.36.1...v0.36.2) (2026-07-31)
+
+
+### Bug Fixes
+
+* **webhook:** say "not configured" instead of "signature verification failed" ([41e1865](https://github.com/arnaudjnn/billing-tools/commit/41e1865defd3d1f9eaa6ed580aa2f5b550764c9b))
+
 ## [0.36.1](https://github.com/arnaudjnn/billing-tools/compare/v0.36.0...v0.36.1) (2026-07-31)
 
 
