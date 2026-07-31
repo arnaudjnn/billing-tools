@@ -1,3 +1,10 @@
+# [0.39.0](https://github.com/arnaudjnn/billing-tools/compare/v0.38.0...v0.39.0) (2026-07-31)
+
+
+### Features
+
+* checkBillingSetup — preflight for the failures that stay silent ([e7d0fcd](https://github.com/arnaudjnn/billing-tools/commit/e7d0fcd62d25768a83cd4812f45790b882d6245c))
+
 # [0.38.0](https://github.com/arnaudjnn/billing-tools/compare/v0.37.0...v0.38.0) (2026-07-31)
 
 
