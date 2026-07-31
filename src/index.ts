@@ -194,6 +194,12 @@ export {
   BILLING_WEBHOOK_EVENTS,
   type EnsureWebhookResult,
 } from "./webhook-setup.js";
+// Stripe Tax configuration as code (origin address, defaults, registrations).
+export {
+  ensureTaxSetup,
+  type TaxRegistrationSpec,
+  type TaxSetupResult,
+} from "./tax-setup.js";
 // Preflight for the misconfigurations that fail silently (zero tax, unspecified
 // tax_behavior, a missing or disabled endpoint, duplicates).
 export {
