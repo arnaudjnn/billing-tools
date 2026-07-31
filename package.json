@@ -49,6 +49,11 @@
       "types": "./dist/ui/index.d.ts",
       "import": "./dist/ui/index.js",
       "default": "./dist/ui/index.js"
+    },
+    "./dev": {
+      "types": "./dist/dev/stripe-cli.d.ts",
+      "import": "./dist/dev/stripe-cli.js",
+      "default": "./dist/dev/stripe-cli.js"
     }
   },
   "files": [
