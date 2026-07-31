@@ -1,3 +1,10 @@
+## [0.36.3](https://github.com/arnaudjnn/billing-tools/compare/v0.36.2...v0.36.3) (2026-07-31)
+
+
+### Bug Fixes
+
+* **events:** stop dropping events when the backlog exceeds the poll cap ([a48ad85](https://github.com/arnaudjnn/billing-tools/commit/a48ad853d2dba17052a6b466b25ab02a2f9075e1))
+
 ## [0.36.2](https://github.com/arnaudjnn/billing-tools/compare/v0.36.1...v0.36.2) (2026-07-31)
 
 
