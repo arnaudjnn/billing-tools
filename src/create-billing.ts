@@ -5,7 +5,7 @@ import { registerBillingTools } from "./tools/register.js";
 import { createDispatcher } from "./dispatch.js";
 import { createToolListHandler, createToolDispatchHandler } from "./routes/rest.js";
 import { createMcpTransport } from "./routes/mcp.js";
-import { createStripeWebhookHandler } from "./routes/webhook.js";
+import { createStripeWebhookHandler, type WebhookOptions } from "./routes/webhook.js";
 import {
   CLAIM_GRANT_TYPE,
   createAgentAuth,
@@ -50,8 +50,14 @@ export interface CreateBillingOptions {
     paths?: AgentAuthPaths;
     claimStore?: ClaimStore;
   };
-  /** Stripe webhook handler. Defaults on (currency from config); `false` to skip. */
-  webhook?: { currency?: string } | false;
+  /**
+   * Stripe webhook handler. Defaults on (currency from config); `false` to skip.
+   *
+   * Pass `onOtherEvent` to handle the events the route doesn't credit itself —
+   * typically `createStripeEventHandler(...)`, so invoice.paid and
+   * invoice.payment_failed run the same code the poller would.
+   */
+  webhook?: (WebhookOptions & { currency?: string }) | false;
   /** MCP transport overrides. */
   mcp?: { apiKeyPrefix?: string; maxDuration?: number };
   /** Enable MPP machine payments (pay-per-request 402). Omit to leave it off. */
@@ -162,7 +168,10 @@ export function createBilling(opts: CreateBillingOptions) {
   const webhook =
     opts.webhook === false
       ? undefined
-      : createStripeWebhookHandler({ currency: opts.webhook?.currency ?? resolved.currency });
+      : createStripeWebhookHandler({
+          ...(opts.webhook || {}),
+          currency: opts.webhook?.currency ?? resolved.currency,
+        });
 
   // MPP machine payments (pay-per-request) + its /payment.md discovery doc.
   const machinePayment = opts.machinePayment
