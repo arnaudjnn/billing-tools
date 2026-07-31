@@ -24,6 +24,13 @@ export type EnsureWebhookResult = {
   id: string;
   url: string;
   /**
+   * OTHER endpoint ids registered on the same URL. Stripe allows duplicates and
+   * delivers to every one of them, so this is usually an accident worth acting
+   * on (harmless for credits, which are idempotent, but it doubles delivery
+   * volume and makes logs lie). Pass `pruneDuplicates` to remove them.
+   */
+  duplicates: string[];
+  /**
    * The signing secret for STRIPE_WEBHOOK_SECRET.
    *
    * Present only when this call CREATED the endpoint: Stripe returns it once and
@@ -52,28 +59,49 @@ export async function ensureWebhookEndpoint(opts: {
   /** Delete and re-create, to mint a new signing secret. Destructive: the old
    *  secret stops verifying as soon as this runs. */
   recreate?: boolean;
+  /**
+   * Replace the event list with exactly `events` instead of adding to it.
+   *
+   * Off by default, and that default is the important one: an endpoint you
+   * didn't create may legitimately carry events another consumer depends on, and
+   * silently narrowing it in a deploy script turns their handler into a no-op
+   * with nothing in the logs. The union can only ever over-deliver, which costs
+   * a discarded event.
+   */
+  exact?: boolean;
+  /** Delete other endpoints registered on the same URL. Destructive. */
+  pruneDuplicates?: boolean;
 }): Promise<EnsureWebhookResult> {
   const stripe = getStripe();
   const events = opts.events ?? BILLING_WEBHOOK_EVENTS;
 
   // Stripe has no lookup-by-url, so scan. Accounts have a handful of endpoints;
   // 100 is well past any real count.
-  const existing = (await stripe.webhookEndpoints.list({ limit: 100 })).data.find(
-    (e) => e.url === opts.url,
-  );
+  const all = (await stripe.webhookEndpoints.list({ limit: 100 })).data;
+  const matches = all.filter((e) => e.url === opts.url);
+  const [existing, ...rest] = matches;
+  let duplicates = rest.map((e) => e.id);
+
+  if (duplicates.length && opts.pruneDuplicates) {
+    for (const id of duplicates) await stripe.webhookEndpoints.del(id);
+    duplicates = [];
+  }
 
   if (existing && opts.recreate) {
     await stripe.webhookEndpoints.del(existing.id);
   } else if (existing) {
+    const wanted = opts.exact
+      ? [...events]
+      : [...new Set([...existing.enabled_events, ...events])];
     const same =
-      existing.enabled_events.length === events.length &&
-      events.every((e) => existing.enabled_events.includes(e));
+      wanted.length === existing.enabled_events.length &&
+      wanted.every((e) => existing.enabled_events.includes(e));
     if (!same) {
       await stripe.webhookEndpoints.update(existing.id, {
-        enabled_events: [...events],
+        enabled_events: wanted as Stripe.WebhookEndpointUpdateParams.EnabledEvent[],
       });
     }
-    return { id: existing.id, url: existing.url, created: false, updated: !same };
+    return { id: existing.id, url: existing.url, duplicates, created: false, updated: !same };
   }
 
   const created = await stripe.webhookEndpoints.create({
@@ -85,6 +113,7 @@ export async function ensureWebhookEndpoint(opts: {
     id: created.id,
     url: created.url,
     secret: created.secret,
+    duplicates,
     created: true,
     updated: false,
   };
