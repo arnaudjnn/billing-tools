@@ -194,6 +194,15 @@ export {
   BILLING_WEBHOOK_EVENTS,
   type EnsureWebhookResult,
 } from "./webhook-setup.js";
+// Preflight for the misconfigurations that fail silently (zero tax, unspecified
+// tax_behavior, a missing or disabled endpoint, duplicates).
+export {
+  checkBillingSetup,
+  formatDoctorResult,
+  type Check,
+  type CheckLevel,
+  type DoctorResult,
+} from "./doctor.js";
 
 // CLI factory
 export { registerBillingCommands } from "./cli/commands.js";
