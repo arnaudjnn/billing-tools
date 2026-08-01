@@ -288,3 +288,4 @@ export {
   COMPANY_NAME_MAX,
 } from "./billing-profile.js";
 export type { BillingProfile } from "./billing-profile.js";
+export type { BillingAddress } from "./billing-profile.js";

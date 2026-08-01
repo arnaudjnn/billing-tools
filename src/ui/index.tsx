@@ -1062,3 +1062,6 @@ export function useCheckoutTax(opts: {
 // Field limits, from the leaf module so importing them can never pull the
 // server entry into a browser bundle.
 export { INVOICE_EMAIL_MAX, COMPANY_NAME_MAX } from "./limits.js";
+
+// Standalone billing-address form (Stripe's Address Element, no payment).
+export { BillingAddressForm, type AddressValue } from "./address.js";

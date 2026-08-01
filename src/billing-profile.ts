@@ -14,14 +14,57 @@ import { COMPANY_NAME_MAX, INVOICE_EMAIL_MAX } from "./ui/limits.js";
 // whatever default it shows — typically the workspace owner's email and the
 // workspace name — so an empty field means "use the default", not "blank".
 
+/** A postal address, in Stripe's field names. */
+export type BillingAddress = {
+  line1: string;
+  line2?: string | null;
+  city?: string | null;
+  /** State / province / region. */
+  state?: string | null;
+  postal_code?: string | null;
+  /** Two-letter ISO country. */
+  country: string;
+};
+
 export type BillingProfile = {
   /** Where Stripe mails invoices. Null when never overridden. */
   invoiceEmail: string | null;
   /** Company name printed on the invoice. Null when never overridden. */
   companyName: string | null;
+  /**
+   * Billing address printed on the invoice.
+   *
+   * Not cosmetic: it is also what decides VAT on a sale, so changing it changes
+   * what future invoices charge.
+   */
+  address: BillingAddress | null;
 };
 
-const EMPTY: BillingProfile = { invoiceEmail: null, companyName: null };
+const EMPTY: BillingProfile = {
+  invoiceEmail: null,
+  companyName: null,
+  address: null,
+};
+
+/** Stripe returns every address field, nulled out, even when none was set. */
+function readAddress(a: {
+  line1?: string | null;
+  line2?: string | null;
+  city?: string | null;
+  state?: string | null;
+  postal_code?: string | null;
+  country?: string | null;
+} | null | undefined): BillingAddress | null {
+  if (!a?.line1 || !a.country) return null;
+  return {
+    line1: a.line1,
+    line2: a.line2 ?? null,
+    city: a.city ?? null,
+    state: a.state ?? null,
+    postal_code: a.postal_code ?? null,
+    country: a.country,
+  };
+}
 
 // Re-exported from the client-safe leaf so server and form agree on one number.
 export { COMPANY_NAME_MAX, INVOICE_EMAIL_MAX } from "./ui/limits.js";
@@ -38,11 +81,12 @@ export async function getBillingProfile(
   return {
     invoiceEmail: customer.email || null,
     companyName: customer.name || null,
+    address: readAddress(customer.address),
   };
 }
 
 /**
- * Set or clear the invoice recipient and company name.
+ * Set or clear the invoice recipient, company name and billing address.
  *
  * Only the keys you pass are touched, so saving one field can't silently wipe
  * the other. Passing null (or an empty string) clears that field back to the
@@ -51,14 +95,29 @@ export async function getBillingProfile(
 export async function updateBillingProfile(
   adapter: BillingAdapter,
   orgId: string,
-  patch: { invoiceEmail?: string | null; companyName?: string | null },
+  patch: {
+    invoiceEmail?: string | null;
+    companyName?: string | null;
+    address?: BillingAddress | null;
+  },
 ): Promise<BillingProfile> {
   const customerId = await adapter.getBillingCustomerId(orgId);
   if (!customerId) throw new Error("No billing customer for this organization");
 
   // Stripe clears these with an EMPTY STRING, not null — the SDK types reject
   // null, and sending it would be a no-op if they didn't.
-  const update: { email?: string; name?: string } = {};
+  const update: {
+    email?: string;
+    name?: string;
+    address?: {
+      line1: string;
+      line2?: string;
+      city?: string;
+      state?: string;
+      postal_code?: string;
+      country: string;
+    } | null;
+  } = {};
 
   if (patch.invoiceEmail !== undefined) {
     const email = patch.invoiceEmail?.trim() || null;
@@ -82,11 +141,33 @@ export async function updateBillingProfile(
     update.name = name ?? "";
   }
 
+  if (patch.address !== undefined) {
+    if (patch.address && (!patch.address.line1?.trim() || !patch.address.country)) {
+      throw new Error("A billing address needs at least a street and a country");
+    }
+    // null (not "") is how Stripe clears an address — the opposite of the
+    // string fields above. Sub-fields must be omitted rather than nulled, so
+    // an unset line2 disappears instead of being sent as null.
+    update.address = patch.address
+      ? {
+          line1: patch.address.line1.trim(),
+          country: patch.address.country,
+          ...(patch.address.line2 ? { line2: patch.address.line2 } : {}),
+          ...(patch.address.city ? { city: patch.address.city } : {}),
+          ...(patch.address.state ? { state: patch.address.state } : {}),
+          ...(patch.address.postal_code
+            ? { postal_code: patch.address.postal_code }
+            : {}),
+        }
+      : null;
+  }
+
   if (Object.keys(update).length === 0) return getBillingProfile(adapter, orgId);
 
   const customer = await getStripe().customers.update(customerId, update);
   return {
     invoiceEmail: customer.email || null,
     companyName: customer.name || null,
+    address: readAddress(customer.address),
   };
 }
