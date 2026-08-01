@@ -86,38 +86,100 @@ export interface EnsuredPrice {
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-/** The single managed Stripe product for a plan (reuse across price versions),
- *  discovered via any existing managed price's product. */
-async function findPlanProduct(
-  stripe: Stripe,
-  plan: string,
-): Promise<string | null> {
-  for (const interval of INTERVALS) {
-    const found = await stripe.prices.list({
-      lookup_keys: [lookupKeyFor(plan, interval)],
-      limit: 1,
-      expand: ["data.product"],
-    });
-    const p = found.data[0];
-    if (!p) continue;
-    // Skip an ARCHIVED product. Stripe keeps its prices listable and `active`,
-    // but refuses new subscriptions against them ("product … is marked as
-    // inactive"), so reusing it here would create a plan that can never be sold.
-    // Returning null instead makes ensurePlans mint a fresh product.
-    if (typeof p.product !== "string" && !p.product.deleted && !p.product.active) {
-      continue;
+/** One price to ensure. Flat plans: one per interval. Seat-typed plans: one per
+ *  (seatType, interval). */
+type PriceSpec = {
+  plan: string;
+  interval: BillingInterval;
+  seatType?: string;
+  amount: number;
+  lookupKey: string;
+};
+
+/** Every price a plans config expects to exist, in a fixed order. Free
+ *  intervals/seat types produce no Stripe object, so they're dropped here. */
+function priceSpecs(plans: PlansConfig): PriceSpec[] {
+  const specs: PriceSpec[] = [];
+  for (const [plan, def] of Object.entries(plans)) {
+    const of = (interval: BillingInterval, amount: number, seatType?: string) => {
+      if (amount > 0) {
+        specs.push({ plan, interval, seatType, amount, lookupKey: lookupKeyFor(plan, interval, seatType) });
+      }
+    };
+    if (def.seatTypes) {
+      for (const [seatType, st] of Object.entries(def.seatTypes)) {
+        for (const interval of INTERVALS) of(interval, st.price[interval], seatType);
+      }
+    } else {
+      for (const interval of INTERVALS) of(interval, def.price[interval]);
     }
-    return typeof p.product === "string" ? p.product : p.product.id;
   }
-  return null;
+  return specs;
 }
+
+/**
+ * Look every wanted lookup_key up in ONE round trip per 10 keys.
+ *
+ * This used to be a `prices.list` per key plus two more per plan to find the
+ * product — sixteen sequential calls for a three-plan config, ~175ms each, on
+ * the critical path of every checkout. `lookup_keys` takes up to 10 at a time,
+ * so the same information costs one or two calls.
+ */
+async function fetchByLookupKey(
+  stripe: Stripe,
+  keys: string[],
+): Promise<Map<string, Stripe.Price>> {
+  const found = new Map<string, Stripe.Price>();
+  const chunks: string[][] = [];
+  for (let i = 0; i < keys.length; i += 10) chunks.push(keys.slice(i, i + 10));
+  const pages = await Promise.all(
+    chunks.map((lookup_keys) =>
+      stripe.prices.list({
+        lookup_keys,
+        active: true,
+        limit: 100,
+        // The product matters as much as the price: `active` filters PRICES, and
+        // a price on an archived product stays active and listable while being
+        // unusable for a new subscription.
+        expand: ["data.product"],
+      }),
+    ),
+  );
+  for (const page of pages) {
+    for (const price of page.data) if (price.lookup_key) found.set(price.lookup_key, price);
+  }
+  return found;
+}
+
+/** A price Stripe will actually accept on a new subscription: its product must
+ *  be live too, or Stripe refuses with "product … is marked as inactive". */
+function usable(price: Stripe.Price | undefined): boolean {
+  if (!price) return false;
+  const product = price.product;
+  return typeof product === "string" || (!product.deleted && product.active);
+}
+
+const productIdOf = (price: Stripe.Price): string =>
+  typeof price.product === "string" ? price.product : price.product.id;
 
 /** Idempotently create/reconcile Stripe products + prices for the paid plans.
  *  Returns the resolved price for every paid plan × interval. Free plans (both
  *  prices 0) create no Stripe objects. Safe to call on every boot / first use. */
 export async function ensurePlans(
   plans: PlansConfig,
-  opts: { currency?: string; taxBehavior?: Stripe.Price.TaxBehavior } = {},
+  opts: {
+    currency?: string;
+    taxBehavior?: Stripe.Price.TaxBehavior;
+    /**
+     * Sweep the account for managed prices/products this config no longer wants.
+     *
+     * It is a FULL account scan (every active price, every active product), so
+     * it is not something to do on a request: `true` (the default) for an
+     * explicit reconcile — a CLI/sync/boot call — and `"background"` on a hot
+     * path, which starts the sweep without awaiting it. `false` skips it.
+     */
+    archive?: boolean | "background";
+  } = {},
 ): Promise<EnsuredPrice[]> {
   const stripe = getStripe();
   const currency = (opts.currency ?? "usd").toLowerCase();
@@ -131,95 +193,82 @@ export async function ensurePlans(
   // prices are.
   const taxBehavior = opts.taxBehavior ?? "exclusive";
   const result: EnsuredPrice[] = [];
-  const wanted = new Set<string>();
 
-  for (const [plan, def] of Object.entries(plans)) {
-    let productId = await findPlanProduct(stripe, plan);
-    // One spec per Stripe price to ensure. Flat plans: one per interval.
-    // Seat-typed plans: one per (seatType, interval). One managed product per
-    // plan holds all of a plan's prices.
-    const specs: { interval: BillingInterval; amount: number; seatType?: string }[] = [];
-    if (def.seatTypes) {
-      for (const [seatType, st] of Object.entries(def.seatTypes)) {
-        for (const interval of INTERVALS) {
-          specs.push({ interval, amount: st.price[interval], seatType });
-        }
-      }
-    } else {
-      for (const interval of INTERVALS) specs.push({ interval, amount: def.price[interval] });
-    }
+  const specs = priceSpecs(plans);
+  const wanted = new Set(specs.map((s) => s.lookupKey));
+  // Everything the config wants, in one or two calls. Also the ONLY place the
+  // managed product per plan is discovered: any existing price of the plan
+  // carries it, so a separate product lookup per plan is redundant.
+  const existingByKey = await fetchByLookupKey(stripe, [...wanted]);
 
-    for (const { interval, amount, seatType } of specs) {
-      if (!amount || amount <= 0) continue; // free interval/seat — no Stripe price
-      const lookupKey = lookupKeyFor(plan, interval, seatType);
-      wanted.add(lookupKey);
-
-      const existing = (
-        await stripe.prices.list({
-          lookup_keys: [lookupKey],
-          active: true,
-          limit: 1,
-          // Needed to tell a reusable price from one on an archived product.
-          expand: ["data.product"],
-        })
-      ).data[0];
-      // A price on an ARCHIVED product looks perfectly reusable — same amount,
-      // currency and interval, still active — but Stripe refuses new
-      // subscriptions against it. Reusing it also adopted the dead product as
-      // `productId` for every later spec in this loop. Treating it as a
-      // non-match falls through to the create branch below, which already moves
-      // the lookup key onto a fresh price (transfer_lookup_key) and archives the
-      // old one.
-      const productLive =
-        !existing ||
-        typeof existing.product === "string" ||
-        (!existing.product.deleted && existing.product.active);
-      const matches =
-        existing &&
-        productLive &&
-        existing.unit_amount === amount &&
-        existing.currency === currency &&
-        existing.recurring?.interval === STRIPE_INTERVAL[interval];
-      if (existing && matches) {
-        // Backfill: prices minted before this package set tax_behavior are
-        // `unspecified`, which Stripe Tax won't calculate on. It is settable once
-        // (unspecified → inclusive|exclusive) and immutable after, so this
-        // upgrades old prices in place rather than replacing them and moving
-        // every subscriber onto a new price id.
-        if (existing.tax_behavior === "unspecified") {
-          await stripe.prices.update(existing.id, { tax_behavior: taxBehavior });
-        }
-        productId =
-          typeof existing.product === "string" ? existing.product : existing.product.id;
-        result.push({ plan, interval, seatType, priceId: existing.id, productId, amount, lookupKey });
-        continue;
-      }
-
-      if (!productId) {
-        const product = await stripe.products.create({
-          name: cap(plan),
-          metadata: { managedBy: MANAGED_BY, plan },
-        });
-        productId = product.id;
-      }
-      // Create the new price and move the lookup_key onto it (frees it from the
-      // old price), then archive the old price. Subscribers on it are untouched.
-      const created = await stripe.prices.create({
-        product: productId,
-        currency,
-        unit_amount: amount,
-        recurring: { interval: STRIPE_INTERVAL[interval] },
-        lookup_key: lookupKey,
-        transfer_lookup_key: true,
-        tax_behavior: taxBehavior,
-        metadata: { managedBy: MANAGED_BY, plan, interval, ...(seatType ? { seatType } : {}) },
-      });
-      if (existing) await stripe.prices.update(existing.id, { active: false });
-      result.push({ plan, interval, seatType, priceId: created.id, productId, amount, lookupKey });
+  // Reuse one product per plan across price versions. Seeded from whatever the
+  // batch found (a price on an archived product doesn't count — Stripe refuses
+  // new subscriptions against it, so the plan gets a fresh product).
+  const productByPlan = new Map<string, string>();
+  for (const spec of specs) {
+    const price = existingByKey.get(spec.lookupKey);
+    if (price && usable(price) && !productByPlan.has(spec.plan)) {
+      productByPlan.set(spec.plan, productIdOf(price));
     }
   }
 
-  await archiveOrphans(stripe, wanted);
+  for (const { plan, interval, seatType, amount, lookupKey } of specs) {
+    const existing = existingByKey.get(lookupKey);
+    // A price on an ARCHIVED product looks perfectly reusable — same amount,
+    // currency and interval, still active — but Stripe refuses new subscriptions
+    // against it. Treating it as a non-match falls through to the create branch
+    // below, which moves the lookup key onto a fresh price
+    // (transfer_lookup_key) and archives the old one.
+    const matches =
+      existing &&
+      usable(existing) &&
+      existing.unit_amount === amount &&
+      existing.currency === currency &&
+      existing.recurring?.interval === STRIPE_INTERVAL[interval];
+
+    if (existing && matches) {
+      // Backfill: prices minted before this package set tax_behavior are
+      // `unspecified`, which Stripe Tax won't calculate on. It is settable once
+      // (unspecified → inclusive|exclusive) and immutable after, so this
+      // upgrades old prices in place rather than replacing them and moving every
+      // subscriber onto a new price id.
+      if (existing.tax_behavior === "unspecified") {
+        await stripe.prices.update(existing.id, { tax_behavior: taxBehavior });
+      }
+      const productId = productIdOf(existing);
+      productByPlan.set(plan, productId);
+      result.push({ plan, interval, seatType, priceId: existing.id, productId, amount, lookupKey });
+      continue;
+    }
+
+    let productId = productByPlan.get(plan);
+    if (!productId) {
+      const product = await stripe.products.create({
+        name: cap(plan),
+        metadata: { managedBy: MANAGED_BY, plan },
+      });
+      productId = product.id;
+      productByPlan.set(plan, productId);
+    }
+    // Create the new price and move the lookup_key onto it (frees it from the
+    // old price), then archive the old price. Subscribers on it are untouched.
+    const created = await stripe.prices.create({
+      product: productId,
+      currency,
+      unit_amount: amount,
+      recurring: { interval: STRIPE_INTERVAL[interval] },
+      lookup_key: lookupKey,
+      transfer_lookup_key: true,
+      tax_behavior: taxBehavior,
+      metadata: { managedBy: MANAGED_BY, plan, interval, ...(seatType ? { seatType } : {}) },
+    });
+    if (existing) await stripe.prices.update(existing.id, { active: false });
+    result.push({ plan, interval, seatType, priceId: created.id, productId, amount, lookupKey });
+  }
+
+  const archive = opts.archive ?? true;
+  if (archive === "background") void archiveOrphans(stripe, wanted).catch(() => {});
+  else if (archive) await archiveOrphans(stripe, wanted);
   return result;
 }
 
@@ -243,6 +292,74 @@ async function archiveOrphans(stripe: Stripe, wanted: Set<string>): Promise<void
       await stripe.products.update(product.id, { active: false }).catch(() => {});
     }
   }
+}
+
+// ── The hot path: resolved prices, memoised ─────────────────────────────────
+//
+// `ensurePlans` is a RECONCILE. Checkout only needs the price ids, and those
+// change when the app's plan config changes — not once per customer. Running the
+// reconcile per request cost ~16 Stripe round trips on the critical path of
+// every checkout (~2.8s measured), which the customer spent watching a spinner.
+//
+// So the reconcile runs once per process (per config), and every later checkout
+// reads the resolved ids out of memory. The memo is keyed by the CONFIG, so
+// editing a price in code invalidates it on deploy, and expires on a timer so a
+// change made in the Stripe dashboard is picked up without a restart.
+
+/** Resolved prices for one plans config: lookup_key → price id. */
+export type PlanPrices = ReadonlyMap<string, string>;
+
+const MEMO_TTL_MS = 10 * 60 * 1000;
+
+let memo: { key: string; at: number; prices: PlanPrices } | null = null;
+// Concurrent cold requests share one reconcile rather than each starting their own.
+let inflight: { key: string; promise: Promise<PlanPrices> } | null = null;
+
+const memoKey = (plans: PlansConfig, opts: { currency?: string; taxBehavior?: string }) =>
+  JSON.stringify([plans, opts.currency ?? "usd", opts.taxBehavior ?? "exclusive"]);
+
+/**
+ * The price ids for `plans`, provisioning them on first use.
+ *
+ * Same guarantee as `ensurePlans` — the Stripe objects exist and match the
+ * config — without paying for the check every time. Use this wherever a price id
+ * is needed to serve a request; call `ensurePlans` directly when the point IS
+ * the reconcile (a deploy hook, `billing sync`, a test).
+ *
+ * Look ids up with `lookupKeyFor(plan, interval, seatType)`.
+ */
+export async function resolvePlanPrices(
+  plans: PlansConfig,
+  opts: { currency?: string; taxBehavior?: Stripe.Price.TaxBehavior } = {},
+): Promise<PlanPrices> {
+  const key = memoKey(plans, opts);
+  if (memo && memo.key === key && Date.now() - memo.at < MEMO_TTL_MS) return memo.prices;
+  if (inflight && inflight.key === key) return inflight.promise;
+
+  const promise = (async () => {
+    // Orphan archiving is account hygiene, not something this request needs:
+    // start it, don't wait for it.
+    const ensured = await ensurePlans(plans, { ...opts, archive: "background" });
+    const prices: PlanPrices = new Map(ensured.map((e) => [e.lookupKey, e.priceId]));
+    memo = { key, at: Date.now(), prices };
+    return prices;
+  })().finally(() => {
+    if (inflight?.key === key) inflight = null;
+  });
+
+  inflight = { key, promise };
+  return promise;
+}
+
+/**
+ * Drop the memo, so the next `resolvePlanPrices` reconciles against Stripe again.
+ *
+ * Worth calling when a price id turns out to be stale — Stripe rejecting a
+ * checkout because a price was archived in the dashboard is exactly the case the
+ * TTL alone would leave broken for ten minutes.
+ */
+export function invalidatePlanPrices(): void {
+  memo = null;
 }
 
 /** Resolve the current Stripe price id for a plan + interval (via lookup_key).

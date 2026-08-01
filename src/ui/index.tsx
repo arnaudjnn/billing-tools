@@ -75,6 +75,27 @@ function stripeFor(
   return p;
 }
 
+/**
+ * Start loading Stripe.js NOW, before there is a client secret to mount.
+ *
+ * Nothing about the SDK depends on the session, but the provider is what
+ * normally triggers the download — so the ~400ms of script + iframes is spent
+ * AFTER the server round trip that created the session, one after the other,
+ * with the customer watching. Called on mount (an effect, or the module scope of
+ * a client component) it overlaps with that round trip instead.
+ *
+ * Idempotent and cached, so calling it and then rendering the provider loads
+ * Stripe once — pass the same `locale`/`taxIdBeta` the provider will use, or the
+ * warm instance won't be the one it asks for.
+ */
+export function preloadStripe(
+  publishableKey: string,
+  opts: { locale?: StripeElementLocale; taxIdBeta?: boolean } = {},
+): void {
+  const { locale, taxIdBeta = true } = opts;
+  void stripeFor(publishableKey, taxIdBeta ? [TAX_ID_BETA] : undefined, locale);
+}
+
 export type BillingCheckoutProviderProps = {
   /** Stripe publishable key (pk_…). Safe in the browser by design. */
   publishableKey: string;
@@ -581,6 +602,174 @@ export function useBillingTaxId(): BillingTaxIdState {
   };
 }
 
+// ── useCheckoutSession ───────────────────────────────────────────────────────
+// The lifecycle around BillingCheckoutSessionProvider: as the basket changes,
+// open the Checkout Session that prices it, hand back the one to mount, and say
+// whether it still matches. A session's line items are fixed, so a changed
+// basket means a NEW session — and confirming the old one would charge a total
+// the page no longer shows, which is what `stale` exists to prevent.
+//
+// Three things make the form appear sooner, and they're the reason this is in
+// the library rather than in each app:
+//
+//  - `initial`: a session the SERVER created during the render. There is no
+//    round trip at all for the default basket — the form is there on first paint.
+//  - the first sync is IMMEDIATE. The debounce is for a customer holding a seat
+//    stepper; applying it to the initial load just adds half a second of spinner
+//    to a basket nobody has touched yet.
+//  - Stripe.js is preloaded as soon as the publishable key is known, so the SDK
+//    downloads WHILE the session is being created rather than after.
+
+export type CheckoutSessionIntent = {
+  clientSecret: string;
+  publishableKey: string;
+  sessionId: string;
+};
+
+export type CheckoutSessionSync =
+  | ({ ok: true } & CheckoutSessionIntent)
+  | { ok: false; error: string };
+
+/** A session plus the basket it was created for. */
+type InitialSession = ({ basket: string } & CheckoutSessionIntent) | null;
+
+function isThenable(value: unknown): value is PromiseLike<InitialSession> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as PromiseLike<unknown>).then === "function"
+  );
+}
+
+export function useCheckoutSession(opts: {
+  /** Identity of the current basket (seats + interval). A new value re-syncs;
+   *  the app computes it, so the hook needs no pricing. */
+  basket: string;
+  /** Open a Checkout Session for the current basket. */
+  create: () => Promise<CheckoutSessionSync>;
+  /**
+   * A session the server already created, with the basket it was created for —
+   * so the first basket costs no client round trip at all.
+   *
+   * Pass the PROMISE (unawaited, straight from a server component) to get both:
+   * the page shell renders immediately and the session is already in flight,
+   * rather than starting after hydration. It is awaited in an effect, never
+   * `use`d, so it suspends nothing.
+   */
+  initial?: InitialSession | PromiseLike<InitialSession>;
+  /** Publishable key to warm Stripe.js with before the first session arrives.
+   *  Optional — without it the preload starts as soon as a session does. */
+  publishableKey?: string;
+  /** Debounce before re-syncing a CHANGED basket, ms. Default 500. The first
+   *  sync never waits. */
+  debounceMs?: number;
+  /** Skip syncing while true — e.g. an empty basket below the minimum. */
+  paused?: boolean;
+}): {
+  /** The session to mount the provider against — key the provider on its
+   *  `clientSecret`. Stays mounted while a newer basket syncs, so the form
+   *  doesn't disappear and remount on every stepper click. */
+  session: CheckoutSessionIntent | null;
+  /** The mounted session no longer prices the current basket: it is about to be
+   *  replaced, so disable submit until it is. */
+  stale: boolean;
+  status: CheckoutStatus;
+  error: string | null;
+} {
+  const { basket, create, initial, debounceMs = 500, paused = false } = opts;
+
+  // A promise streamed from a server component is a THENABLE, not necessarily a
+  // Promise: it is not `instanceof Promise` in every runtime, and chaining
+  // `.then().catch()` on it can blow up because `then` returns undefined. Detect
+  // it structurally, and adopt it with `Promise.resolve` before chaining.
+  const pendingServerSession = isThenable(initial);
+  const ready = pendingServerSession ? null : ((initial as InitialSession) ?? null);
+
+  const [state, setState] = React.useState(ready);
+  const [status, setStatus] = React.useState<CheckoutStatus>(
+    ready || pendingServerSession ? "syncing" : "idle",
+  );
+  const [error, setError] = React.useState<string | null>(null);
+  // Nothing is fetched while the server's session is still streaming in — it is
+  // about to answer for this very basket.
+  const [awaitingServer, setAwaitingServer] = React.useState(pendingServerSession);
+
+  // The SDK is the same for every session, so warm it from whichever key is
+  // known first rather than waiting for the one this render is fetching.
+  const warmKey = opts.publishableKey ?? state?.publishableKey;
+  React.useEffect(() => {
+    if (warmKey) preloadStripe(warmKey);
+  }, [warmKey]);
+
+  const latest = React.useRef(0);
+  // Baskets that already have a session. The server-provided one counts: it
+  // needs no round trip either.
+  const synced = React.useRef(new Set<string>(ready ? [ready.basket] : []));
+
+  React.useEffect(() => {
+    if (!isThenable(initial)) return;
+    let live = true;
+    Promise.resolve(initial)
+      .then((session) => {
+        if (!live || !session) return;
+        synced.current.add(session.basket);
+        setState(session);
+      })
+      // A failed server-side session is not an error to show: the client sync
+      // this releases will create one and report properly if that fails too.
+      .catch(() => {})
+      .finally(() => live && setAwaitingServer(false));
+    return () => {
+      live = false;
+    };
+    // The promise identity changes on every render in some setups; the first
+    // one is the only one that matters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  React.useEffect(() => {
+    if (paused || awaitingServer || synced.current.has(basket)) return;
+    const ticket = ++latest.current;
+    setStatus("syncing");
+    setError(null);
+    const run = async () => {
+      const r = await create();
+      if (ticket !== latest.current) return; // superseded by a newer basket
+      if (r.ok) {
+        synced.current.add(basket);
+        setState({ basket, ...r });
+        setStatus("ready");
+      } else {
+        setError(r.error);
+        setStatus("error");
+      }
+    };
+    // Only a CHANGED basket waits: the first one is a page load, not a customer
+    // drumming on the stepper.
+    if (synced.current.size === 0) {
+      void run();
+      return;
+    }
+    const timer = setTimeout(run, debounceMs);
+    return () => clearTimeout(timer);
+    // Keyed by the basket it prices; `create` is treated as stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [basket, paused, awaitingServer]);
+
+  return {
+    session: state
+      ? {
+          clientSecret: state.clientSecret,
+          publishableKey: state.publishableKey,
+          sessionId: state.sessionId,
+        }
+      : null,
+    stale: state !== null && state.basket !== basket,
+    status: state?.basket === basket ? "ready" : status,
+    error,
+  };
+}
+
 // ── useCheckout ──────────────────────────────────────────────────────────────
 // Owns the subscription LIFECYCLE for an embedded checkout so the consumer app
 // writes none of it: as the basket changes it creates the pending subscription,
@@ -611,8 +800,9 @@ export function useCheckout(opts: {
   update?: (subscriptionId: string) => Promise<CheckoutSync>;
   /** Cancel the pending subscription on unmount / abandon. */
   cancel?: (subscriptionId: string) => Promise<void>;
-  /** Debounce before syncing, ms. Default 500 (so holding a stepper doesn't
-   *  fire per click). */
+  /** Debounce before syncing a CHANGED basket, ms. Default 500 (so holding a
+   *  stepper doesn't fire per click). The first sync never waits — nobody has
+   *  touched anything yet, so the delay would be pure spinner. */
   debounceMs?: number;
   /** Skip syncing while true — e.g. an empty basket below the minimum. */
   paused?: boolean;
@@ -641,7 +831,7 @@ export function useCheckout(opts: {
     const ticket = ++latest.current;
     setStatus("syncing");
     setError(null);
-    const timer = setTimeout(async () => {
+    const run = async () => {
       const existing = subIdRef.current;
       const r = existing && update ? await update(existing) : await create();
       if (ticket !== latest.current) return; // superseded by a newer basket
@@ -653,7 +843,14 @@ export function useCheckout(opts: {
         setError(r.error);
         setStatus("error");
       }
-    }, debounceMs);
+    };
+    // Only a CHANGED basket waits out the debounce; the first sync is a page
+    // load, not a customer drumming on the stepper.
+    if (!subIdRef.current) {
+      void run();
+      return;
+    }
+    const timer = setTimeout(run, debounceMs);
     return () => clearTimeout(timer);
     // Keyed by the basket it prices; the callbacks are treated as stable.
     // eslint-disable-next-line react-hooks/exhaustive-deps

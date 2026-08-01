@@ -45,6 +45,8 @@ export {
 // Declarative plans (auto-provision Stripe products/prices from config)
 export {
   ensurePlans,
+  resolvePlanPrices,
+  invalidatePlanPrices,
   planPriceId,
   planForPriceId,
   seatTypeForPriceId,
@@ -58,6 +60,7 @@ export {
   type PlansConfig,
   type BillingInterval,
   type EnsuredPrice,
+  type PlanPrices,
 } from "./plans.js";
 
 // Per-execution metering engine (prepaid balance; per-seat packs or a global

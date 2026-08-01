@@ -1,6 +1,11 @@
 import type Stripe from "stripe";
 import { getStripe } from "./billing.js";
-import { ensurePlans, lookupKeyFor, planPriceId } from "./plans.js";
+import {
+  invalidatePlanPrices,
+  lookupKeyFor,
+  resolvePlanPrices,
+  type PlanPrices,
+} from "./plans.js";
 import type { BillingInterval, PlansConfig } from "./plans.js";
 
 // Server side of the embedded checkout: turn "these seats, this interval" into
@@ -27,6 +32,41 @@ import type { BillingInterval, PlansConfig } from "./plans.js";
 // caller provisions on success and stores the returned customer id then.
 
 export type Quantities = Record<string, number>;
+
+/** The seat types with a quantity, in a stable order. Zeros are dropped rather
+ *  than sent: Stripe rejects a zero-quantity line, and "no Premium seats" must
+ *  mean "no Premium line". */
+function selected(seats: Quantities): [string, number][] {
+  const wanted = Object.entries(seats).filter(([, qty]) => qty > 0);
+  if (wanted.length === 0) throw new Error("No seats selected");
+  return wanted;
+}
+
+/**
+ * Price id per selected seat type, from the memoised resolver.
+ *
+ * One in-memory lookup per line instead of one `prices.list` per line — the
+ * prices were already resolved (and provisioned, on first use) by
+ * `resolvePlanPrices`.
+ */
+function priceIdsFor(
+  prices: PlanPrices,
+  plan: string,
+  interval: BillingInterval,
+  wanted: [string, number][],
+): [string, number][] {
+  return wanted.map(([seatType, quantity]) => {
+    const lookupKey = lookupKeyFor(plan, interval, seatType);
+    const price = prices.get(lookupKey);
+    if (!price) {
+      // The memo can only be wrong about a price that vanished from Stripe;
+      // drop it so the next attempt reconciles instead of failing again.
+      invalidatePlanPrices();
+      throw new Error(`No Stripe price for ${lookupKey}`);
+    }
+    return [price, quantity];
+  });
+}
 
 // ── Checkout Sessions (the DEFAULT path) ─────────────────────────────────────
 //
@@ -108,31 +148,29 @@ export async function createCheckoutSession(opts: {
 }): Promise<CheckoutSessionResult> {
   const stripe = getStripe();
 
-  const wanted = Object.entries(opts.seats).filter(([, qty]) => qty > 0);
-  if (wanted.length === 0) throw new Error("No seats selected");
+  const wanted = selected(opts.seats);
 
-  // Idempotent: creates the managed products/prices the first time a seat type is
-  // ever sold, and is a no-op afterwards.
-  await ensurePlans(opts.plans, { currency: opts.currency });
-
-  const line_items: Stripe.Checkout.SessionCreateParams.LineItem[] = [];
-  for (const [seatType, quantity] of wanted) {
-    const price = await planPriceId(opts.plan, opts.interval, seatType);
-    if (!price) {
-      throw new Error(
-        `No Stripe price for ${lookupKeyFor(opts.plan, opts.interval, seatType)}`,
-      );
-    }
-    line_items.push({
-      price,
-      quantity,
-      ...(opts.taxRates?.length ? { tax_rates: opts.taxRates } : {}),
-    });
-  }
-
-  const customerId =
+  // Independent, and both on the critical path of a customer waiting for the
+  // payment form: resolve the prices (memoised; provisions them the first time a
+  // seat type is ever sold) while the customer is created.
+  const [prices, customerId] = await Promise.all([
+    resolvePlanPrices(opts.plans, { currency: opts.currency }),
     opts.customerId ??
-    (await stripe.customers.create({ email: opts.email, metadata: opts.metadata })).id;
+      stripe.customers
+        .create({ email: opts.email, metadata: opts.metadata })
+        .then((c) => c.id),
+  ]);
+
+  const line_items: Stripe.Checkout.SessionCreateParams.LineItem[] = priceIdsFor(
+    prices,
+    opts.plan,
+    opts.interval,
+    wanted,
+  ).map(([price, quantity]) => ({
+    price,
+    quantity,
+    ...(opts.taxRates?.length ? { tax_rates: opts.taxRates } : {}),
+  }));
 
   const session = await stripe.checkout.sessions.create({
     mode: "subscription",
@@ -287,27 +325,24 @@ export async function createSubscription(opts: {
 }): Promise<SubscriptionResult> {
   const stripe = getStripe();
 
-  const wanted = Object.entries(opts.seats).filter(([, qty]) => qty > 0);
-  if (wanted.length === 0) throw new Error("No seats selected");
+  const wanted = selected(opts.seats);
 
-  // Idempotent: creates the managed products/prices the first time a seat type is
-  // ever sold, and is a no-op afterwards.
-  await ensurePlans(opts.plans, { currency: opts.currency });
-
-  const items: Stripe.SubscriptionCreateParams.Item[] = [];
-  for (const [seatType, quantity] of wanted) {
-    const price = await planPriceId(opts.plan, opts.interval, seatType);
-    if (!price) {
-      throw new Error(
-        `No Stripe price for ${lookupKeyFor(opts.plan, opts.interval, seatType)}`,
-      );
-    }
-    items.push({ price, quantity });
-  }
-
-  const customerId =
+  // Independent — resolve the prices (memoised; provisions them the first time a
+  // seat type is ever sold) while the customer is created.
+  const [prices, customerId] = await Promise.all([
+    resolvePlanPrices(opts.plans, { currency: opts.currency }),
     opts.customerId ??
-    (await stripe.customers.create({ email: opts.email, metadata: opts.metadata })).id;
+      stripe.customers
+        .create({ email: opts.email, metadata: opts.metadata })
+        .then((c) => c.id),
+  ]);
+
+  const items: Stripe.SubscriptionCreateParams.Item[] = priceIdsFor(
+    prices,
+    opts.plan,
+    opts.interval,
+    wanted,
+  ).map(([price, quantity]) => ({ price, quantity }));
 
   // Reuse a matching rate rather than creating one per checkout: Stripe tax
   // rates are immutable and accumulate forever otherwise.
@@ -386,25 +421,19 @@ export async function updateSubscription(opts: {
 }): Promise<{ subscriptionId: string; clientSecret: string | null }> {
   const stripe = getStripe();
 
-  const wanted = Object.entries(opts.seats).filter(([, qty]) => qty > 0);
-  if (wanted.length === 0) throw new Error("No seats selected");
+  const wanted = selected(opts.seats);
 
-  await ensurePlans(opts.plans, { currency: opts.currency });
+  // The live subscription is needed to diff against, and the prices to diff it
+  // WITH — neither depends on the other.
+  const [prices, sub] = await Promise.all([
+    resolvePlanPrices(opts.plans, { currency: opts.currency }),
+    stripe.subscriptions.retrieve(opts.subscriptionId),
+  ]);
 
   // Desired priceId → quantity for the new basket.
-  const desired = new Map<string, number>();
-  for (const [seatType, quantity] of wanted) {
-    const price = await planPriceId(opts.plan, opts.interval, seatType);
-    if (!price) {
-      throw new Error(
-        `No Stripe price for ${lookupKeyFor(opts.plan, opts.interval, seatType)}`,
-      );
-    }
-    desired.set(price, quantity);
-  }
+  const desired = new Map(priceIdsFor(prices, opts.plan, opts.interval, wanted));
 
   // Diff against the live items: bump quantities, delete removed lines, add new.
-  const sub = await stripe.subscriptions.retrieve(opts.subscriptionId);
   const items: Stripe.SubscriptionUpdateParams.Item[] = [];
   const seen = new Set<string>();
   for (const it of sub.items.data) {
