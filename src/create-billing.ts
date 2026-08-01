@@ -18,6 +18,8 @@ import type { ClaimStore } from "./agent-auth/claim-store.js";
 import { createMachinePaymentHandler, createPaymentMd, type MachinePaymentOptions } from "./machine-payment/index.js";
 import { createOAuthProxy, type OAuthProxyOptions } from "./oauth-proxy/index.js";
 import { createMeter, createApiMeterGuard } from "./metering.js";
+import type { UsageLedger } from "./usage-ledger.js";
+import { normalizePlans } from "./plan-model.js";
 import type { PlanCatalog } from "./plans.js";
 
 // One-call composition helper. Instead of wiring the five factories by hand in
@@ -86,6 +88,18 @@ export interface CreateBillingOptions {
     /** Cycle window (unix s) + key. Default: 1st-of-month UTC / "YYYY-MM". */
     cycleStart?: () => number;
     cycleKey?: () => string;
+    /**
+     * Where usage is COUNTED. Default: the balance-transaction ledger.
+     *
+     * Pass one whenever any plan has a `cap` or a `limits.rate`. The default
+     * ledger is the debits themselves, and an included call moves no money, so
+     * it writes no transaction to count: a pool or a per-seat pack read through
+     * it is permanently 0, which means the cap never bites and a usage screen
+     * reads 0% forever. `stripeMeterUsageLedger()` sees included usage but
+     * aggregates one dimension, so it cannot answer per-caller — a product that
+     * needs per-member figures wants its own store behind this seam.
+     */
+    ledger?: UsageLedger;
   };
 }
 
@@ -185,6 +199,24 @@ export function createBilling(opts: CreateBillingOptions) {
       })
     : undefined;
 
+  // A cap or a rate limit counted by the DEFAULT ledger is counted by nothing:
+  // the default ledger IS the debits, and included usage moves no money. The
+  // failure is silent and looks like generosity (every window reads 0%, nothing
+  // is ever refused), so it is worth one line at boot.
+  if (opts.meter && !opts.meter.ledger && opts.plans) {
+    const counted = normalizePlans(opts.plans).filter(
+      (m) => m.cap.kind !== "wallet" || m.limits.rate.length > 0,
+    );
+    if (counted.length) {
+      console.warn(
+        `[billing] plans ${counted.map((m) => m.key).join(", ")} declare an included window or a rate ` +
+          "limit, but no `meter.ledger` was passed. The default ledger can only see wallet-funded " +
+          "calls, so that usage counts as 0 and the limits never apply. Pass a ledger " +
+          "(stripeMeterUsageLedger(), or your own store for per-caller figures).",
+      );
+    }
+  }
+
   // Bound call-site meter + API route guard (opt-in). Plan resolution defaults to
   // the org's `plan` metadata so the common case needs no resolver.
   const meter = opts.meter
@@ -199,6 +231,7 @@ export function createBilling(opts: CreateBillingOptions) {
         planCacheTtlMs: opts.meter.planCacheTtlMs,
         cycleStart: opts.meter.cycleStart,
         cycleKey: opts.meter.cycleKey,
+        ledger: opts.meter.ledger,
       })
     : undefined;
   const meterRequest = meter
