@@ -6,6 +6,7 @@ import { getBillingCustomerId, usageSince, stripeConfigured } from "../billing.j
 import { requestTopUp, listTopUpRequests, approveTopUp, denyTopUp } from "../topup.js";
 import { assignSeatType, listSeatAssignments } from "../seats.js";
 import { normalizePlans, type PlanCatalog } from "../plans.js";
+import { usageSummary } from "../usage.js";
 
 function json(obj: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(obj, null, 2) }] };
@@ -29,8 +30,8 @@ function monthKey(): string {
 export function registerManagementTools(
   server: McpServer,
   adapter: BillingAdapter,
-  _config: ResolvedConfig,
-  opts: { plans?: PlanCatalog } = {},
+  config: ResolvedConfig,
+  opts: { plans?: PlanCatalog; resolvePlan?: (orgId: string) => Promise<string | null> } = {},
 ) {
   server.tool(
     "get_usage",
@@ -52,6 +53,67 @@ number of days instead of the calendar month.`,
       const filter = caller_kind ? { callerKind: caller_kind, callerId: caller_id } : undefined;
       const usage = await usageSince(cid, since, filter);
       return json({ usage, since, cycle: monthKey(), filter: filter ?? null });
+    },
+  );
+
+  // What an agent needs BEFORE it spends: every window that applies, how much of
+  // each is gone, and when each resets. Without this a caller can only discover a
+  // limit by being refused by it, which is a poor way to pace a long run — the
+  // `resets_at` on each window is what lets an agent wait instead of retrying.
+  server.tool(
+    "get_usage_limits",
+    `Get every usage limit that applies to you right now (per hour/day/week/month and
+per billing cycle), how much of each is used, and when each resets.`,
+    {
+      caller_kind: z
+        .enum(["user", "api"])
+        .optional()
+        .describe("Whose limits to report. Defaults to `api` — a tool call is an API caller"),
+      caller_id: z.string().optional().describe("Member or API-key id, for per-caller windows"),
+    },
+    async ({ caller_kind, caller_id }) => {
+      const auth = await enforceAccess(adapter);
+      if ("isError" in auth) return auth;
+      if (!stripeConfigured()) return err("Billing is not configured (STRIPE_SECRET_KEY unset).");
+      if (!opts.plans) return json({ limits: [], note: "No plans configured." });
+
+      const plan = opts.resolvePlan
+        ? await opts.resolvePlan(auth.orgId)
+        : ((await adapter.getSubscription?.(auth.orgId))?.plan ?? null);
+
+      const summary = await usageSummary(adapter, config, {
+        orgId: auth.orgId,
+        plans: opts.plans,
+        plan,
+        caller: { kind: caller_kind ?? "api", id: caller_id ?? auth.orgId },
+      });
+
+      // Flattened for a reader: one array of windows, whether a window came from
+      // a rate limit, the pool or the seat pack. `remaining` is what decides
+      // whether to make the next call; `resets_at` is what decides when to retry.
+      const windows = [
+        ...summary.windows.map((w) => ({ kind: "rate_limit" as const, ...w })),
+        ...(summary.pool ? [{ kind: "included_pool" as const, ...summary.pool }] : []),
+        ...(summary.pack ? [{ kind: "seat_pack" as const, ...summary.pack }] : []),
+      ].map((w) => ({
+        kind: w.kind,
+        every: w.every,
+        scope: w.scope,
+        label: w.label,
+        limit: w.size,
+        used: w.used,
+        remaining: w.remaining,
+        percent_used: w.percent,
+        resets_at: w.resetsAt ? new Date(w.resetsAt).toISOString() : null,
+      }));
+
+      return json({
+        plan: summary.plan,
+        windows,
+        wallet_balance: summary.wallet,
+        cycle: { start: new Date(summary.cycle.start).toISOString(), key: summary.cycle.key },
+        checked_at: new Date(summary.at).toISOString(),
+      });
     },
   );
 

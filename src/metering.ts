@@ -54,7 +54,12 @@ export type MeterResult =
         | "insufficient_balance"
         | "seat_allowance_reached"
         | "pool_exhausted"
+        /** A declared per-window limit (hour/day/week/month) refused it. Distinct
+         *  from an exhausted cap: waiting fixes this one, buying does not. */
+        | "rate_limit_reached"
       message: string
+      /** When a rate limit refused: epoch ms at which it resets. */
+      retryAt?: number
     }
 
 // The shared metering engine (used by every consumer). Pricing is per execution
@@ -106,10 +111,13 @@ export async function meterUsage(
   // package is told exactly that, instead of being told its balance is short.
   const funding = fundingFor(state, model, cost, caller)
   if (!funding.ok) {
+    const reason = funding.reason ?? "insufficient_balance"
     return {
       ok: false,
-      reason: funding.reason ?? "insufficient_balance",
-      message: describeDenial(funding.reason ?? "insufficient_balance", state),
+      reason,
+      message: describeDenial(reason, state, funding.limit),
+      // A rate limit is the one denial that fixes itself, so say when.
+      ...(funding.limit?.window.end ? { retryAt: funding.limit.window.end } : {}),
     }
   }
 

@@ -51,6 +51,8 @@ export type {
   Quantities,
   BasketProblem,
   CycleWindow,
+  Every,
+  RateLimit,
 } from "./plan-model.js";
 export {
   definePlans,
@@ -68,6 +70,8 @@ export {
   packSizeOf,
   exhaustedPolicy,
   cycleWindowFor,
+  rateWindowFor,
+  rateLimitsOf,
 } from "./plan-model.js";
 
 // Library DEFAULT seat types, priced in USD (the lib's default currency — see

@@ -94,6 +94,8 @@ export {
   packSizeOf,
   exhaustedPolicy,
   cycleWindowFor,
+  rateWindowFor,
+  rateLimitsOf,
   includedTokens,
   includedTokensByType,
   lookupKeyFor,
@@ -117,6 +119,8 @@ export {
   type Sells,
   type Grant,
   type Cap,
+  type Every,
+  type RateLimit,
   type Exhausted,
   type Replenish,
   type Sale,
@@ -191,7 +195,18 @@ export {
   type AllowanceInput,
   type FundingDecision,
   type DenialReason,
+  type LimitState,
 } from "./allowance.js";
+// The read side of the same arithmetic: what a usage screen shows, per window and
+// per member, from the numbers the meter itself enforces.
+export {
+  usageSummary,
+  memberUsage,
+  type UsageSummary,
+  type UsageSummaryInput,
+  type UsageWindow,
+  type MemberUsage,
+} from "./usage.js";
 // Counting usage separately from moving money — the seam an included window needs.
 export {
   stripeBalanceUsageLedger,

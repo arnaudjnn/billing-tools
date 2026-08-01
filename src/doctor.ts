@@ -295,6 +295,46 @@ export function checkPlansConfig(plans: PlanCatalog): DoctorResult {
           "which is counted rather than credited. Keep `grant` only for a plan that literally sells credit",
       });
     }
+    // Rate limits: the two ways a plausible-looking declaration silently refuses
+    // everything, and the one way a set of them contradicts itself.
+    for (const l of m.limits.rate) {
+      if (l.tokens <= 0) {
+        checks.push({
+          level: "error",
+          title: `Plan "${m.key}" has a zero ${l.every} limit`,
+          detail: `a rate limit of ${l.tokens} refuses every call in that window`,
+          fix: "Set `tokens` above 0, or drop the limit",
+        });
+      }
+      if ((l.scope ?? "org") === "org" && l.seatType) {
+        checks.push({
+          level: "warn",
+          title: `Plan "${m.key}" scopes an org limit to a seat type`,
+          detail: `the ${l.every} limit sets \`seatType: ${l.seatType}\` but its scope is org-wide, so the seat type is ignored`,
+          fix: 'Add `scope: "caller"`, or remove `seatType`',
+        });
+      }
+    }
+    // A wider window that is tighter than a narrower one can never be reached:
+    // the narrow one refuses first, every time. Ordering is by window length, so
+    // this catches "300 a week" sitting under "1000 a day".
+    const lengths: Record<string, number> = { hour: 1, day: 2, week: 3, month: 4, cycle: 5 };
+    const sorted = [...m.limits.rate].sort((a, b) => lengths[a.every] - lengths[b.every]);
+    for (let i = 1; i < sorted.length; i++) {
+      const narrow = sorted[i - 1];
+      const wide = sorted[i];
+      if ((narrow.scope ?? "org") !== (wide.scope ?? "org")) continue;
+      if (wide.tokens <= narrow.tokens) {
+        checks.push({
+          level: "warn",
+          title: `Plan "${m.key}" has an unreachable ${wide.every} limit`,
+          detail:
+            `the ${wide.every} limit (${wide.tokens}) is no larger than the ${narrow.every} one ` +
+            `(${narrow.tokens}), so the ${narrow.every} window always refuses first`,
+          fix: `Raise the ${wide.every} limit above the ${narrow.every} one, or drop one of them`,
+        });
+      }
+    }
     if (m.cap.kind === "pool" && poolSizeOf(m) === 0) {
       checks.push({
         level: "warn",

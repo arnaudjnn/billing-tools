@@ -235,9 +235,53 @@ export type Sale =
   /** Kept for existing subscribers, offered to nobody new. */
   | "legacy";
 
+// ── Rate limits: the same allowance question, asked at more than one timescale ─
+//
+// `cap` answers "how much is included in the plan", measured over the billing
+// cycle. That is a commercial ceiling, and it is the wrong tool for "no more than
+// 300 in a week": a month's worth of allowance spent in one afternoon is inside
+// the cap and still not what was sold. So a limit is its own axis, and a plan can
+// declare as many as it likes — an hour, a day, a week, the month — which are
+// checked TOGETHER. A call has to fit inside every one of them.
+//
+// Windows are FIXED and aligned (top of the hour, UTC midnight, Monday, the 1st),
+// not rolling. A rolling window needs every event's timestamp and cannot be
+// answered by one summed read, which is what both the hot path and a usage screen
+// get to do here — and a fixed window is the only kind that can honestly say when
+// it resets.
+
+/** How often a limit's window restarts. `cycle` is the subscription period. */
+export type Every = "hour" | "day" | "week" | "month" | "cycle";
+
+export interface RateLimit {
+  every: Every;
+  /**
+   * The ceiling, in the unit the ledger counts: token cost. With a rate card of
+   * 1 token per action that IS a request count, which is how these read on a
+   * usage screen ("300 richieste a settimana").
+   */
+  tokens: Money;
+  /**
+   * Whose usage counts against it. `org` sums the whole workspace; `caller`
+   * gives each member (and the shared API seat) a window of their own. Default
+   * `org`, because a limit with no scope is a limit on the product.
+   */
+  scope?: "org" | "caller";
+  /** Restrict to callers of one seat type. Only meaningful with `scope: caller`. */
+  seatType?: string;
+  /** Label for a usage screen. Defaults to the window name. */
+  label?: string;
+}
+
 export interface PlanLimits {
   /** Max members in the workspace. null = unlimited. */
   members?: number | null;
+  /**
+   * Usage ceilings per window, all enforced at once. Independent of `cap`: these
+   * never fund anything and never fall through to the wallet, because a rate
+   * limit that a top-up could lift would not be a rate limit.
+   */
+  rate?: readonly RateLimit[];
 }
 
 // ── The plan ────────────────────────────────────────────────────────────────
@@ -342,7 +386,7 @@ export interface PlanModel {
   cap: Cap;
   replenish: Replenish;
   sale: Sale;
-  limits: { members: number | null };
+  limits: { members: number | null; rate: readonly RateLimit[] };
   display: PlanDisplay | null;
   /** Intervals actually sold. Empty for `sells: nothing`; an annual-only
    *  commitment is `["yearly"]` and no monthly price is ever minted. */
@@ -402,7 +446,7 @@ export function normalizePlan(key: string, spec: PlanDef | PlanSpec): PlanModel 
       cap: spec.cap ?? { kind: spec.sells.kind === "seats" ? "per_seat" : "wallet" },
       replenish: spec.replenish ?? {},
       sale: spec.sale,
-      limits: { members: spec.limits?.members ?? null },
+      limits: { members: spec.limits?.members ?? null, rate: spec.limits?.rate ?? [] },
       display: spec.display ?? null,
       intervals: soldIntervals(declared, price, seatTypes),
       seatTypes,
@@ -443,7 +487,8 @@ export function normalizePlan(key: string, spec: PlanDef | PlanSpec): PlanModel 
     sale: soldIntervals(undefined, sells.kind === "flat" ? spec.price : null, seatTypes).length === 0
       ? "free"
       : "self_serve",
-    limits: { members: spec.seats },
+    // The legacy shape cannot express a rate limit, so a legacy plan has none.
+    limits: { members: spec.seats, rate: [] },
     display: null,
     intervals: soldIntervals(undefined, sells.kind === "flat" ? spec.price : null, seatTypes),
     seatTypes,
@@ -681,6 +726,72 @@ const startOfMonthUTC = (now: number): number => {
  * `rollover` widens the window to the subscription's start instead, which is all
  * "unused allowance carries over" has to mean.
  */
+/**
+ * The aligned window a rate limit is measured over, and when it resets.
+ *
+ * Aligned to UTC so the answer is the same everywhere and a reset time can be
+ * stated: top of the hour, midnight, MONDAY midnight, the 1st. `cycle` defers to
+ * the subscription period (`cycleWindowFor`), which is the only window whose
+ * boundaries belong to the customer rather than the calendar.
+ *
+ * `end` is always known here — that is the point of a fixed window, and what
+ * lets a usage screen count down to the reset.
+ */
+export function rateWindowFor(
+  every: Every,
+  now: number = Date.now(),
+  cycle?: CycleWindow,
+): CycleWindow {
+  const d = new Date(now);
+  const y = d.getUTCFullYear();
+  const mo = d.getUTCMonth();
+  const day = d.getUTCDate();
+  const iso = (ms: number) => new Date(ms).toISOString();
+  switch (every) {
+    case "hour": {
+      const start = Date.UTC(y, mo, day, d.getUTCHours());
+      return { start, end: start + 3_600_000, key: `h:${iso(start).slice(0, 13)}` };
+    }
+    case "day": {
+      const start = Date.UTC(y, mo, day);
+      return { start, end: start + 86_400_000, key: `d:${iso(start).slice(0, 10)}` };
+    }
+    case "week": {
+      // getUTCDay is 0 for Sunday, so shift to a Monday-based week.
+      const back = (d.getUTCDay() + 6) % 7;
+      const start = Date.UTC(y, mo, day - back);
+      return { start, end: start + 7 * 86_400_000, key: `w:${iso(start).slice(0, 10)}` };
+    }
+    case "month": {
+      const start = Date.UTC(y, mo, 1);
+      return { start, end: Date.UTC(y, mo + 1, 1), key: `m:${iso(start).slice(0, 7)}` };
+    }
+    case "cycle":
+      return cycle ?? { start: Date.UTC(y, mo, 1), end: Date.UTC(y, mo + 1, 1), key: `m:${iso(Date.UTC(y, mo, 1)).slice(0, 7)}` };
+  }
+}
+
+/**
+ * The limits that apply to this caller, in declaration order.
+ *
+ * A limit with a `seatType` applies only to callers holding it, so a plan can cap
+ * an agent's burst rate without capping a person's. A limit with no caller at all
+ * (an org-level read, or a usage screen with no member selected) keeps only the
+ * org-scoped ones — a caller window means nothing without a caller.
+ */
+export function rateLimitsOf(
+  model: PlanModel | null,
+  caller?: { seatType?: string } | null,
+): readonly RateLimit[] {
+  if (!model) return [];
+  return model.limits.rate.filter((l) => {
+    const scope = l.scope ?? "org";
+    if (scope === "caller" && !caller) return false;
+    if (l.seatType && caller?.seatType !== l.seatType) return false;
+    return true;
+  });
+}
+
 export function cycleWindowFor(
   model: PlanModel | null,
   period: { start?: string | number | null; end?: string | number | null } | null,

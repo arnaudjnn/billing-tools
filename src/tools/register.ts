@@ -143,6 +143,7 @@ export const BILLING_TOOL_NAMES = [
   "download_invoice",
   // Workspace-management tools (registerManagementTools).
   "get_usage",
+  "get_usage_limits",
   "list_seats",
   "assign_seat_type",
   "list_top_up_requests",

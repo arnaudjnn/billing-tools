@@ -5,7 +5,10 @@ import {
   packSizeOf,
   planModel,
   poolSizeOf,
+  rateLimitsOf,
+  rateWindowFor,
   type CycleWindow,
+  type Every,
   type PlanCatalog,
   type PlanModel,
 } from "./plan-model.js";
@@ -22,9 +25,28 @@ import { stripeBalanceUsageLedger, type FundingSource, type UsageLedger } from "
 // decision itself is pure arithmetic, so pulling it out of the Stripe round trips
 // makes it testable, which the meter was not.
 
+/** One declared rate limit, with the window it is being measured over. */
+export interface LimitState {
+  every: Every;
+  scope: "org" | "caller";
+  /** From the config; null when the plan didn't label it. */
+  label: string | null;
+  size: number;
+  used: number;
+  remaining: number;
+  /** The aligned window. `end` is always known, so a UI can count down to it. */
+  window: CycleWindow;
+}
+
 export interface AllowanceState {
   plan: string | null;
   cycle: CycleWindow;
+  /**
+   * Every rate limit that applies right now, in config order. A call must fit
+   * inside ALL of them; unlike pool/pack/wallet these fund nothing, they only
+   * refuse.
+   */
+  limits: LimitState[];
   /** The org-wide included window, when the plan has one. */
   pool: { size: number; used: number; remaining: number } | null;
   /** The caller's seat pack, when the plan caps per seat and the caller has one. */
@@ -53,6 +75,9 @@ export interface AllowanceInput {
   ledger?: UsageLedger;
   /** Skip the wallet read — for a caller that only needs the entitlement. */
   skipWallet?: boolean;
+  /** Pin the clock. Every rate window is derived from it, so a test can place
+   *  itself inside a window instead of waiting for one. Defaults to now. */
+  now?: number;
 }
 
 /**
@@ -70,19 +95,51 @@ export async function resolveAllowance(
   input: AllowanceInput,
 ): Promise<AllowanceState> {
   const model = planModel(input.plans, input.plan ?? null);
+  const now = input.now ?? Date.now();
   const customerId = input.customerId ?? (await getBillingCustomerId(adapter, input.orgId));
   const period = await subscriptionPeriod(adapter, input.orgId, model);
-  const cycle = input.cycle ?? cycleWindowFor(model, period);
+  const cycle = input.cycle ?? cycleWindowFor(model, period, now);
   const ledger = input.ledger ?? stripeBalanceUsageLedger();
 
   if (!customerId) {
-    return { plan: model?.key ?? null, cycle, pool: null, pack: null, wallet: 0 };
+    return { plan: model?.key ?? null, cycle, limits: [], pool: null, pack: null, wallet: 0 };
   }
 
   const poolSize = poolSizeOf(model);
   const packSize = packSizeOf(model, input.caller?.seatType);
 
-  const [wallet, poolUsed, packUsed, extra] = await Promise.all([
+  // Each applicable limit is one more summed read over its own window. They go
+  // in the same round of parallel reads as the pool and the pack, so a plan with
+  // an hourly + weekly + monthly limit costs the meter latency, not four times it.
+  const rateLimits = rateLimitsOf(model, input.caller);
+  const limitReads = rateLimits.map((limit) => {
+    const scope = limit.scope ?? "org";
+    const window = rateWindowFor(limit.every, now, cycle);
+    return ledger
+      .total({
+        orgId: input.orgId,
+        customerId,
+        start: window.start,
+        end: window.end ?? undefined,
+        filter:
+          scope === "caller"
+            ? input.caller?.kind === "api"
+              ? { callerKind: "api" }
+              : { callerKind: "user", callerId: input.caller?.id }
+            : undefined,
+      })
+      .then((used) => ({
+        every: limit.every,
+        scope,
+        label: limit.label ?? null,
+        size: limit.tokens,
+        used,
+        remaining: Math.max(0, limit.tokens - used),
+        window,
+      }));
+  });
+
+  const [wallet, poolUsed, packUsed, extra, limits] = await Promise.all([
     input.skipWallet ? Promise.resolve(0) : getTokenBalance(customerId, config.currency),
     poolSize == null
       ? Promise.resolve(0)
@@ -106,11 +163,13 @@ export async function resolveAllowance(
     packSize == null || input.caller?.kind !== "user" || !input.caller.id
       ? Promise.resolve(0)
       : extraAllowance(adapter, input.orgId, input.caller.id, cycle.key),
+    Promise.all(limitReads),
   ]);
 
   return {
     plan: model?.key ?? null,
     cycle,
+    limits,
     pool:
       poolSize == null
         ? null
@@ -136,7 +195,12 @@ async function subscriptionPeriod(
   orgId: string,
   model: PlanModel | null,
 ): Promise<{ start?: string | null; end?: string | null } | null> {
-  if (!model || model.cap.kind === "wallet") return null;
+  if (!model) return null;
+  // A `cycle` rate limit needs the period just as much as a cap does; without
+  // this it would silently fall back to the calendar month.
+  const needsPeriod =
+    model.cap.kind !== "wallet" || model.limits.rate.some((l) => l.every === "cycle");
+  if (!needsPeriod) return null;
   if (!adapter.getSubscription) return null;
   try {
     const sub = await adapter.getSubscription(orgId);
@@ -147,6 +211,7 @@ async function subscriptionPeriod(
 }
 
 export type DenialReason =
+  | "rate_limit_reached"
   | "pool_exhausted"
   | "seat_allowance_reached"
   | "insufficient_balance";
@@ -155,6 +220,8 @@ export interface FundingDecision {
   ok: boolean;
   source: FundingSource | null;
   reason?: DenialReason;
+  /** Which limit refused, when the reason is `rate_limit_reached`. */
+  limit?: LimitState;
 }
 
 /**
@@ -181,6 +248,18 @@ export function fundingFor(
 ): FundingDecision {
   if (cost <= 0) return { ok: true, source: null };
 
+  // Rate limits come FIRST and are absolute. They are not a funding source and
+  // nothing overrides them: no wallet fallthrough (a limit a top-up could lift is
+  // not a limit) and no exemption for a shared seat, because the thing being
+  // protected is the product, not the customer's money. The tightest window that
+  // refuses is the one reported, so the message names a week rather than a month
+  // when the week is what ran out.
+  for (const limit of state.limits) {
+    if (limit.remaining < cost) {
+      return { ok: false, source: null, reason: "rate_limit_reached", limit };
+    }
+  }
+
   if (state.pool) {
     if (state.pool.remaining >= cost) return { ok: true, source: "pool" };
     if (exhaustedPolicy(model, caller) === "block") {
@@ -199,9 +278,29 @@ export function fundingFor(
   return { ok: false, source: null, reason: "insufficient_balance" };
 }
 
+/** Window names for the library's own English messages. A UI localises from
+ *  `every` (or the plan's `label`) instead of parsing these. */
+const WINDOW_NAMES: Record<Every, string> = {
+  hour: "hour",
+  day: "day",
+  week: "week",
+  month: "month",
+  cycle: "billing cycle",
+};
+
 /** Human-readable, for a 402 body or a tool result. */
-export function describeDenial(reason: DenialReason, state: AllowanceState): string {
+export function describeDenial(
+  reason: DenialReason,
+  state: AllowanceState,
+  limit?: LimitState,
+): string {
   switch (reason) {
+    case "rate_limit_reached": {
+      const l = limit ?? state.limits.find((x) => x.remaining <= 0);
+      const name = l?.label ?? (l ? WINDOW_NAMES[l.every] : "window");
+      const resets = l?.window.end ? ` Resets ${new Date(l.window.end).toISOString()}.` : "";
+      return `Usage limit reached for this ${name} (${l?.size ?? 0}).${resets}`;
+    }
     case "pool_exhausted":
       return `Plan allowance used up for this cycle (${state.pool?.size ?? 0} tokens). Contact us to extend the package.`;
     case "seat_allowance_reached":
