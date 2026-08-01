@@ -731,23 +731,33 @@ export type CheckoutTaxState = {
 /**
  * Re-tax the session whenever the billing country, state or tax number changes.
  *
- * Call inside `BillingCheckoutSessionProvider`. Pass `taxNumber` only if the app
- * collects one (see `useBillingTaxId`); omitting it simply means every buyer is
- * treated as a consumer, which is the safe default — it charges tax rather than
+ * Call inside `BillingCheckoutSessionProvider`. The tax number comes from the
+ * session by default, so rendering `useBillingTaxId`'s field anywhere in the
+ * tree is enough to make reverse charge work. With no number the buyer is
+ * treated as a consumer — the safe default, since it charges tax rather than
  * exempting.
  */
 export function useCheckoutTax(opts: {
   retax: (input: CheckoutTaxInput) => Promise<CheckoutRetaxResult>;
+  /** Override the tax number. Omit to use the one on the session. */
   taxNumber?: string | null;
   /** Wait before recalculating, ms. Default 400. */
   debounceMs?: number;
 }): CheckoutTaxState {
-  const { retax, taxNumber = null, debounceMs = 400 } = opts;
+  const { retax, debounceMs = 400 } = opts;
   const result = useCheckoutElements();
   const checkout = result.type === "success" ? result.checkout : null;
 
   const country = checkout?.billingAddress?.address?.country ?? null;
   const state = checkout?.billingAddress?.address?.state ?? null;
+  // Default to the id already on the session, which is where `useBillingTaxId`
+  // (and Stripe's own Tax ID Element) put it. Reading the shared place rather
+  // than taking it as a prop is what lets the field and this hook live in
+  // different components without the app wiring state between them.
+  const taxNumber =
+    opts.taxNumber !== undefined
+      ? opts.taxNumber
+      : (checkout?.taxIdInfo?.taxId?.value ?? null);
 
   const [tax, setTax] = React.useState<CheckoutTaxState>({
     percent: null,
