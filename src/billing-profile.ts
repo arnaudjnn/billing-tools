@@ -1,5 +1,6 @@
 import { getStripe } from "./billing.js";
 import type { BillingAdapter } from "./types.js";
+import { COMPANY_NAME_MAX, INVOICE_EMAIL_MAX } from "./ui/limits.js";
 
 // Who the invoice goes to, and whose name is on it.
 //
@@ -22,9 +23,8 @@ export type BillingProfile = {
 
 const EMPTY: BillingProfile = { invoiceEmail: null, companyName: null };
 
-/** Stripe's documented limits. Longer values are rejected by the API. */
-export const INVOICE_EMAIL_MAX = 254;
-export const COMPANY_NAME_MAX = 64;
+// Re-exported from the client-safe leaf so server and form agree on one number.
+export { COMPANY_NAME_MAX, INVOICE_EMAIL_MAX } from "./ui/limits.js";
 
 export async function getBillingProfile(
   adapter: BillingAdapter,
