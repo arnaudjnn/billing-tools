@@ -157,6 +157,16 @@ export type BillingPaymentFormProps = {
   collectTaxId?: boolean;
   /** Where Stripe returns the browser after an off-site step (3DS, bank redirect). */
   returnUrl: string;
+  /**
+   * What the client secret refers to. `"setup"` saves a card for later without
+   * charging it — a SetupIntent — which is what an "add a card" screen needs;
+   * `"payment"` (the default) takes the money now.
+   *
+   * It has to be told: a PaymentIntent and a SetupIntent are confirmed by
+   * different Stripe calls, and the form is given the secret by its provider
+   * rather than holding it.
+   */
+  intent?: "payment" | "setup";
   /** Rendered as the submit button. Receives the live submitting state. */
   children: (state: { submitting: boolean }) => React.ReactNode;
   /** Called after the intent is confirmed without a redirect. */
@@ -180,6 +190,7 @@ export function BillingPaymentForm({
   collectAddress = false,
   collectTaxId = false,
   returnUrl,
+  intent = "payment",
   children,
   onSuccess,
   onError,
@@ -200,13 +211,20 @@ export function BillingPaymentForm({
         onError?.(submitted.error.message ?? "Dati di pagamento non validi");
         return;
       }
-      const { error } = await stripe.confirmPayment({
+      const confirmArgs = {
         elements,
         confirmParams: { return_url: returnUrl },
-        redirect: "if_required",
-      });
+        redirect: "if_required" as const,
+      };
+      const { error } =
+        intent === "setup"
+          ? await stripe.confirmSetup(confirmArgs)
+          : await stripe.confirmPayment(confirmArgs);
       if (error) {
-        onError?.(error.message ?? "Pagamento non riuscito");
+        onError?.(
+          error.message ??
+            (intent === "setup" ? "Carta non salvata" : "Pagamento non riuscito"),
+        );
         return;
       }
       onSuccess?.();

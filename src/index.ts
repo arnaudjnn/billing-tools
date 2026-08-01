@@ -259,3 +259,10 @@ export type {
 export { resolveSession, ANONYMOUS_SESSION } from "./session.js";
 export type { BillingSession, SessionUser } from "./session.js";
 export type { PlanSource } from "./session.js";
+export {
+  listPaymentMethods,
+  createCardSetupIntent,
+  setDefaultPaymentMethod,
+  detachPaymentMethod,
+} from "./payment-methods.js";
+export type { SavedCard } from "./payment-methods.js";
