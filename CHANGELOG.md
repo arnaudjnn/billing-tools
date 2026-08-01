@@ -1,3 +1,10 @@
+# [0.50.0](https://github.com/arnaudjnn/billing-tools/compare/v0.49.1...v0.50.0) (2026-08-01)
+
+
+### Features
+
+* **billing-profile:** billing address, with Stripe's Address Element ([63777cc](https://github.com/arnaudjnn/billing-tools/commit/63777cc005877e5b3fee39c971829a13ed64a35c))
+
 ## [0.49.1](https://github.com/arnaudjnn/billing-tools/compare/v0.49.0...v0.49.1) (2026-08-01)
 
 
