@@ -1,3 +1,10 @@
+# [0.60.0](https://github.com/arnaudjnn/billing-tools/compare/v0.59.0...v0.60.0) (2026-08-01)
+
+
+### Features
+
+* **invoices:** view and download one invoice, and an open one shows what it owes ([25956bc](https://github.com/arnaudjnn/billing-tools/commit/25956bc3aa4ea9bf1125e13315401229be3ffbd4))
+
 # [0.59.0](https://github.com/arnaudjnn/billing-tools/compare/v0.58.1...v0.59.0) (2026-08-01)
 
 
