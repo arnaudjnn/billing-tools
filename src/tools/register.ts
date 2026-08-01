@@ -4,7 +4,7 @@ import { resolveConfig } from "../types.js";
 import { registerKeyTools } from "./keys.js";
 import { registerBillingOnlyTools } from "./billing.js";
 import { registerManagementTools } from "./management.js";
-import { ensurePlans, type PlansConfig } from "../plans.js";
+import { ensurePlans, normalizePlans, poolSizeOf, type PlanCatalog } from "../plans.js";
 
 // Keys whose values must never hit the logs (magic-auth codes, API keys, etc.).
 const SENSITIVE_KEY_RE =
@@ -58,7 +58,7 @@ export interface RegisterBillingToolsOptions {
   installLogging?: boolean;
   /** Declarative plans. When set, a `list_plans` tool is registered and the
    *  Stripe products/prices are auto-provisioned (lazily, on first list). */
-  plans?: PlansConfig;
+  plans?: PlanCatalog;
   /** Default plan key (e.g. "hobby"). */
   defaultPlan?: string;
 }
@@ -78,7 +78,7 @@ export function registerBillingTools(server: McpServer, opts: RegisterBillingToo
 // the Stripe products/prices on first call (idempotent). Zero dashboard setup.
 function registerPlanTools(
   server: McpServer,
-  plans: PlansConfig,
+  plans: PlanCatalog,
   defaultPlan: string | undefined,
   currency: string,
 ) {
@@ -88,17 +88,42 @@ function registerPlanTools(
     {},
     async () => {
       const ensured = await ensurePlans(plans, { currency });
-      const priceOf = (plan: string, interval: "monthly" | "yearly") =>
-        ensured.find((e) => e.plan === plan && e.interval === interval) ?? null;
-      const out = Object.entries(plans).map(([key, def]) => ({
-        plan: key,
-        default: key === defaultPlan,
-        seats: def.seats,
-        tokens_per_seat: def.tokensPerSeat,
-        prices: {
-          monthly: { amount: def.price.monthly, currency, price_id: priceOf(key, "monthly")?.priceId ?? null },
-          yearly: { amount: def.price.yearly, currency, price_id: priceOf(key, "yearly")?.priceId ?? null },
-        },
+      const priceOf = (plan: string, interval: "monthly" | "yearly", seatType?: string) =>
+        ensured.find(
+          (e) => e.plan === plan && e.interval === interval && e.seatType === seatType,
+        ) ?? null;
+      // Reported from the normalised model, so a seat-typed or pooled plan is
+      // described as it actually is. This used to read `price`/`tokensPerSeat`
+      // off the raw config, which a seat-typed plan doesn't use at all — so an
+      // agent was told a plan cost the placeholder plan-level amount, and given
+      // no way to see its seat types, its packs or whether it can be bought.
+      const out = normalizePlans(plans).map((m) => ({
+        plan: m.key,
+        default: m.key === defaultPlan,
+        sale: m.sale,
+        name: m.display?.name ?? m.key,
+        members: m.limits.members,
+        intervals: m.intervals,
+        included: poolSizeOf(m) !== null
+          ? { scope: "pool" as const, tokens: poolSizeOf(m) }
+          : { scope: "per_seat" as const, tokens: null },
+        seat_types: m.seatTypes.map((s) => ({
+          key: s.key,
+          label: s.display?.label ?? s.key,
+          shared: s.shared,
+          max: s.max,
+          included_tokens: s.includedTokens,
+          prices: {
+            monthly: { amount: s.price.monthly, currency, price_id: priceOf(m.key, "monthly", s.key)?.priceId ?? null },
+            yearly: { amount: s.price.yearly, currency, price_id: priceOf(m.key, "yearly", s.key)?.priceId ?? null },
+          },
+        })),
+        prices: m.price
+          ? {
+              monthly: { amount: m.price.monthly, currency, price_id: priceOf(m.key, "monthly")?.priceId ?? null },
+              yearly: { amount: m.price.yearly, currency, price_id: priceOf(m.key, "yearly")?.priceId ?? null },
+            }
+          : null,
       }));
       return { content: [{ type: "text" as const, text: JSON.stringify({ plans: out }, null, 2) }] };
     },

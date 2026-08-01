@@ -108,6 +108,12 @@ export interface PlanPriceView {
    */
   totals: Record<BillingInterval, MoneyView>;
   rows: readonly SeatRowView[];
+  /** Total seats a basket must stay within, across every type. `minSeats: 2` is
+   *  "a team of one is Hobby". Null max = unlimited. A seat stepper needs both,
+   *  and deriving them from the rows' own min/max gets the plan-level total
+   *  wrong. */
+  minSeats: number;
+  maxSeats: number | null;
   /** For a plan with no per-seat figure to show (a committed package). */
   pooled: { title: string; note: string | null } | null;
 }
@@ -324,6 +330,8 @@ export function derivePlanViews(
                 }
               : null,
           totals: { monthly: money(monthlyTotal), yearly: money(yearlyTotal) },
+          minSeats: sells.kind === "seats" ? (sells.minSeats ?? 0) : 0,
+          maxSeats: sells.kind === "seats" ? (sells.maxSeats ?? null) : null,
           rows,
           pooled: model.display?.pooled
             ? { title: model.display.pooled.title, note: model.display.pooled.note ?? null }

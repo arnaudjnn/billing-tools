@@ -18,7 +18,7 @@ import type { ClaimStore } from "./agent-auth/claim-store.js";
 import { createMachinePaymentHandler, createPaymentMd, type MachinePaymentOptions } from "./machine-payment/index.js";
 import { createOAuthProxy, type OAuthProxyOptions } from "./oauth-proxy/index.js";
 import { createMeter, createApiMeterGuard } from "./metering.js";
-import type { PlansConfig } from "./plans.js";
+import type { PlanCatalog } from "./plans.js";
 
 // One-call composition helper. Instead of wiring the five factories by hand in
 // a per-app "composition root", pass your adapter + config (and optionally
@@ -36,7 +36,7 @@ export interface CreateBillingOptions {
   /** WWW-Authenticate realm on 401s. */
   realm?: string;
   /** Declarative plans → auto-provisioned Stripe products/prices + list_plans. */
-  plans?: PlansConfig;
+  plans?: PlanCatalog;
   defaultPlan?: string;
   /** Register your app's own product tools alongside the billing tools. */
   registerTools?: (server: McpServer) => void;

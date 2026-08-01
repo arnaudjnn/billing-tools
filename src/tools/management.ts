@@ -5,7 +5,7 @@ import { enforceAccess } from "../auth.js";
 import { getBillingCustomerId, usageSince, stripeConfigured } from "../billing.js";
 import { requestTopUp, listTopUpRequests, approveTopUp, denyTopUp } from "../topup.js";
 import { assignSeatType, listSeatAssignments } from "../seats.js";
-import type { PlansConfig } from "../plans.js";
+import { normalizePlans, type PlanCatalog } from "../plans.js";
 
 function json(obj: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(obj, null, 2) }] };
@@ -30,7 +30,7 @@ export function registerManagementTools(
   server: McpServer,
   adapter: BillingAdapter,
   _config: ResolvedConfig,
-  opts: { plans?: PlansConfig } = {},
+  opts: { plans?: PlanCatalog } = {},
 ) {
   server.tool(
     "get_usage",
@@ -59,9 +59,10 @@ number of days instead of the calendar month.`,
   if (!adapter.getOrgMetadata || !adapter.setOrgMetadata) return;
 
   // Union of seat-type keys across all plans, for validating assign_seat_type.
+  // Through the model, so it works whichever shape the config is written in.
   const knownSeatTypes = new Set<string>();
-  for (const def of Object.values(opts.plans ?? {})) {
-    for (const t of Object.keys(def.seatTypes ?? {})) knownSeatTypes.add(t);
+  for (const model of normalizePlans(opts.plans ?? {})) {
+    for (const seat of model.seatTypes) knownSeatTypes.add(seat.key);
   }
 
   server.tool(

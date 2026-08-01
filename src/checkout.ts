@@ -5,6 +5,7 @@ import {
   lookupKeyFor,
   resolvePlanPrices,
   type PlanPrices,
+  type PlanCatalog,
 } from "./plans.js";
 import type { BillingInterval, PlansConfig } from "./plans.js";
 
@@ -109,7 +110,7 @@ export type CheckoutSessionResult = {
  * line, and "no Premium seats" must mean "no Premium line").
  */
 export async function createCheckoutSession(opts: {
-  plans: PlansConfig;
+  plans: PlanCatalog;
   plan: string;
   interval: BillingInterval;
   seats: Quantities;
@@ -249,7 +250,7 @@ export function forgetCheckoutSession(sessionId: string): void {
 }
 
 async function openCheckoutSession(opts: {
-  plans: PlansConfig;
+  plans: PlanCatalog;
   plan: string;
   interval: BillingInterval;
   seats: Quantities;
@@ -407,7 +408,7 @@ export type SubscriptionResult = {
  * line, and "no Premium seats" must mean "no Premium line".
  */
 export async function createSubscription(opts: {
-  plans: PlansConfig;
+  plans: PlanCatalog;
   plan: string;
   interval: BillingInterval;
   seats: Quantities;
@@ -534,7 +535,7 @@ export async function createSubscription(opts: {
  */
 export async function updateSubscription(opts: {
   subscriptionId: string;
-  plans: PlansConfig;
+  plans: PlanCatalog;
   plan: string;
   interval: BillingInterval;
   seats: Quantities;
