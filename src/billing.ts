@@ -488,6 +488,12 @@ export async function tryAutoReload(
         collection_method: "charge_automatically",
         default_payment_method: pms.data[0].id,
         auto_advance: false,
+        // Explicit, and load-bearing: for a customer who HAS a subscription,
+        // Stripe otherwise leaves the pending item off this invoice and sweeps
+        // it onto the next subscription invoice instead. Measured — the reload
+        // invoice came back paid, numbered, and totalling zero, while the tokens
+        // appeared on the renewal a month later.
+        pending_invoice_items_behavior: "include",
         description: `Auto-reload: ${tokensNeeded} tokens`,
         ...(!taxRates && opts.automaticTax ? { automatic_tax: { enabled: true } } : {}),
         metadata: { auto_reload: "true", tokens: String(tokensNeeded) },

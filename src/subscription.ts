@@ -495,18 +495,21 @@ export interface PlanChangePreview {
   kind: "immediate" | "scheduled" | "checkout" | "canceling" | "noop";
   currency: string;
   /**
-   * Charged (or refunded, if negative) NOW, in minor units.
+   * Charged NOW, in minor units.
    *
-   * This is the prorated difference: the unused remainder of what they are on,
-   * credited against the cost of what they are moving to. Zero for a change that
-   * takes effect at the period boundary, which is the honest answer — a
-   * downgrade charges nothing today.
+   * Only `proration: "invoice_now"` charges anything today; the default
+   * (`next_invoice`) defers the prorated difference to the next invoice, and a
+   * period-end change charges nothing at all. Getting this wrong is not a
+   * rounding error — quoting the upcoming invoice as if it were due immediately
+   * told a customer €197.64 for an upgrade that charged €87.84.
    */
   dueNow: number;
-  /** The credit half of that arithmetic, positive, for surfaces that itemise it. */
+  /** What the NEXT invoice comes to — including any deferred proration. */
+  nextInvoiceTotal: number;
+  /** The steady-state amount per period once the change has settled. */
+  recurringTotal: number;
+  /** The credit for the unused remainder of the current plan, positive. */
   credit: number;
-  /** The recurring amount from the next full period onward. */
-  nextTotal: number | null;
   /** When the change takes effect — now, or the period end for a scheduled one. */
   effectiveAt: string | null;
   /** The proration lines Stripe would write, for an itemised summary. */
@@ -533,6 +536,9 @@ export async function previewPlanChange(
     to: { plan: string; interval?: BillingInterval; seats?: Quantities };
     currency?: string;
     timing?: PlanChangeTiming;
+    /** Must match what you will pass to `changePlan` — it decides whether the
+     *  prorated difference is billed today or deferred to the next invoice. */
+    proration?: ProrationPolicy;
     taxRates?: string[];
     subscriptionId?: string;
   },
@@ -547,8 +553,9 @@ export async function previewPlanChange(
     kind,
     currency,
     dueNow: 0,
+    nextInvoiceTotal: 0,
+    recurringTotal: 0,
     credit: 0,
-    nextTotal: null,
     effectiveAt,
     lines: [],
   });
@@ -585,33 +592,28 @@ export async function previewPlanChange(
   const currentModel = currentPlanKey ? planModel(opts.plans, currentPlanKey) : null;
   const isDowngrade = currentModel ? planRank(target) < planRank(currentModel) : false;
   const timing = opts.timing ?? "auto";
-  if (timing === "period_end" || (timing === "auto" && isDowngrade)) {
-    // Nothing is charged today. What the customer wants to know is the new
-    // recurring amount, which is the preview with the change applied at the
-    // boundary — no proration lines at all.
-    const at = await stripe.invoices.createPreview({
+  // Both previews, always: the recurring one is the ONLY exact way to separate
+  // the prorated difference from the next period's regular charge. Stripe's
+  // preview returns the whole upcoming invoice, so reading `amount_due` as "due
+  // now" quoted €197.64 for an upgrade that charged €87.84 — the recurring line
+  // counted twice. Differencing the two is Stripe's own arithmetic on both sides.
+  const [recurring, prorated] = await Promise.all([
+    stripe.invoices.createPreview({
       customer: customerId,
       subscription: sub.id,
       subscription_details: { items, proration_behavior: "none" },
-    });
-    return {
-      kind: "scheduled",
-      currency: at.currency ?? currency,
-      dueNow: 0,
-      credit: 0,
-      nextTotal: at.total,
-      effectiveAt: periodEndOf(sub),
-      lines: [],
-    };
-  }
+    }),
+    stripe.invoices.createPreview({
+      customer: customerId,
+      subscription: sub.id,
+      subscription_details: { items, proration_behavior: "create_prorations" },
+    }),
+  ]);
 
-  const preview = await stripe.invoices.createPreview({
-    customer: customerId,
-    subscription: sub.id,
-    subscription_details: { items, proration_behavior: "create_prorations" },
-  });
+  const recurringTotal = recurring.total;
+  const prorationTotal = prorated.total - recurring.total;
 
-  const lines = preview.lines.data.map((l) => ({
+  const lines = prorated.lines.data.map((l) => ({
     description: l.description ?? "",
     amount: l.amount,
     proration: Boolean((l as unknown as { proration?: boolean }).proration),
@@ -619,12 +621,33 @@ export async function previewPlanChange(
   // The credit for the unused remainder arrives as negative proration lines.
   const credit = lines.filter((l) => l.proration && l.amount < 0).reduce((s, l) => s - l.amount, 0);
 
+  if (timing === "period_end" || (timing === "auto" && isDowngrade)) {
+    // Nothing is charged today, and no proration is raised at all: the customer
+    // keeps what they paid for and the new price starts at the boundary.
+    return {
+      kind: "scheduled",
+      currency: recurring.currency ?? currency,
+      dueNow: 0,
+      nextInvoiceTotal: recurringTotal,
+      recurringTotal,
+      credit: 0,
+      effectiveAt: periodEndOf(sub),
+      lines: [],
+    };
+  }
+
+  // Only `invoice_now` bills the difference today. The default defers it to the
+  // next invoice, which is then the proration plus the regular charge.
+  const billsNow = (opts.proration ?? "next_invoice") === "invoice_now";
+  const defersProration = (opts.proration ?? "next_invoice") === "next_invoice";
+
   return {
     kind: "immediate",
-    currency: preview.currency ?? currency,
-    dueNow: preview.amount_due,
+    currency: prorated.currency ?? currency,
+    dueNow: billsNow ? prorationTotal : 0,
+    nextInvoiceTotal: defersProration ? prorated.total : recurringTotal,
+    recurringTotal,
     credit,
-    nextTotal: preview.total,
     effectiveAt: new Date().toISOString(),
     lines,
   };

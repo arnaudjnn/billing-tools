@@ -79,8 +79,12 @@ change_plan — the numbers come from the same arithmetic, so they agree.`,
         .enum(["auto", "now", "period_end"])
         .optional()
         .describe("Default `auto`: upgrades apply now, downgrades at the period end"),
+      proration: z
+        .enum(["next_invoice", "invoice_now", "none"])
+        .optional()
+        .describe("Must match what you pass to change_plan — it decides whether the difference is billed today"),
     },
-    async ({ plan, interval, seats, timing }) => {
+    async ({ plan, interval, seats, timing, proration }) => {
       const auth = await enforceAdmin(adapter, "preview_plan_change");
       if ("isError" in auth) return auth;
       if (!stripeConfigured()) return err("Billing is not configured (STRIPE_SECRET_KEY unset).");
@@ -90,14 +94,16 @@ change_plan — the numbers come from the same arithmetic, so they agree.`,
           to: { plan, interval, seats },
           currency: config.currency,
           timing,
+          proration,
           taxRates: await rates(auth.orgId),
         });
         return json({
           outcome: p.kind,
           currency: p.currency,
           due_now: p.dueNow,
+          next_invoice_total: p.nextInvoiceTotal,
+          recurring_total: p.recurringTotal,
           credit_applied: p.credit,
-          recurring_total: p.nextTotal,
           effective_at: p.effectiveAt,
           lines: p.lines,
         });
