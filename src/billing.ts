@@ -410,52 +410,179 @@ export async function tryAutoReload(
   }
 }
 
-export async function listInvoices(
-  stripeCustomerId: string,
-  limit = 10,
-): Promise<
-  Array<{
-    id: string;
-    type: string;
-    number: string | null;
-    amount: number;
-    status: string | null;
-    created: string;
-    invoice_url: string | null;
-    invoice_pdf: string | null;
-  }>
-> {
+// ── Invoices ────────────────────────────────────────────────────────────────
+// One shape for both things a customer can be shown as "a bill": a real Stripe
+// invoice (subscriptions, top-ups bought through Checkout) and a bare charge
+// from an off-session auto-reload, which produces a receipt and no invoice.
+
+export interface InvoiceEntry {
+  id: string;
+  /** `purchase` = a Stripe invoice; `auto_reload` = a bare off-session charge. */
+  type: "purchase" | "auto_reload";
+  number: string | null;
+  /**
+   * What to SHOW, in minor units: the amount paid once settled, the amount
+   * still owed while open. Reading `amount_paid` alone renders every open
+   * invoice as zero, which is the one number a customer must not be shown.
+   */
+  amount: number;
+  amount_paid: number;
+  amount_due: number;
+  currency: string;
+  /** Stripe's own status: draft | open | paid | uncollectible | void. */
+  status: string | null;
+  paid: boolean;
+  created: string;
+  /** Due date of an open invoice, ISO; null when Stripe set none. */
+  due_date: string | null;
+  /** A human line for the row: the invoice description, else its first line. */
+  description: string | null;
+  invoice_url: string | null;
+  invoice_pdf: string | null;
+}
+
+function toInvoiceEntry(inv: Stripe.Invoice): InvoiceEntry {
+  const paid = inv.status === "paid";
+  return {
+    id: inv.id!,
+    type: "purchase",
+    number: inv.number,
+    amount: paid ? inv.amount_paid : inv.amount_due,
+    amount_paid: inv.amount_paid,
+    amount_due: inv.amount_due,
+    currency: inv.currency,
+    status: inv.status,
+    paid,
+    created: new Date(inv.created * 1000).toISOString(),
+    due_date: inv.due_date ? new Date(inv.due_date * 1000).toISOString() : null,
+    description: inv.description ?? inv.lines?.data[0]?.description ?? null,
+    invoice_url: inv.hosted_invoice_url ?? null,
+    invoice_pdf: inv.invoice_pdf ?? null,
+  };
+}
+
+function toChargeEntry(ch: Stripe.Charge): InvoiceEntry {
+  return {
+    id: ch.id!,
+    type: "auto_reload",
+    number: null,
+    amount: ch.amount,
+    amount_paid: ch.status === "succeeded" ? ch.amount : 0,
+    amount_due: ch.status === "succeeded" ? 0 : ch.amount,
+    currency: ch.currency,
+    // Mapped onto invoice vocabulary so one UI can render both rows.
+    status: ch.status === "succeeded" ? "paid" : "open",
+    paid: ch.status === "succeeded",
+    created: new Date(ch.created * 1000).toISOString(),
+    due_date: null,
+    description: ch.description ?? null,
+    // A receipt page, not a PDF, hence no invoice_pdf for this row.
+    invoice_url: ch.receipt_url ?? null,
+    invoice_pdf: null,
+  };
+}
+
+export async function listInvoices(stripeCustomerId: string, limit = 10): Promise<InvoiceEntry[]> {
   const stripe = getStripe();
   const [invoices, charges] = await Promise.all([
     stripe.invoices.list({ customer: stripeCustomerId, limit }),
     stripe.charges.list({ customer: stripeCustomerId, limit }),
   ]);
 
-  const invoiceEntries = invoices.data.map((inv) => ({
-    id: inv.id!,
-    type: "purchase" as const,
-    number: inv.number,
-    amount: inv.amount_paid,
-    status: inv.status,
-    created: new Date(inv.created * 1000).toISOString(),
-    invoice_url: inv.hosted_invoice_url ?? null,
-    invoice_pdf: inv.invoice_pdf ?? null,
-  }));
-
+  // Only auto-reload charges: every other charge on the customer is the
+  // settlement of an invoice already listed above, and would double the row.
   const autoReloadCharges = charges.data
     .filter((ch) => ch.metadata?.auto_reload === "true" && ch.status === "succeeded")
-    .map((ch) => ({
-      id: ch.id!,
-      type: "auto_reload" as const,
-      number: null,
-      amount: ch.amount,
-      status: ch.status,
-      created: new Date(ch.created * 1000).toISOString(),
-      invoice_url: ch.receipt_url ?? null,
-      invoice_pdf: null,
-    }));
+    .map(toChargeEntry);
 
-  return [...invoiceEntries, ...autoReloadCharges]
+  return [...invoices.data.map(toInvoiceEntry), ...autoReloadCharges]
     .sort((a, b) => new Date(b.created).getTime() - new Date(a.created).getTime())
     .slice(0, limit);
+}
+
+// The customer on an invoice/charge, whether expanded or a bare id.
+function customerIdOf(ref: string | Stripe.Customer | Stripe.DeletedCustomer | null): string | null {
+  if (!ref) return null;
+  return typeof ref === "string" ? ref : ref.id;
+}
+
+/**
+ * One invoice (or auto-reload charge) belonging to `stripeCustomerId`.
+ *
+ * **The ownership check is the point.** An invoice id is guessable-adjacent and
+ * these are exposed as a tool and a server action, so a retrieve that didn't
+ * compare the customer would hand any caller anyone else's invoice. Not theirs
+ * (or gone) → null, which every caller renders as "not found"; the two are
+ * deliberately indistinguishable to the caller.
+ */
+export async function getInvoice(
+  stripeCustomerId: string,
+  invoiceId: string,
+): Promise<InvoiceEntry | null> {
+  const stripe = getStripe();
+  try {
+    if (invoiceId.startsWith("ch_")) {
+      const charge = await stripe.charges.retrieve(invoiceId);
+      if (customerIdOf(charge.customer) !== stripeCustomerId) return null;
+      return toChargeEntry(charge);
+    }
+    const invoice = await stripe.invoices.retrieve(invoiceId);
+    if (customerIdOf(invoice.customer) !== stripeCustomerId) return null;
+    return toInvoiceEntry(invoice);
+  } catch (e) {
+    if (e instanceof Stripe.errors.StripeInvalidRequestError) return null;
+    throw e;
+  }
+}
+
+/**
+ * The PDF link for one of the customer's invoices, ownership-checked.
+ *
+ * Stripe's `invoice_pdf` is a long-lived unauthenticated URL, so this is what a
+ * download button opens. Null when the row has no PDF at all: a draft invoice,
+ * or an auto-reload charge (a receipt page: use `invoice_url` for those).
+ */
+export async function invoicePdfUrl(
+  stripeCustomerId: string,
+  invoiceId: string,
+): Promise<string | null> {
+  const entry = await getInvoice(stripeCustomerId, invoiceId);
+  return entry?.invoice_pdf ?? null;
+}
+
+// The same three, keyed on an org instead of a Stripe customer, which is what
+// a UI actually has. An org that never paid has no customer and therefore no
+// invoices: that is the normal state of a free workspace, so it reads as an
+// empty list, NOT an error, and never creates a customer just to render a page.
+
+/** The org's recent invoices, newest first. Empty when billing never started. */
+export async function listOrgInvoices(
+  adapter: BillingAdapter,
+  orgId: string,
+  limit = 10,
+): Promise<InvoiceEntry[]> {
+  const customerId = await adapter.getBillingCustomerId(orgId);
+  if (!customerId) return [];
+  return listInvoices(customerId, limit);
+}
+
+/** One of the org's invoices, or null when it isn't theirs / doesn't exist. */
+export async function getOrgInvoice(
+  adapter: BillingAdapter,
+  orgId: string,
+  invoiceId: string,
+): Promise<InvoiceEntry | null> {
+  const customerId = await adapter.getBillingCustomerId(orgId);
+  if (!customerId) return null;
+  return getInvoice(customerId, invoiceId);
+}
+
+/** PDF link for one of the org's invoices; null when it has none. */
+export async function orgInvoicePdfUrl(
+  adapter: BillingAdapter,
+  orgId: string,
+  invoiceId: string,
+): Promise<string | null> {
+  const entry = await getOrgInvoice(adapter, orgId, invoiceId);
+  return entry?.invoice_pdf ?? null;
 }

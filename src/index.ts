@@ -53,8 +53,14 @@ export {
   setAutoReloadSettings,
   tryAutoReload,
   listInvoices,
+  getInvoice,
+  invoicePdfUrl,
+  listOrgInvoices,
+  getOrgInvoice,
+  orgInvoicePdfUrl,
   listSubscriptionPrices,
   resolveSubscriptionPrice,
+  type InvoiceEntry,
   type StripePrice,
 } from "./billing.js";
 

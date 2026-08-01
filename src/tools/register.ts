@@ -139,6 +139,8 @@ export const BILLING_TOOL_NAMES = [
   "set_auto_reload",
   "get_billing_portal",
   "list_invoices",
+  "view_invoice",
+  "download_invoice",
   // Workspace-management tools (registerManagementTools).
   "get_usage",
   "list_seats",
