@@ -1,3 +1,16 @@
+# [0.46.0](https://github.com/arnaudjnn/billing-tools/compare/v0.45.0...v0.46.0) (2026-08-01)
+
+
+### Bug Fixes
+
+* **ui:** stop useCheckoutTax looping on the session snapshot ([493364e](https://github.com/arnaudjnn/billing-tools/commit/493364ea05114d095433139c34e43f15e6f42ece))
+
+
+### Features
+
+* **ui:** AuthKitSessionProvider — make useSession() answer on static pages too ([e6bc25c](https://github.com/arnaudjnn/billing-tools/commit/e6bc25c627909b86dc9366cba9f2d4f4831c6f84))
+* **ui:** expose loading on the session ([99755a1](https://github.com/arnaudjnn/billing-tools/commit/99755a11f5987c76e3296afdec0db02812e98e5e))
+
 # [0.45.0](https://github.com/arnaudjnn/billing-tools/compare/v0.44.0...v0.45.0) (2026-08-01)
 
 
