@@ -1,3 +1,10 @@
+# [0.43.0](https://github.com/arnaudjnn/billing-tools/compare/v0.42.0...v0.43.0) (2026-08-01)
+
+
+### Features
+
+* **session:** one DB-free useSession() for user, org role and plan ([0458283](https://github.com/arnaudjnn/billing-tools/commit/0458283e24b2fd6d6ce90c92fa2930c67786593d))
+
 # [0.42.0](https://github.com/arnaudjnn/billing-tools/compare/v0.41.0...v0.42.0) (2026-07-31)
 
 
