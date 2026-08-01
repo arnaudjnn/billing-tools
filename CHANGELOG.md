@@ -1,3 +1,10 @@
+## [0.64.3](https://github.com/arnaudjnn/billing-tools/compare/v0.64.2...v0.64.3) (2026-08-01)
+
+
+### Bug Fixes
+
+* **topup:** grant_top_up is an admin action, and reachable from the CLI ([eaf31af](https://github.com/arnaudjnn/billing-tools/commit/eaf31af5c80ed34da0235e8b8ef1c4bf6d54202c))
+
 ## [0.64.2](https://github.com/arnaudjnn/billing-tools/compare/v0.64.1...v0.64.2) (2026-08-01)
 
 
