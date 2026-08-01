@@ -1,3 +1,10 @@
+# [0.53.0](https://github.com/arnaudjnn/billing-tools/compare/v0.52.0...v0.53.0) (2026-08-01)
+
+
+### Features
+
+* **billing:** currency-correct balances and a subscription price migration ([2379561](https://github.com/arnaudjnn/billing-tools/commit/23795615d0ce673f9052ae7f9a9df9314f2881aa))
+
 # [0.52.0](https://github.com/arnaudjnn/billing-tools/compare/v0.51.0...v0.52.0) (2026-08-01)
 
 
