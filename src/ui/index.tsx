@@ -689,3 +689,132 @@ export {
   type BillingSession,
   type SessionUser,
 } from "./session.js";
+
+// ── useCheckoutTax ───────────────────────────────────────────────────────────
+// Keeps an open Checkout Session's tax correct as the buyer types their address.
+//
+// This is the client half of computing tax locally instead of paying for Stripe
+// Tax. The session is created with the seller's domestic rate, because at
+// creation nobody knows where the buyer is; the rate is only knowable once the
+// address element has a country. Without this hook the session keeps the rate it
+// was born with, and a German buyer is charged Italian VAT.
+//
+// The server work — resolve the rate, apply it to the line items — is the app's
+// `retax` action over `taxRatesFor` + `updateCheckoutSessionTaxRates`. It runs
+// inside `runServerUpdate` so Stripe re-reads the session afterwards and every
+// total on screen (`useCheckoutTotals`) refreshes with it.
+//
+// Note what this deliberately does NOT do: write the tax id to the customer.
+// `updateTaxIdInfo` belongs to `useBillingTaxId`, and only when a number was
+// actually collected — an app that shows no tax field must not push an empty one.
+
+export type CheckoutTaxInput = {
+  country: string;
+  state?: string | null;
+  taxNumber?: string | null;
+};
+
+export type CheckoutRetaxResult =
+  | { ok: true; percent: number; reverseCharge: boolean }
+  | { ok: false; error: string };
+
+export type CheckoutTaxState = {
+  /** Applied rate, e.g. 22. Null until the first calculation lands. */
+  percent: number | null;
+  /** The buyer accounts for the VAT — cross-border EU B2B with a valid number. */
+  reverseCharge: boolean;
+  /** A recalculation is in flight; the totals on screen are the previous ones. */
+  pending: boolean;
+  error: string | null;
+};
+
+/**
+ * Re-tax the session whenever the billing country, state or tax number changes.
+ *
+ * Call inside `BillingCheckoutSessionProvider`. Pass `taxNumber` only if the app
+ * collects one (see `useBillingTaxId`); omitting it simply means every buyer is
+ * treated as a consumer, which is the safe default — it charges tax rather than
+ * exempting.
+ */
+export function useCheckoutTax(opts: {
+  retax: (input: CheckoutTaxInput) => Promise<CheckoutRetaxResult>;
+  taxNumber?: string | null;
+  /** Wait before recalculating, ms. Default 400. */
+  debounceMs?: number;
+}): CheckoutTaxState {
+  const { retax, taxNumber = null, debounceMs = 400 } = opts;
+  const result = useCheckoutElements();
+  const checkout = result.type === "success" ? result.checkout : null;
+
+  const country = checkout?.billingAddress?.address?.country ?? null;
+  const state = checkout?.billingAddress?.address?.state ?? null;
+
+  const [tax, setTax] = React.useState<CheckoutTaxState>({
+    percent: null,
+    reverseCharge: false,
+    pending: false,
+    error: null,
+  });
+
+  // Latest-wins. Address elements emit on every keystroke, so several
+  // recalculations can be in flight; without this an earlier, slower response
+  // would overwrite a later one and display the wrong rate.
+  const runId = React.useRef(0);
+  // What the session is currently taxed for. Prevents re-running for a change
+  // that doesn't affect the answer (a street edit, a re-render).
+  const appliedFor = React.useRef<string | null>(null);
+  // Read through a ref so a caller passing an inline arrow doesn't re-trigger
+  // the effect on every render.
+  const retaxRef = React.useRef(retax);
+  retaxRef.current = retax;
+
+  React.useEffect(() => {
+    if (!checkout || !country) return;
+    const key = `${country}|${state ?? ""}|${taxNumber ?? ""}`;
+    if (appliedFor.current === key) return;
+
+    const id = ++runId.current;
+    setTax((t) => ({ ...t, pending: true }));
+
+    const timer = setTimeout(async () => {
+      // A box, not a plain `let`: assigned inside a callback, which
+      // TypeScript's control-flow analysis cannot see, so a bare variable stays
+      // narrowed to its initial `null` at the read below.
+      const box: { outcome: CheckoutRetaxResult | null } = { outcome: null };
+      const update = await checkout.runServerUpdate(async () => {
+        const r = await retaxRef.current({ country, state, taxNumber });
+        box.outcome = r;
+        // Throwing aborts the update, so Stripe doesn't re-read a session the
+        // server declined to change.
+        if (!r.ok) throw new Error(r.error);
+        return r;
+      });
+      if (id !== runId.current) return;
+
+      const settled = box.outcome;
+      if (update.type === "error" || !settled?.ok) {
+        setTax((t) => ({
+          ...t,
+          pending: false,
+          error:
+            (settled && !settled.ok ? settled.error : null) ??
+            (update.type === "error"
+              ? (update.error.message ?? "Tax calculation failed")
+              : null),
+        }));
+        return;
+      }
+      appliedFor.current = key;
+      setTax({
+        percent: settled.percent,
+        reverseCharge: settled.reverseCharge,
+        pending: false,
+        error: null,
+      });
+    }, debounceMs);
+
+    return () => clearTimeout(timer);
+  }, [checkout, country, state, taxNumber, debounceMs]);
+
+  return tax;
+}
