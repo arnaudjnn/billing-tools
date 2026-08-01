@@ -21,6 +21,21 @@ export {
   enforceTokens,
 } from "./auth.js";
 
+// The two SDK clients. Both are memoised singletons that read the env lazily,
+// and they are the only constructors anywhere — including in consuming apps.
+// A second `new WorkOS(...)` in a route handler is a second client (and, per
+// request, a second connection pool) reading the same key to do the same thing.
+export { getWorkOS } from "./workos.js";
+
+// Pattern B: the app's own row 1:1 with a WorkOS org. Supplies the adapter's
+// `map` and the membership helpers every mirror app would otherwise rewrite.
+export {
+  createWorkOSOrgMirror,
+  ALL_MEMBERSHIP_STATUSES,
+  type WorkOSOrgMirror,
+  type WorkOSOrgMirrorOptions,
+} from "./org-mirror.js";
+
 // Billing engine (Stripe math)
 export {
   getStripe,
