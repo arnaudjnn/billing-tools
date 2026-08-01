@@ -101,6 +101,18 @@ export interface BillingConfig {
   baseUrl: string;
   /** Domains whose orgs are unmetered (internal). Default []. */
   internalDomains?: string[];
+  /**
+   * Language new customers get their invoices in, as a BCP-47 code.
+   *
+   * Stripe's own fallback is English, which is wrong for a product sold in one
+   * country: a settings screen showing "Italian" as the default while Stripe
+   * mails English invoices is a lie the user only discovers on the first
+   * invoice. Setting it at customer creation makes the default real.
+   *
+   * Existing customers are untouched — this is a default, not a migration.
+   * Default: unset, i.e. Stripe's English.
+   */
+  defaultLocale?: string;
 }
 
 export type ResolvedConfig = Required<BillingConfig>;
@@ -111,6 +123,7 @@ export function resolveConfig(c: BillingConfig): ResolvedConfig {
     currency: c.currency ?? "usd",
     baseUrl: c.baseUrl,
     internalDomains: c.internalDomains ?? [],
+    defaultLocale: c.defaultLocale ?? "",
   };
 }
 

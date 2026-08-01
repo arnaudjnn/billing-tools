@@ -148,6 +148,10 @@ export async function ensureStripeCustomer(
   const customer = await stripe.customers.create({
     email,
     metadata: { org_id: orgId },
+    // Ordered list, but one entry: the app configures a single default.
+    ...(config.defaultLocale
+      ? { preferred_locales: [config.defaultLocale] }
+      : {}),
   });
   if (config.freeTokens > 0) {
     // Idempotency key so a race on first-use (two concurrent callers) can't
