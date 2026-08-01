@@ -156,6 +156,16 @@ export function registerBillingCommands(program: Command, opts: CliOptions) {
       print(await callTool(requireConfig(), "request_top_up", args));
     });
   topup
+    .command("grant <member_id> [percent]")
+    .description("Grant a member extra allowance now, without waiting for a request (default +25%)")
+    .option("--tokens <n>", "Absolute tokens instead of a percentage", (v) => parseInt(v, 10))
+    .action(async (memberId: string, percent: string | undefined, o: { tokens?: number }) => {
+      const args: Record<string, unknown> = { member_id: memberId };
+      if (o.tokens) args.tokens = o.tokens;
+      else if (percent) args.percent = parseInt(percent, 10);
+      print(await callTool(requireConfig(), "grant_top_up", args));
+    });
+  topup
     .command("approve <request_id>")
     .description("Approve a pending top-up request (grants the extra tokens)")
     .action(async (id: string) => print(await callTool(requireConfig(), "approve_top_up", { request_id: id })));

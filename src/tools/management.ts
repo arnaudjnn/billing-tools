@@ -250,8 +250,7 @@ member for the cycle (added on top of their seat pack by the meter).`,
   server.tool(
     "grant_top_up",
     `Grant a member extra allowance for the current cycle WITHOUT waiting for them to
-request it, as a percentage of their own seat pack (default 25%). Admin action: the
-caller's own permission is checked by the app, not here.`,
+request it, as a percentage of their own seat pack (default 25%). Admin action.`,
     {
       member_id: z.string().describe("WorkOS user id of the member to top up"),
       percent: z
@@ -269,7 +268,10 @@ caller's own permission is checked by the app, not here.`,
         .describe("Absolute tokens instead of a percentage"),
     },
     async ({ member_id, percent, tokens }) => {
-      const auth = await enforceAccess(adapter);
+      // Guarded like approve_top_up, and more so: this hands out allowance with
+      // no request behind it, so leaving it open while approval is checked would
+      // let a member simply grant themselves what they would have had to ask for.
+      const auth = await enforceAdmin(adapter, "grant_top_up");
       if ("isError" in auth) return auth;
       if (!opts.plans) return err("No plans configured.");
 

@@ -62,6 +62,16 @@ Deliberate exceptions (already SDK-first everywhere else — don't "fix" these):
 - `invitations.accept` reimplements acceptance via `createOrganizationMembership` + `revokeInvitation`: WorkOS's own accept needs the invited user's session.
 - `auth.ts:enforceAccess` emits the literal `"Unauthorized (401)"` string the REST/MCP route factories pattern-match downstream — a cross-layer wire contract.
 
+## The tool surface, and the parity rule
+
+**30 tools.** Keys (3) · wallet (3) · invoices (4) · usage (2) · seats (2) · top-ups (5) · plans (1) · billing account (6) · lifecycle (4).
+
+**The rule: anything the app's own UI can do, an API / CLI / MCP caller can do too.** REST and MCP get this structurally — `createDispatcher` monkey-patches `server.tool`, so every registered tool is an endpoint with no extra wiring — and `test/surface.test.mjs` asserts the tools exist and that `BILLING_TOOL_NAMES` matches what registration actually produces. The CLI is hand-written and covers 29/30; `get_api_key` is the exception, because the `auth` command already performs that flow.
+
+This was NOT true before the audit: plan changes, payment methods, the billing profile and the tax id existed as library functions and as app UI and as nothing else. When adding a capability, register the tool in the same change — a function reachable only from a React component is the failure mode this rule exists to prevent.
+
+`registerBillingTools` gates two groups: `profileTools` (default on) and `subscriptionTools` (default on when `plans` is set), so an app that keeps plan changes in its own UI can pass `false`.
+
 ## Who is calling — org vs principal (`src/auth.ts`)
 
 Every call resolves to an **org**. An org API key means exactly that: the org, with no person behind it, which is what a headless agent holds. So org-keyed calls are owner-level, deliberately and unchanged.
