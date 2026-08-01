@@ -1,3 +1,10 @@
+## [0.63.3](https://github.com/arnaudjnn/billing-tools/compare/v0.63.2...v0.63.3) (2026-08-01)
+
+
+### Bug Fixes
+
+* **i18n:** the payment form still spoke Italian ([1d4376b](https://github.com/arnaudjnn/billing-tools/commit/1d4376b047e890ede61695e1fed6317c7091d980))
+
 ## [0.63.2](https://github.com/arnaudjnn/billing-tools/compare/v0.63.1...v0.63.2) (2026-08-01)
 
 
