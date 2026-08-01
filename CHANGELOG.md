@@ -1,3 +1,17 @@
+# [0.64.0](https://github.com/arnaudjnn/billing-tools/compare/v0.63.3...v0.64.0) (2026-08-01)
+
+
+### Bug Fixes
+
+* **billing:** the four money defects the QA pass found ([33e256f](https://github.com/arnaudjnn/billing-tools/commit/33e256f393ce1842a0a250dbfab85918e6b8ed6e))
+
+
+### Features
+
+* **auth:** a caller can identify itself, and admin tools check the role ([9257919](https://github.com/arnaudjnn/billing-tools/commit/9257919509d463512d272624446c42a639f7d2c5))
+* **tools:** everything the billing UI can do is now a tool, and the CLI has it too ([0813436](https://github.com/arnaudjnn/billing-tools/commit/08134366cb9b719071d6bae2fd3405c62e532cc4))
+* **topup:** let an admin grant extra allowance instead of waiting to be asked ([99ed7ae](https://github.com/arnaudjnn/billing-tools/commit/99ed7ae75b20cdc57124c8d631ad656847418089))
+
 ## [0.63.3](https://github.com/arnaudjnn/billing-tools/compare/v0.63.2...v0.63.3) (2026-08-01)
 
 
