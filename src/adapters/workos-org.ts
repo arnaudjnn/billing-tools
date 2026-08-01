@@ -39,11 +39,37 @@ export interface WorkOSOrgAdapterOptions {
   ensureOrg?: (user: BillingUser) => Promise<{ orgId: string }>;
 }
 
+// Two lookups this adapter repeats on nearly every call, both settled for the
+// life of an org: the app-id → WorkOS-org-id mapping (a workspace's org never
+// changes) and the Stripe customer pointer (an org gets one, once). Left
+// uncached they are a WorkOS round trip — and, under Pattern B, a DB query too —
+// on the critical path of every page that touches billing. Measured on a
+// checkout page: ~670ms of the server render, spent re-reading a string.
+//
+// Per process, so a fresh instance simply repeats the read once. Only POSITIVE
+// results are stored: "this org has no customer yet" is the one answer that
+// changes, and caching it would hide the customer created a moment later.
+// `setBillingCustomerId` writes through, and `forget` exists for the rest.
+const CACHE_MAX = 2_000;
+
+function remember(cache: Map<string, string>, key: string, value: string): string {
+  // A plain FIFO cap. An LRU would be better and is not worth a dependency for
+  // a map of id strings that is only unbounded in theory.
+  if (cache.size >= CACHE_MAX) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
+  cache.set(key, value);
+  return value;
+}
+
 export class WorkOSOrgAdapter implements BillingAdapter {
   private apiKey?: string;
   private clientId?: string;
   private map?: WorkOSOrgMap;
   private ensureOrg?: (user: BillingUser) => Promise<{ orgId: string }>;
+  private widCache = new Map<string, string>();
+  private customerCache = new Map<string, string>();
 
   constructor(opts: WorkOSOrgAdapterOptions = {}) {
     this.apiKey = opts.apiKey;
@@ -59,8 +85,25 @@ export class WorkOSOrgAdapter implements BillingAdapter {
   }
 
   /** app orgId → WorkOS org id (identity when no map is configured). */
-  private wid(orgId: string): Promise<string> {
-    return this.map ? this.map.toWorkosOrgId(orgId) : Promise.resolve(orgId);
+  private async wid(orgId: string): Promise<string> {
+    if (!this.map) return orgId;
+    const hit = this.widCache.get(orgId);
+    if (hit) return hit;
+    return remember(this.widCache, orgId, await this.map.toWorkosOrgId(orgId));
+  }
+
+  /** Drop what's cached for an org (its WorkOS org id and Stripe customer
+   *  pointer) — or for every org when called with no argument. Needed only if
+   *  an org is re-pointed at a different WorkOS org or Stripe customer, which
+   *  the normal writes here already handle. */
+  forget(orgId?: string): void {
+    if (orgId === undefined) {
+      this.widCache.clear();
+      this.customerCache.clear();
+      return;
+    }
+    this.widCache.delete(orgId);
+    this.customerCache.delete(orgId);
   }
 
   async validateApiKey(token: string): Promise<{ orgId: string } | null> {
@@ -85,14 +128,16 @@ export class WorkOSOrgAdapter implements BillingAdapter {
   }
 
   async getBillingCustomerId(orgId: string): Promise<string | null> {
+    const hit = this.customerCache.get(orgId);
+    if (hit) return hit;
     const org = await this.workos.organizations.getOrganization(await this.wid(orgId));
     // Native field first (v10); fall back to the legacy metadata pointer so
     // apps that stored it in metadata under v8 don't orphan their customer.
-    return (
+    const customerId =
       org.stripeCustomerId ||
       (org.metadata as Record<string, string> | undefined)?.stripeCustomerId ||
-      null
-    );
+      null;
+    return customerId ? remember(this.customerCache, orgId, customerId) : null;
   }
 
   async setBillingCustomerId(orgId: string, customerId: string): Promise<void> {
@@ -100,6 +145,7 @@ export class WorkOSOrgAdapter implements BillingAdapter {
       organization: await this.wid(orgId),
       stripeCustomerId: customerId,
     });
+    remember(this.customerCache, orgId, customerId);
   }
 
   async ensureOrgForUser(user: BillingUser): Promise<{ orgId: string }> {

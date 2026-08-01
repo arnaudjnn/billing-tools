@@ -202,6 +202,7 @@ export {
 export {
   resolveTax,
   ensureStripeTaxRate,
+  invalidateTaxRates,
   taxRatesFor,
   updateCheckoutSessionTaxRates,
   type TaxDecision,

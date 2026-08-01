@@ -65,36 +65,67 @@ export async function resolveTax(opts: {
  * Reverse charge still gets a rate — 0%, named so the invoice states it, which
  * is what the buyer's accountant needs to see.
  */
+// A Stripe TaxRate is immutable, and there is one per (country, percent, name)
+// — so the id, once found, is the answer forever. Without this memo the lookup
+// below is a full `taxRates.list` on every call: once per checkout session, and
+// again on every address change while the customer types, each ~180ms of the
+// wait before the total updates.
+//
+// Per process, and keyed by everything that identifies the rate. In-flight calls
+// share one lookup, so a burst of keystrokes doesn't open a burst of requests.
+const rateCache = new Map<string, string | null>();
+const rateInflight = new Map<string, Promise<string | null>>();
+
+/** Forget the resolved TaxRate ids — for when one is archived in the Dashboard
+ *  and Stripe starts rejecting it. */
+export function invalidateTaxRates(): void {
+  rateCache.clear();
+}
+
 export async function ensureStripeTaxRate(
   decision: TaxDecision,
   opts: { displayName?: string } = {},
 ): Promise<string | null> {
-  const stripe = getStripe();
   if (decision.percent === 0 && !decision.reverseCharge) return null;
 
   const displayName =
     opts.displayName ??
     (decision.reverseCharge ? "Reverse charge" : decision.type === "gst" ? "GST" : "VAT");
 
-  const existing = (await stripe.taxRates.list({ active: true, limit: 100 })).data.find(
-    (r) =>
-      r.percentage === decision.percent &&
-      r.country === decision.country &&
-      r.inclusive === false &&
-      r.display_name === displayName,
-  );
-  if (existing) return existing.id;
+  const key = `${decision.country}|${decision.percent}|${displayName}|${decision.reverseCharge}`;
+  const hit = rateCache.get(key);
+  if (hit !== undefined) return hit;
+  const pending = rateInflight.get(key);
+  if (pending) return pending;
 
-  const created = await stripe.taxRates.create({
-    display_name: displayName,
-    percentage: decision.percent,
-    country: decision.country,
-    inclusive: false,
-    ...(decision.reverseCharge
-      ? { description: "VAT reverse charge — customer accounts for VAT" }
-      : {}),
-  });
-  return created.id;
+  const resolve = (async () => {
+    const stripe = getStripe();
+    const existing = (await stripe.taxRates.list({ active: true, limit: 100 })).data.find(
+      (r) =>
+        r.percentage === decision.percent &&
+        r.country === decision.country &&
+        r.inclusive === false &&
+        r.display_name === displayName,
+    );
+    const id =
+      existing?.id ??
+      (
+        await stripe.taxRates.create({
+          display_name: displayName,
+          percentage: decision.percent,
+          country: decision.country,
+          inclusive: false,
+          ...(decision.reverseCharge
+            ? { description: "VAT reverse charge — customer accounts for VAT" }
+            : {}),
+        })
+      ).id;
+    rateCache.set(key, id);
+    return id;
+  })().finally(() => rateInflight.delete(key));
+
+  rateInflight.set(key, resolve);
+  return resolve;
 }
 
 /** resolveTax + ensureStripeTaxRate: the ids to put on a session's line items. */
