@@ -1,3 +1,10 @@
+## [0.58.1](https://github.com/arnaudjnn/billing-tools/compare/v0.58.0...v0.58.1) (2026-08-01)
+
+
+### Bug Fixes
+
+* **address:** prefill the name, or Save can never enable ([8014af0](https://github.com/arnaudjnn/billing-tools/commit/8014af0f14a0ed9ceb6daed49c8329250fa398a3))
+
 # [0.58.0](https://github.com/arnaudjnn/billing-tools/compare/v0.57.0...v0.58.0) (2026-08-01)
 
 
