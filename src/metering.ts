@@ -1,15 +1,9 @@
-import {
-  deductTokens,
-  getBillingCustomerId,
-  getTokenBalance,
-  stripeConfigured,
-  tryAutoReload,
-  usageSince,
-} from "./billing.js";
+import { deductTokens, getBillingCustomerId, stripeConfigured, tryAutoReload } from "./billing.js";
 import { isInternalOrg } from "./auth.js";
-import { extraAllowance } from "./topup.js";
+import { describeDenial, fundingFor, resolveAllowance } from "./allowance.js";
 import { getSeatType } from "./seats.js";
-import type { PlansConfig } from "./plans.js";
+import { cycleWindowFor, planModel, type CycleWindow, type PlanCatalog } from "./plan-model.js";
+import { stripeBalanceUsageLedger, type UsageLedger } from "./usage-ledger.js";
 import type { BillingAdapter, ResolvedConfig } from "./types.js";
 
 export interface MeterCaller {
@@ -29,23 +23,37 @@ export interface MeterInput {
   action: string;
   /** Token cost for this execution (rate card × units), resolved by the consumer. */
   cost: number;
-  plans: PlansConfig;
+  plans: PlanCatalog;
   /** The org's current plan key (consumer resolves + caches it). */
   plan: string | null;
-  /** Start of the current billing cycle, unix seconds — the window for per-seat
-   *  usage. */
-  cycleStart: number;
-  /** Approved extra allowance for this caller this cycle (owner-granted top-up),
-   *  added on top of the seat pack. Consumer resolves it via `extraAllowance`. */
+  /** Start of the current billing cycle, unix SECONDS (unchanged). Prefer
+   *  `cycle`, which also carries the END — an annual window needs both. */
+  cycleStart?: number;
+  /** The window usage is measured over. Derived from the subscription period
+   *  when omitted. */
+  cycle?: CycleWindow;
+  /** @deprecated Resolved from the adapter now (see `resolveAllowance`), so a
+   *  caller can no longer pass a cycle key that disagrees with the window. */
   extraAllowance?: number;
+  /** Where usage is counted. Defaults to the balance-transaction ledger, which
+   *  is exact but can only see wallet-funded calls — a plan with an included
+   *  window wants `stripeMeterUsageLedger()`. */
+  ledger?: UsageLedger;
   caller?: MeterCaller;
 }
 
 export type MeterResult =
-  | { ok: true }
+  | { ok: true; funded?: "pool" | "pack" | "wallet" | null }
   | {
       ok: false
-      reason: "no_billing" | "insufficient_balance" | "seat_allowance_reached"
+      /** `pool_exhausted` is new: an org whose included package is used up used
+       *  to be told "insufficient balance", which pointed at the wrong problem
+       *  and the wrong remedy. */
+      reason:
+        | "no_billing"
+        | "insufficient_balance"
+        | "seat_allowance_reached"
+        | "pool_exhausted"
       message: string
     }
 
@@ -62,63 +70,73 @@ export async function meterUsage(
   config: ResolvedConfig,
   input: MeterInput,
 ): Promise<MeterResult> {
-  const { orgId, action, cost, plans, plan, cycleStart, caller } = input
-  const extra = input.extraAllowance ?? 0
-  if (cost <= 0) return { ok: true }
-  if (!stripeConfigured()) return { ok: true }
-  if (await isInternalOrg(adapter, orgId, config.internalDomains)) return { ok: true }
+  const { orgId, action, cost, plans, plan, caller } = input
+  if (cost <= 0) return { ok: true, funded: null }
+  if (!stripeConfigured()) return { ok: true, funded: null }
+  if (await isInternalOrg(adapter, orgId, config.internalDomains)) return { ok: true, funded: null }
 
   const customerId = await getBillingCustomerId(adapter, orgId)
   if (!customerId) {
     return { ok: false, reason: "no_billing", message: "No billing account found." }
   }
 
-  // The shared reserve must cover the debit (it funds every pack + any API top-up).
-  const balance = await getTokenBalance(customerId, config.currency)
-  if (balance < cost) {
+  const model = planModel(plans, plan)
+  const ledger = input.ledger ?? stripeBalanceUsageLedger()
+  const cycle =
+    input.cycle ??
+    (input.cycleStart != null
+      ? {
+          start: input.cycleStart * 1000,
+          end: null,
+          key: new Date(input.cycleStart * 1000).toISOString().slice(0, 7),
+        }
+      : undefined)
+
+  const state = await resolveAllowance(adapter, config, {
+    orgId,
+    plans,
+    plan,
+    caller,
+    customerId,
+    cycle,
+    ledger,
+  })
+
+  // Included allowance first, wallet last: a pooled org that has used up its
+  // package is told exactly that, instead of being told its balance is short.
+  const funding = fundingFor(state, model, cost, caller)
+  if (!funding.ok) {
     return {
       ok: false,
-      reason: "insufficient_balance",
-      message: `Insufficient tokens: this costs ${cost} but the workspace has ${balance}. Top up to continue.`,
+      reason: funding.reason ?? "insufficient_balance",
+      message: describeDenial(funding.reason ?? "insufficient_balance", state),
     }
   }
 
-  // Per-seat allowance cap — only for `per_seat` plans with a seat context.
-  // `global` plans (Enterprise commitment) have no per-seat cap.
-  const planDef = plan ? plans[plan] : undefined
-  const mode = planDef?.allowanceMode ?? "per_seat"
-  if (mode === "per_seat" && caller?.seatType) {
-    const pack = planDef?.seatTypes?.[caller.seatType]?.includedTokens
-    if (pack != null) {
-      const used = await usageSince(
-        customerId,
-        cycleStart,
-        caller.kind === "api"
-          ? { callerKind: "api" }
-          : { callerKind: "user", callerId: caller.id },
-      )
-      if (used + cost > pack + extra && caller.kind === "user") {
-        // Hard cap for a user seat. (API seat over its pack is allowed — it
-        // draws the shared reserve, which is the API pool's top-up.)
-        return {
-          ok: false,
-          reason: "seat_allowance_reached",
-          message:
-            "Seat token allowance reached for this cycle. Request extra from the workspace owner.",
-        }
-      }
-    }
-  }
-
-  await deductTokens(
+  // Count every call; charge only the ones the wallet funds. Included usage was
+  // paid for by the subscription, and debiting it would charge twice — while
+  // crediting the allowance instead would discount the subscription's own
+  // invoice (a Stripe credit balance auto-applies to it).
+  await ledger.record({
+    orgId,
     customerId,
     action,
     cost,
-    config.currency,
-    caller ? { kind: caller.kind, id: caller.id } : undefined,
-  )
-  tryAutoReload(customerId, config.currency).catch(() => {})
-  return { ok: true }
+    funded: funding.source ?? "wallet",
+    caller: caller ? { kind: caller.kind, id: caller.id } : undefined,
+  })
+
+  if (funding.source === "wallet") {
+    await deductTokens(
+      customerId,
+      action,
+      cost,
+      config.currency,
+      caller ? { kind: caller.kind, id: caller.id } : undefined,
+    )
+    tryAutoReload(customerId, config.currency).catch(() => {})
+  }
+  return { ok: true, funded: funding.source }
 }
 
 // ── The bound call-site meter ────────────────────────────────────────────────
@@ -131,8 +149,8 @@ export async function meterUsage(
 // CLI) calls `meter(orgId, action, { caller })` — no per-app wrapper.
 
 export interface MeterConfig<R extends Record<string, number> = Record<string, number>> {
-  /** Plan catalog (for seat packs + allowance mode). */
-  plans: PlansConfig
+  /** Plan catalog (shapes, packs, pools, limits). */
+  plans: PlanCatalog
   /** action → token cost (per unit). Consumer-authored product data. Omit to
    *  always pass an explicit `cost` at the call site. */
   rateCard?: R
@@ -146,12 +164,24 @@ export interface MeterConfig<R extends Record<string, number> = Record<string, n
   /** Plan-cache TTL (ms). Default 60_000. The plan changes rarely; a brief stale
    *  read only affects which allowance mode applies, never the debit. */
   planCacheTtlMs?: number
-  /** Start of the current billing cycle, unix seconds. Default: 1st of the month
-   *  UTC. Override to align to the Stripe subscription period. */
+  /**
+   * Start of the current billing cycle, unix seconds.
+   *
+   * No longer needed: the window is derived from the SUBSCRIPTION period when the
+   * adapter can report one, falling back to the 1st of the month UTC — which is
+   * what an included allowance requires (an annual package measured over calendar
+   * months would reset twelve times). Override only to impose your own window.
+   */
   cycleStart?: () => number
-  /** Cycle key top-up grants are stored under. Default "YYYY-MM" UTC. Must move
-   *  in lockstep with `cycleStart`. */
+  /** Cycle key top-up grants are stored under. Default "YYYY-MM" UTC. Derived
+   *  from the same window as the usage measurement, so the two cannot drift —
+   *  which they could when this was the caller's obligation. */
   cycleKey?: () => string
+  /** Where usage is counted. Default: the balance-transaction ledger (exact, and
+   *  free for a wallet-only product). A plan with an INCLUDED window needs
+   *  `stripeMeterUsageLedger()` — an included call moves no money, so it writes
+   *  no transaction to count. */
+  ledger?: UsageLedger
 }
 
 function defaultCycleStart(): number {
@@ -190,11 +220,24 @@ export function createMeter<R extends Record<string, number> = Record<string, nu
     resolvePlan,
     seatDefaults,
     planCacheTtlMs = 60_000,
-    cycleStart = defaultCycleStart,
-    cycleKey = defaultCycleKey,
+    cycleStart,
+    cycleKey,
   } = meterCfg
   const userSeat = seatDefaults?.user ?? "standard"
   const apiSeat = seatDefaults?.api ?? "api"
+
+  // A consumer-imposed window. When absent, the window comes from the
+  // subscription period (see resolveAllowance) — which is what an annual package
+  // needs — and the cycle key travels with it, so a top-up grant can no longer be
+  // recorded against a different cycle than the usage it is meant to extend.
+  const cycleOverride =
+    cycleStart || cycleKey
+      ? () => ({
+          start: (cycleStart ?? defaultCycleStart)() * 1000,
+          end: null,
+          key: (cycleKey ?? defaultCycleKey)(),
+        })
+      : null
 
   const planCache = new Map<string, { plan: string | null; at: number }>()
   async function currentPlan(orgId: string): Promise<string | null> {
@@ -217,19 +260,16 @@ export function createMeter<R extends Record<string, number> = Record<string, nu
           : (opts.caller.id && (await getSeatType(adapter, orgId, opts.caller.id))) || userSeat
       caller = { kind: opts.caller.kind, id: opts.caller.id, seatType }
     }
-    // Owner-approved extra allowance for a user seat this cycle (top-up flow).
-    const extra =
-      caller?.kind === "user" && caller.id
-        ? await extraAllowance(adapter, orgId, caller.id, cycleKey())
-        : 0
     return meterUsage(adapter, config, {
       orgId,
       action,
       cost,
       plans,
       plan: await currentPlan(orgId),
-      cycleStart: cycleStart(),
-      extraAllowance: extra,
+      // Only when the consumer imposed one; otherwise the window (and with it
+      // the top-up cycle key) comes from the subscription period.
+      cycle: cycleOverride?.(),
+      ledger: meterCfg.ledger,
       caller,
     })
   }

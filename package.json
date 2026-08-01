@@ -59,6 +59,11 @@
       "types": "./dist/dev/stripe-cli.d.ts",
       "import": "./dist/dev/stripe-cli.js",
       "default": "./dist/dev/stripe-cli.js"
+    },
+    "./pricing": {
+      "types": "./dist/pricing.d.ts",
+      "import": "./dist/pricing.js",
+      "default": "./dist/pricing.js"
     }
   },
   "files": [

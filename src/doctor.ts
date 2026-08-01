@@ -1,4 +1,5 @@
 import { getStripe } from "./billing.js";
+import { normalizePlans, poolSizeOf, type PlanCatalog } from "./plan-model.js";
 import { BILLING_WEBHOOK_EVENTS } from "./webhook-setup.js";
 
 // Preflight for a billing environment: the checks that catch the failures which
@@ -44,6 +45,9 @@ export async function checkBillingSetup(opts: {
   /** `config.currency`. Pass it to check for customers pinned to another one —
    *  the half-applied currency change that produces no error anywhere. */
   currency?: string;
+  /** Flag customers with more than one ACTIVE subscription (double billing).
+   *  Default true. */
+  expectSingleSubscription?: boolean;
 } = {}): Promise<DoctorResult> {
   const stripe = getStripe();
   const checks: Check[] = [];
@@ -213,7 +217,126 @@ export async function checkBillingSetup(opts: {
     );
   }
 
+  // ── More than one live subscription per customer ───────────────────────────
+  //
+  // Belongs here for the file's stated reason: it costs real money and produces
+  // no error. A flow that opens a fresh Checkout Session for every plan or seat
+  // change leaves the previous subscription running — the customer is billed
+  // twice, both subscriptions renew, and the app's own pointer names only one of
+  // them, so nothing downstream notices.
+  if (opts.expectSingleSubscription ?? true) {
+    const perCustomer = new Map<string, number>();
+    let scanned = 0;
+    for await (const sub of stripe.subscriptions.list({ status: "active", limit: 100 })) {
+      const id = typeof sub.customer === "string" ? sub.customer : sub.customer.id;
+      perCustomer.set(id, (perCustomer.get(id) ?? 0) + 1);
+      if (++scanned >= 500) break;
+    }
+    const doubled = [...perCustomer.entries()].filter(([, n]) => n > 1);
+    checks.push(
+      doubled.length === 0
+        ? {
+            level: "ok",
+            title: "One subscription per customer",
+            detail: `${scanned} active subscription(s), none doubled up`,
+          }
+        : {
+            level: "error",
+            title: "One subscription per customer",
+            detail:
+              `${doubled.length} customer(s) have more than one ACTIVE subscription and are being ` +
+              `billed twice: ${doubled.slice(0, 5).map(([c, n]) => `${c} (${n})`).join(", ")}`,
+            fix:
+              "Reconcile with findDuplicateSubscriptions(), and route every plan/seat change through " +
+              "one entry point that UPDATES the live subscription instead of opening a second one",
+          },
+    );
+  }
+
   return { livemode, checks, healthy: !checks.some((c) => c.level === "error") };
+}
+
+/**
+ * Inspect a plans config for the mistakes that don't announce themselves.
+ *
+ * Static: no Stripe call, so it can run in CI next to a typecheck. Separate from
+ * `checkBillingSetup` because it asks about the CONFIG rather than the account.
+ */
+export function checkPlansConfig(plans: PlanCatalog): DoctorResult {
+  const checks: Check[] = [];
+  const models = normalizePlans(plans);
+
+  const legacy = models.filter((m) => m.legacy);
+  if (legacy.length) {
+    checks.push({
+      level: "warn",
+      title: "Legacy plan shape",
+      detail: `${legacy.map((m) => m.key).join(", ")} use the pre-0.54 shape, so \`sale\` was GUESSED from whether any price exists`,
+      fix:
+        "Declare `sells`/`cap`/`sale` explicitly (see definePlans). Guessing `sale` is what lets a " +
+        "quote-only plan be bought at its placeholder price",
+    });
+  }
+
+  for (const m of models) {
+    // The defect this release exists to fix: crediting an allowance discounts the
+    // invoice that allowance came with.
+    const invoiced = m.sells.kind !== "nothing";
+    if (invoiced && m.grant.kind !== "none") {
+      checks.push({
+        level: "error",
+        title: `Plan "${m.key}" credits its own invoice`,
+        detail:
+          `it is invoiced (${m.sells.kind}) AND credits tokens (grant: ${m.grant.kind}). A Stripe credit ` +
+          "balance auto-applies to the next invoice, so this discounts the plan's own renewal — measured " +
+          "at ~48% off a seat whose pack was one month's tokens",
+        fix:
+          "Set `grant: { kind: \"none\" }` and express the included allowance as a `cap` (per_seat or pool), " +
+          "which is counted rather than credited. Keep `grant` only for a plan that literally sells credit",
+      });
+    }
+    if (m.cap.kind === "pool" && poolSizeOf(m) === 0) {
+      checks.push({
+        level: "warn",
+        title: `Plan "${m.key}" has an empty pool`,
+        detail: "cap is a pool but no `tokens` were set, so every metered call is refused",
+        fix: "Set `cap.tokens` to the package size",
+      });
+    }
+    if (m.grant.kind === "purchased_seats" && m.seatTypes.every((s) => s.includedTokens === 0)) {
+      checks.push({
+        level: "warn",
+        title: `Plan "${m.key}" grants nothing`,
+        detail: "it grants per purchased seat, but every seat type includes 0 tokens",
+        fix: "Set `includedTokens` per seat type, or say `grant: { kind: \"none\" }` and use a `cap`",
+      });
+    }
+    for (const s of m.seatTypes.filter((s) => s.shared && s.max === null)) {
+      checks.push({
+        level: "warn",
+        title: `Plan "${m.key}" shared seat "${s.key}" is unbounded`,
+        detail: "a shared (agent) seat is normally one per workspace, but any quantity can be bought",
+        fix: `Set max: 1 on seatTypes.${s.key}`,
+      });
+    }
+    if (m.sale === "self_serve" && m.sells.kind === "nothing") {
+      checks.push({
+        level: "warn",
+        title: `Plan "${m.key}" is self-serve but sells nothing`,
+        detail: "no Stripe price exists for it, so a checkout for it cannot succeed",
+        fix: 'Use sale: "free"',
+      });
+    }
+  }
+
+  if (checks.length === 0) {
+    checks.push({ level: "ok", title: "Plans config", detail: `${models.length} plan(s), nothing to flag` });
+  }
+  return {
+    livemode: false,
+    checks,
+    healthy: !checks.some((c) => c.level === "error"),
+  };
 }
 
 /** Render a DoctorResult for a terminal. Returns the exit code to use. */

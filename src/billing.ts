@@ -257,6 +257,9 @@ export async function usageSince(
   })) {
     if (tx.created < since) break;
     if (tx.amount <= 0) continue; // credits/grants aren't usage
+    // A correcting debit (a refund reversal, a manual adjustment) moves money
+    // but is not something the customer USED, so it must not eat their pack.
+    if (tx.metadata?.kind === "adjustment") continue;
     if (filter?.callerKind && tx.metadata?.caller_kind !== filter.callerKind) continue;
     if (filter?.callerId && tx.metadata?.caller_id !== filter.callerId) continue;
     total += tx.amount;

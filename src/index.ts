@@ -68,6 +68,26 @@ export {
   planForPriceId,
   seatTypeForPriceId,
   seatLimit,
+  seatTypeLimit,
+  planSale,
+  // The plan model: five independent axes (what it sells, what it credits, what
+  // it includes, how it's replenished, whether it can be bought) + presentation.
+  // The legacy PlanDef keeps working — `normalizePlans` maps it.
+  definePlans,
+  isLegacyPlan,
+  normalizePlan,
+  normalizePlans,
+  planModel,
+  plansWhere,
+  selfServePlans,
+  defaultBasket,
+  validateBasket,
+  describeBasketProblem,
+  grantFor,
+  poolSizeOf,
+  packSizeOf,
+  exhaustedPolicy,
+  cycleWindowFor,
   includedTokens,
   includedTokensByType,
   lookupKeyFor,
@@ -80,7 +100,69 @@ export {
   type PlanPrices,
   type MigratedSubscription,
   type MigrateSubscriptionsResult,
+  type PlanCatalog,
+  type PlanSpec,
+  type PlanModel,
+  type PlanDisplay,
+  type PlanLimits,
+  type SeatTypeSpec,
+  type SeatTypeDisplay,
+  type NormalSeatType,
+  type Sells,
+  type Grant,
+  type Cap,
+  type Exhausted,
+  type Replenish,
+  type Sale,
+  type Money,
+  type IntervalPrice,
+  type Quantities as PlanQuantities,
+  type BasketProblem,
+  type CycleWindow,
 } from "./plans.js";
+
+// Pricing view models: the plan config turned into what a surface renders. Also
+// available as the leaf entry point `@arnaudjnn/billing-tools/pricing`, which
+// pulls in neither Stripe nor WorkOS — so a client component and a docs
+// generator can both read it.
+export {
+  derivePlanViews,
+  derivePlanView,
+  renderPlansMarkdown,
+  renderRateCardMarkdown,
+  type PlanView,
+  type PlanPriceView,
+  type SeatRowView,
+  type CtaView,
+  type MoneyView,
+  type DerivePlanViewsOptions,
+  type MarkdownOptions,
+} from "./pricing.js";
+
+// Included allowance as a counted WINDOW (a pool, or a per-seat pack) rather than
+// as credit — a Stripe credit balance auto-applies to the next invoice, so
+// crediting a plan's own included tokens discounts its own renewal.
+export {
+  resolveAllowance,
+  fundingFor,
+  describeDenial,
+  type AllowanceState,
+  type AllowanceInput,
+  type FundingDecision,
+  type DenialReason,
+} from "./allowance.js";
+// Counting usage separately from moving money — the seam an included window needs.
+export {
+  stripeBalanceUsageLedger,
+  stripeMeterUsageLedger,
+  ensureMeters,
+  invalidateMeters,
+  USAGE_METER_EVENT,
+  type UsageLedger,
+  type UsageEvent,
+  type UsageQuery,
+  type FundingSource,
+} from "./usage-ledger.js";
 
 // Per-execution metering engine (prepaid balance; per-seat packs or a global
 // pool; usage summed from Stripe balance-transaction metadata — no new backend).
@@ -236,6 +318,7 @@ export {
 // tax_behavior, a missing or disabled endpoint, duplicates).
 export {
   checkBillingSetup,
+  checkPlansConfig,
   formatDoctorResult,
   type Check,
   type CheckLevel,

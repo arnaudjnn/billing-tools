@@ -248,6 +248,7 @@ export class WorkOSOrgAdapter implements BillingAdapter {
     plan: string | null;
     status: string | null;
     subscriptionId: string | null;
+    periodStart: string | null;
     periodEnd: string | null;
   }> {
     const org = await this.workos.organizations.getOrganization(await this.wid(orgId));
@@ -256,6 +257,9 @@ export class WorkOSOrgAdapter implements BillingAdapter {
       plan: m.plan ?? null,
       status: m.subscriptionStatus ?? null,
       subscriptionId: m.stripeSubscriptionId ?? null,
+      // An included allowance is measured over the subscription window, so the
+      // START matters as much as the renewal date.
+      periodStart: m.subscriptionPeriodStart ?? null,
       periodEnd: m.subscriptionPeriodEnd ?? null,
     };
   }
@@ -268,6 +272,7 @@ export class WorkOSOrgAdapter implements BillingAdapter {
       plan?: string | null;
       status: string | null;
       subscriptionId: string | null;
+      periodStart?: string | null;
       periodEnd: string | null;
     },
   ): Promise<void> {
@@ -281,6 +286,7 @@ export class WorkOSOrgAdapter implements BillingAdapter {
     };
     set("subscriptionStatus", sub.status);
     set("stripeSubscriptionId", sub.subscriptionId);
+    set("subscriptionPeriodStart", sub.periodStart);
     set("subscriptionPeriodEnd", sub.periodEnd);
     set("plan", sub.plan);
     await this.workos.organizations.updateOrganization({ organization: wid, metadata });

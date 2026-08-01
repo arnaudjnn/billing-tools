@@ -87,6 +87,32 @@ The **payment** sibling of auth.md: Stripe's [MPP](https://mpp.dev) (Machine Pay
 
 `registerBillingCommands(program, { configDir: "~/.myapp", envPrefix: "MYAPP", defaultUrl })` adds `auth`, `keys list|revoke`, `balance`, `buy`, `invoices`. Config persists to `<configDir>/config.json` (chmod 600).
 
+## Plan shapes (`src/plan-model.ts`)
+
+A plan is FIVE independent axes, not one. Only `sells` is a union, because it alone decides which fields are required and what `ensurePlans` mints:
+
+| axis | values | what it decides |
+|---|---|---|
+| `sells` | `nothing` \| `seats` \| `flat` | what Stripe charges for (and what gets minted) |
+| `grant` | `none` \| `purchased_seats` \| `per_member` \| `fixed` | what is CREDITED as money on `invoice.paid` |
+| `cap` | `wallet` \| `per_seat` \| `pool` | what is INCLUDED, as a counted window |
+| `replenish` | `{purchase?, autoReload?, request?}` | how to get more (a record — they compose) |
+| `sale` | `free` \| `self_serve` \| `quote` \| `legacy` | whether it can be bought. **Required, never inferred** |
+
+Plus `limits.members`, and `display` (name/tagline/features/badge/cta/pooled) so one config drives every pricing surface.
+
+**`grant` vs `cap` is a money bug, not a preference.** A Stripe credit balance auto-applies to the customer's next invoice and cannot be opted out of — measured: granting 1000 tokens to a customer on a €21.04 seat produced `starting_balance: -1000`, `amount_due: 1104`. So an *included* allowance must never be credited; it is a `cap`, a window usage is COUNTED against (`src/allowance.ts`), and an annual package credited as money would invoice year two at zero. Credit stays for what a customer actually buys — a top-up. `checkPlansConfig` fails a plan that both invoices and credits.
+
+Counting therefore has to be separable from charging: `src/usage-ledger.ts` is that seam. `stripeBalanceUsageLedger()` (the default) IS today's behaviour — the debit is the record — and can only see wallet-funded calls; a plan with an included window needs `stripeMeterUsageLedger()` (Stripe Billing Meters, provisioned by `ensureMeters`). The rule at the call site: **`ledger.record` always, `deductTokens` only when the wallet funded it.**
+
+`onExhausted` decides what a used-up window does: `"block"` refuses even when the wallet could pay (a committed package's overage is a renegotiation; a free plan has no wallet), `"wallet"` falls through so a top-up funds it. An agent (`shared` seat / `caller.kind: "api"`) always overflows to the wallet — that was a hardcoded `caller.kind === "user"` test, now declarative.
+
+The window comes from the SUBSCRIPTION period, not the calendar month: an annual package measured monthly resets twelve times. Calendar month remains the fallback for an org with no subscription.
+
+**Backwards compatible.** The legacy `PlanDef` is unchanged and `normalizePlans` maps it; every function takes `PlanCatalog` (the supertype), so an existing `PlansConfig` passes as-is. `allowanceMode: "global"` maps to `cap: wallet`, **NOT** `pool` — it only ever meant "no per-seat cap", and mapping it to a pool would start blocking a live customer. No legacy config can produce `cap: "pool"`, so the new path stays dead until a config opts in. `allowanceMode`/`tokensPerSeat` are `@deprecated` and still work.
+
+**Presentation** lives on the plan, and derives via `@arnaudjnn/billing-tools/pricing` (a leaf entry — no Stripe, no WorkOS, no React): `derivePlanViews(plans, {interval, currency, locale, formatMoney, currentPlan, canManage, hrefs})` → `PlanView[]`, which a React card and `renderPlansMarkdown`/`renderRateCardMarkdown` both consume. Note `price.headline` is a per-MONTH comparison figure and `price.totals` is what is actually charged — and `annualSaving` carries `annualSavingBasis`, because the two surfaces of the app this came from derived that percentage from different baskets and advertised 17% while charging 14%.
+
 ## Changing a price, changing the currency
 
 **A price is one edit.** Change the amount in `PLANS` and deploy: the next call mints a new Stripe price, transfers the `lookup_key` onto it, archives the old one and reuses the product; the `resolvePlanPrices` memo is keyed on the config, so nothing to flush. Verified end-to-end. But a Stripe price is IMMUTABLE and a subscription references one by id, so **existing subscribers keep paying the old amount** — `ensurePlans` will not silently reprice live customers. `migrateSubscriptions({ plans, plan, interval, dryRun })` is that step, made explicit: it walks the plan's superseded prices, moves live subscriptions (active/trialing/past_due/unpaid/paused) onto the current one preserving quantity and seat type, defaults to `proration_behavior: "none"` (new amount from the next renewal), only touches prices this library minted, and is idempotent. Do the dry run first.

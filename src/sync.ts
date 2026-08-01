@@ -2,10 +2,10 @@ import type Stripe from "stripe";
 import { pollStripeEvents, pollWorkOSEvents } from "./events.js";
 import { creditTokens, getStripe } from "./billing.js";
 import {
-  includedTokens,
-  includedTokensByType,
+  grantFor,
   planForPriceId,
-  type PlansConfig,
+  planModel,
+  type PlanCatalog,
 } from "./plans.js";
 import type { Mirror, MirrorQuery } from "./mirror.js";
 import type { WorkOSOrgAdapter } from "./adapters/workos-org.js";
@@ -30,7 +30,7 @@ export interface CursorStore {
 
 export interface BillingSyncOptions {
   adapter: WorkOSOrgAdapter;
-  plans: PlansConfig;
+  plans: PlanCatalog;
   /** DB executor (same one you pass to createMirror). The sync creates + uses
    *  its own `billing_sync_cursors` table through it — no app schema needed. */
   query: MirrorQuery;
@@ -147,16 +147,41 @@ export interface BillingSync {
  * writes assign current state rather than applying deltas — so an event
  * processed twice (webhook plus a reconciliation sweep) is a no-op.
  */
+/**
+ * The subscription's current period, read off its ITEMS.
+ *
+ * `current_period_start/_end` moved off `Subscription` onto `SubscriptionItem` in
+ * the API version this SDK pins, so the old `sub.current_period_end` was
+ * `undefined` on every path and every `periodEnd` written was null. A
+ * subscription can hold items on different periods, so the window is the widest
+ * one — which is also the renewal date a customer is shown.
+ */
+function subscriptionPeriod(sub: Stripe.Subscription): {
+  periodStart: string | null;
+  periodEnd: string | null;
+} {
+  type Periodic = { current_period_start?: number; current_period_end?: number };
+  const items = (sub.items?.data ?? []) as unknown as Periodic[];
+  const starts = items.map((i) => i.current_period_start).filter((v): v is number => !!v);
+  const ends = items.map((i) => i.current_period_end).filter((v): v is number => !!v);
+  const iso = (secs: number | undefined) =>
+    secs ? new Date(secs * 1000).toISOString() : null;
+  return {
+    periodStart: iso(starts.length ? Math.min(...starts) : undefined),
+    periodEnd: iso(ends.length ? Math.max(...ends) : undefined),
+  };
+}
+
 export function createStripeEventHandler(opts: {
   adapter: WorkOSOrgAdapter;
-  plans: PlansConfig;
+  plans: PlanCatalog;
   currency?: string;
   hooks?: BillingSyncOptions["hooks"];
 }): (event: Stripe.Event) => Promise<void> {
   const currency = opts.currency ?? "usd";
   return async function handleStripe(event: Stripe.Event): Promise<void> {
     if (event.type.startsWith("customer.subscription.")) {
-      const sub = event.data.object as Stripe.Subscription & { current_period_end?: number };
+      const sub = event.data.object as Stripe.Subscription;
       const orgId = sub.metadata?.org_id;
       if (!orgId) return;
       if (event.type === "customer.subscription.deleted") {
@@ -164,6 +189,7 @@ export function createStripeEventHandler(opts: {
           plan: null,
           status: "canceled",
           subscriptionId: null,
+          periodStart: null,
           periodEnd: null,
         });
         return;
@@ -174,9 +200,7 @@ export function createStripeEventHandler(opts: {
         plan: plan ?? undefined,
         status: sub.status,
         subscriptionId: sub.id,
-        periodEnd: sub.current_period_end
-          ? new Date(sub.current_period_end * 1000).toISOString()
-          : null,
+        ...subscriptionPeriod(sub),
       });
       return;
     }
@@ -217,28 +241,30 @@ export function createStripeEventHandler(opts: {
       const priceId = sub.items?.data?.[0]?.price?.id;
       const plan = priceId ? await planForPriceId(priceId) : null;
       if (!plan) return; // unknown price → no grant
-      const planDef = opts.plans[plan];
+      const model = planModel(opts.plans, plan);
 
-      // Seat-typed plan → grant from the PURCHASED seats (one line item per
-      // seat type, quantity = seats of that type read off the price metadata),
-      // so tokens track what's actually paid for. Flat plan → per active member.
-      let tokens: number;
-      let seatSummary: string;
-      if (planDef?.seatTypes) {
-        const counts: Record<string, number> = {};
-        for (const item of sub.items.data) {
-          const seatType = item.price?.metadata?.seatType;
-          if (!seatType) continue;
-          counts[seatType] = (counts[seatType] ?? 0) + (item.quantity ?? 0);
-        }
-        tokens = includedTokensByType(opts.plans, plan, counts);
-        const totalSeats = Object.values(counts).reduce((a, b) => a + b, 0);
-        seatSummary = `${totalSeats} seat${totalSeats === 1 ? "" : "s"}`;
-      } else {
-        const seats = await opts.adapter.memberCount(orgId);
-        tokens = includedTokens(opts.plans, plan, seats);
-        seatSummary = `${seats} seat${seats === 1 ? "" : "s"}`;
+      // What to CREDIT, per the plan's `grant` — which is `none` for anything
+      // whose included usage is an entitlement rather than money.
+      //
+      // That distinction is the point. A Stripe credit balance auto-applies to
+      // the customer's next invoice and cannot be opted out of, so crediting a
+      // plan's own included tokens discounts its own renewal: 1000 tokens on a
+      // €21.04 seat produced an invoice with `starting_balance: -1000` and
+      // `amount_due: 1104`. Included allowance is a counted window (see
+      // allowance.ts); this credits only what the plan genuinely sells as credit.
+      const counts: Record<string, number> = {};
+      for (const item of sub.items.data) {
+        const seatType = item.price?.metadata?.seatType;
+        if (!seatType) continue;
+        counts[seatType] = (counts[seatType] ?? 0) + (item.quantity ?? 0);
       }
+      const purchasedSeats = Object.values(counts).reduce((a, b) => a + b, 0);
+      const memberCount = model?.grant.kind === "per_member"
+        ? await opts.adapter.memberCount(orgId)
+        : purchasedSeats;
+      const tokens = grantFor(model, { seatCounts: counts, memberCount });
+      const seats = purchasedSeats || memberCount;
+      const seatSummary = `${seats} seat${seats === 1 ? "" : "s"}`;
 
       if (tokens > 0) {
         // Idempotency key on the invoice id: an overlapping/replayed poll grants

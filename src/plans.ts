@@ -1,5 +1,19 @@
 import type Stripe from "stripe";
 import { getStripe } from "./billing.js";
+import {
+  grantFor,
+  INTERVALS,
+  normalizePlan,
+  normalizePlans,
+  planModel,
+  type BillingInterval,
+  type PlanCatalog,
+  type PlanModel,
+  type PlansConfig,
+  type Quantities,
+  type Sale,
+  type SeatTypeDef,
+} from "./plan-model.js";
 
 // Declarative plans. Declare them once in code; billing-tools provisions the
 // Stripe products/prices from the API key on first use — nothing to click in
@@ -9,44 +23,52 @@ import { getStripe } from "./billing.js";
 // metadata.managedBy = "billing-tools" so orphans (plans/intervals you removed)
 // get archived too — the Stripe account stays clean.
 
-/** One seat type within a plan (e.g. `standard` vs `premium`). Each type has
- *  its own recurring per-seat price and included-token allowance, so a plan's
- *  subscription carries one line item per seat type (quantity = members of that
- *  type). Introduced for the Claude-style Standard/Premium seat model. */
-export interface SeatTypeDef {
-  /** Per-seat recurring price (cents). 0 = free (no Stripe price). */
-  price: { monthly: number; yearly: number };
-  /** Included tokens granted per seat of THIS type, per billing cycle. */
-  includedTokens: number;
-  /** Optional cap on seats of this type (null/undefined = unlimited). */
-  seats?: number | null;
-  /** Optional display label. */
-  label?: string;
-}
-
-export interface PlanDef {
-  /** Max members per workspace. null = unlimited. */
-  seats: number | null;
-  /** Included tokens granted per seat, per billing cycle (flat model). */
-  tokensPerSeat: number;
-  /** Recurring price in the smallest currency unit (cents). 0 = free (no Stripe price). */
-  price: { monthly: number; yearly: number };
-  /** Optional multi-seat-type pricing. When present, `ensurePlans` mints one
-   *  Stripe price per (plan, seatType, interval), the subscription carries one
-   *  line item per seat type, and included tokens sum per type
-   *  (`includedTokensByType`). When ABSENT the flat {seats, tokensPerSeat,
-   *  price} model applies unchanged — existing consumers are unaffected. */
-  seatTypes?: Record<string, SeatTypeDef>;
-  /** How usage is metered against the plan's seats (default `per_seat`):
-   *   • `per_seat` — each seat has its own per-cycle pack (user seats capped
-   *     personally; the API seat is a shared pool + top-up).
-   *   • `global`   — pay per seat, but NO per-seat cap: all usage draws one
-   *     committed workspace token pool (e.g. an Enterprise annual commitment). */
-  allowanceMode?: "per_seat" | "global";
-}
-
-export type PlansConfig = Record<string, PlanDef>;
-export type BillingInterval = "monthly" | "yearly";
+// The plan SHAPE lives in plan-model.ts — a leaf with no imports, so a browser
+// bundle and a docs generator can read it (this module pulls in `stripe`). The
+// types are re-exported here so `import { PlanDef } from "@arnaudjnn/billing-tools"`
+// keeps working unchanged.
+export type {
+  BillingInterval,
+  Money,
+  IntervalPrice,
+  SeatTypeDef,
+  SeatTypeSpec,
+  SeatTypeDisplay,
+  PlanDef,
+  PlanSpec,
+  PlanDisplay,
+  PlanLimits,
+  PlansConfig,
+  PlanCatalog,
+  PlanModel,
+  NormalSeatType,
+  Sells,
+  Grant,
+  Cap,
+  Exhausted,
+  Replenish,
+  Sale,
+  Quantities,
+  BasketProblem,
+  CycleWindow,
+} from "./plan-model.js";
+export {
+  definePlans,
+  isLegacyPlan,
+  normalizePlan,
+  normalizePlans,
+  planModel,
+  plansWhere,
+  selfServePlans,
+  defaultBasket,
+  validateBasket,
+  describeBasketProblem,
+  grantFor,
+  poolSizeOf,
+  packSizeOf,
+  exhaustedPolicy,
+  cycleWindowFor,
+} from "./plan-model.js";
 
 // Library DEFAULT seat types, priced in USD (the lib's default currency — see
 // ensurePlans `opts.currency ?? "usd"`). Consumers use these as-is or override
@@ -60,7 +82,6 @@ export const DEFAULT_SEAT_TYPES: Record<string, SeatTypeDef> = {
   api: { label: "API", price: { monthly: 62500, yearly: 600000 }, includedTokens: 25000, seats: 1 }, // ≈ 5× premium, one per workspace
 };
 
-const INTERVALS: BillingInterval[] = ["monthly", "yearly"];
 const STRIPE_INTERVAL: Record<BillingInterval, "month" | "year"> = {
   monthly: "month",
   yearly: "year",
@@ -98,20 +119,34 @@ type PriceSpec = {
 
 /** Every price a plans config expects to exist, in a fixed order. Free
  *  intervals/seat types produce no Stripe object, so they're dropped here. */
-function priceSpecs(plans: PlansConfig): PriceSpec[] {
+function priceSpecs(plans: PlanCatalog): PriceSpec[] {
   const specs: PriceSpec[] = [];
-  for (const [plan, def] of Object.entries(plans)) {
+  for (const model of normalizePlans(plans)) {
     const of = (interval: BillingInterval, amount: number, seatType?: string) => {
-      if (amount > 0) {
-        specs.push({ plan, interval, seatType, amount, lookupKey: lookupKeyFor(plan, interval, seatType) });
+      // A plan can decline an interval — an annual-only commitment declares
+      // `intervals: ["yearly"]` and no monthly price is ever minted for it.
+      if (amount > 0 && model.intervals.includes(interval)) {
+        specs.push({
+          plan: model.key,
+          interval,
+          seatType,
+          amount,
+          lookupKey: lookupKeyFor(model.key, interval, seatType),
+        });
       }
     };
-    if (def.seatTypes) {
-      for (const [seatType, st] of Object.entries(def.seatTypes)) {
-        for (const interval of INTERVALS) of(interval, st.price[interval], seatType);
-      }
-    } else {
-      for (const interval of INTERVALS) of(interval, def.price[interval]);
+    switch (model.sells.kind) {
+      case "seats":
+        for (const seat of model.seatTypes) {
+          for (const interval of INTERVALS) of(interval, seat.price[interval], seat.key);
+        }
+        break;
+      case "flat":
+        for (const interval of INTERVALS) of(interval, model.sells.price[interval]);
+        break;
+      case "nothing":
+        // Free, or a pure prepaid wallet: no Stripe object at all.
+        break;
     }
   }
   return specs;
@@ -166,7 +201,7 @@ const productIdOf = (price: Stripe.Price): string =>
  *  Returns the resolved price for every paid plan × interval. Free plans (both
  *  prices 0) create no Stripe objects. Safe to call on every boot / first use. */
 export async function ensurePlans(
-  plans: PlansConfig,
+  plans: PlanCatalog,
   opts: {
     currency?: string;
     taxBehavior?: Stripe.Price.TaxBehavior;
@@ -244,7 +279,9 @@ export async function ensurePlans(
     let productId = productByPlan.get(plan);
     if (!productId) {
       const product = await stripe.products.create({
-        name: cap(plan),
+        // The display name when the config has one, so the Stripe Dashboard and
+        // an invoice line read like the product rather than like its key.
+        name: planModel(plans, plan)?.display?.name ?? cap(plan),
         metadata: { managedBy: MANAGED_BY, plan },
       });
       productId = product.id;
@@ -342,7 +379,7 @@ const MIGRATABLE_STATUSES = new Set<Stripe.Subscription.Status>([
  * price attached by hand in the Dashboard is never moved out from under you.
  */
 export async function migrateSubscriptions(opts: {
-  plans: PlansConfig;
+  plans: PlanCatalog;
   plan: string;
   interval: BillingInterval;
   currency?: string;
@@ -487,7 +524,7 @@ let memo: { key: string; at: number; prices: PlanPrices } | null = null;
 // Concurrent cold requests share one reconcile rather than each starting their own.
 let inflight: { key: string; promise: Promise<PlanPrices> } | null = null;
 
-const memoKey = (plans: PlansConfig, opts: { currency?: string; taxBehavior?: string }) =>
+const memoKey = (plans: PlanCatalog, opts: { currency?: string; taxBehavior?: string }) =>
   JSON.stringify([plans, opts.currency ?? "usd", opts.taxBehavior ?? "exclusive"]);
 
 /**
@@ -501,7 +538,7 @@ const memoKey = (plans: PlansConfig, opts: { currency?: string; taxBehavior?: st
  * Look ids up with `lookupKeyFor(plan, interval, seatType)`.
  */
 export async function resolvePlanPrices(
-  plans: PlansConfig,
+  plans: PlanCatalog,
   opts: { currency?: string; taxBehavior?: Stripe.Price.TaxBehavior } = {},
 ): Promise<PlanPrices> {
   const key = memoKey(plans, opts);
@@ -580,39 +617,51 @@ export async function seatTypeForPriceId(priceId: string): Promise<string | null
 }
 
 /** Seat limit for a plan (null = unlimited, undefined plan = null). */
-export function seatLimit(plans: PlansConfig, plan: string): number | null {
-  return plans[plan]?.seats ?? null;
+/** Member limit for a plan (null = unlimited, unknown plan = null). */
+export function seatLimit(plans: PlanCatalog, plan: string): number | null {
+  return planModel(plans, plan)?.limits.members ?? null;
 }
 
-/** Included tokens for `seatCount` members on a plan (per cycle, flat model). */
+/** Per-type seat cap, or null when that type is unlimited. This is what makes a
+ *  `max: 1` shared API seat mean something. */
+export function seatTypeLimit(
+  plans: PlanCatalog,
+  plan: string,
+  seatType: string,
+): number | null {
+  return planModel(plans, plan)?.seatTypes.find((s) => s.key === seatType)?.max ?? null;
+}
+
+/** How a plan is sold, which decides whether any checkout path may accept it. */
+export function planSale(plans: PlanCatalog, plan: string): Sale | null {
+  return planModel(plans, plan)?.sale ?? null;
+}
+
+/**
+ * Tokens to CREDIT for `seatCount` members on a plan, per cycle.
+ *
+ * Now expressed over `grant`, so a plan whose allowance is an ENTITLEMENT
+ * (`grant: none`, the default for everything but a credit-selling plan) returns
+ * 0 — crediting it would discount that plan's own invoice.
+ */
 export function includedTokens(
-  plans: PlansConfig,
+  plans: PlanCatalog,
   plan: string,
   seatCount: number,
 ): number {
-  const def = plans[plan];
-  if (!def) return 0;
-  return def.tokensPerSeat * Math.max(1, seatCount);
+  return grantFor(planModel(plans, plan), { memberCount: seatCount });
 }
 
-/** Included tokens for a seat-typed plan given member counts per seat type
- *  (per cycle): Σ seatTypes[t].includedTokens × counts[t]. Falls back to the
- *  flat `includedTokens` (over the total member count) for plans without seat
- *  types, so callers can use it uniformly. */
+/** Tokens to CREDIT given purchased counts per seat type. Falls back to the
+ *  member-count form for plans without seat types, so callers can use it
+ *  uniformly. */
 export function includedTokensByType(
-  plans: PlansConfig,
+  plans: PlanCatalog,
   plan: string | null,
   counts: Record<string, number>,
 ): number {
-  const def = plan ? plans[plan] : undefined;
-  if (!def) return 0;
-  if (!def.seatTypes) {
-    const total = Object.values(counts).reduce((a, b) => a + b, 0);
-    return includedTokens(plans, plan!, total);
-  }
-  let sum = 0;
-  for (const [type, st] of Object.entries(def.seatTypes)) {
-    sum += st.includedTokens * (counts[type] ?? 0);
-  }
-  return sum;
+  const model = planModel(plans, plan);
+  if (!model) return 0;
+  const total = Object.values(counts).reduce((a, b) => a + b, 0);
+  return grantFor(model, { seatCounts: counts, memberCount: total });
 }

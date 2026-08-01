@@ -1,0 +1,465 @@
+import {
+  defaultBasket,
+  normalizePlans,
+  poolSizeOf,
+  type BillingInterval,
+  type Money,
+  type PlanCatalog,
+  type PlanModel,
+  type Sale,
+} from "./plan-model.js";
+
+// The plan config, turned into what a pricing surface renders.
+//
+// Imports `plan-model` and nothing else — no Stripe, no React — so the SAME
+// derivation feeds a React card, a server component, and a markdown generator.
+// Which is the point: the numbers on a marketing page, on an in-app upgrade
+// page, and in a docs table stop being three transcriptions of the config.
+//
+// It ships no strings. Every word (name, tagline, features, CTA label, badge)
+// is authored by the app on the plan itself; this only formats numbers and
+// decides shapes. `unit` is a KEY rather than prose for that reason — one
+// consumer writes "/mese", the other "/month".
+//
+// What this file exists to prevent, from the app it was extracted from:
+//   • an annual saving advertised at 17% next to a checkout charging 14% — two
+//     derivations from two different bases, so `annualSavingBasis` now says which
+//   • "50 searches a day" against a config of 1000 tokens a cycle
+//   • "up to 10 members" against a limit of 100
+//   • a plan with an org-level allowance that had NO rendering path at all, so
+//     its price and package size were invisible on every surface
+
+// Re-exported so `@arnaudjnn/billing-tools/pricing` is self-sufficient: a plans
+// config can be authored, normalised and rendered without importing the root
+// entry point (which pulls in Stripe and WorkOS).
+export {
+  definePlans,
+  normalizePlan,
+  normalizePlans,
+  planModel,
+  plansWhere,
+  selfServePlans,
+  defaultBasket,
+  validateBasket,
+  describeBasketProblem,
+  poolSizeOf,
+  packSizeOf,
+} from "./plan-model.js";
+export type {
+  BillingInterval,
+  Money,
+  IntervalPrice,
+  PlanCatalog,
+  PlanDef,
+  PlanSpec,
+  PlanModel,
+  PlanDisplay,
+  SeatTypeSpec,
+  SeatTypeDisplay,
+  Sells,
+  Grant,
+  Cap,
+  Replenish,
+  Sale,
+  Quantities,
+  BasketProblem,
+} from "./plan-model.js";
+
+export interface MoneyView {
+  /** Minor units, for arithmetic. */
+  minor: Money;
+  /** Formatted for display. */
+  text: string;
+}
+
+export interface SeatRowView {
+  key: string;
+  label: string;
+  usage: string | null;
+  /** Drawn by agents/API keys rather than a person — normally not a card row. */
+  shared: boolean;
+  /** Priced at zero (a free plan's single seat). */
+  free: boolean;
+  min: number;
+  max: number | null;
+  /** Per-MONTH figure for each interval (yearly ÷ 12) — how seats are compared. */
+  perMonth: Record<BillingInterval, MoneyView>;
+  /** What is actually charged for that interval. */
+  total: Record<BillingInterval, MoneyView>;
+  includedTokens: number;
+}
+
+export interface PlanPriceView {
+  kind: "free" | "seats" | "flat" | "quote";
+  /** Headline for the selected interval. Null when the price is quoted. */
+  headline: MoneyView | null;
+  /** A key, not prose: the app supplies "/mese" or "per seat / month". */
+  unit: "month" | "year" | "seat_month" | "seat_year" | null;
+  /** The other interval, for a muted "billed annually" line. */
+  alternate: { interval: BillingInterval; perMonth: MoneyView; total: MoneyView } | null;
+  /**
+   * What the DEFAULT basket actually costs, per interval — the charge, not the
+   * comparison figure.
+   *
+   * `headline` is deliberately a per-MONTH number (that is how plans are
+   * compared), so a surface that needs the real annual amount has to read it
+   * here. Rendering the headline in a "Yearly" column shows a twelfth of the
+   * price, which is exactly the mistake this field exists to prevent.
+   */
+  totals: Record<BillingInterval, MoneyView>;
+  rows: readonly SeatRowView[];
+  /** For a plan with no per-seat figure to show (a committed package). */
+  pooled: { title: string; note: string | null } | null;
+}
+
+export interface CtaView {
+  kind: "signup" | "checkout" | "contact" | "current" | "unavailable";
+  label: string;
+  href: string | null;
+  disabledReason: string | null;
+}
+
+export interface PlanView {
+  key: string;
+  name: string;
+  tagline: string | null;
+  badge: string | null;
+  featured: boolean;
+  order: number;
+  featuresIntro: string | null;
+  features: readonly string[];
+  price: PlanPriceView;
+  cta: CtaView;
+  /** Whole percent saved by paying yearly, FLOORED so it never overstates.
+   *  Null when the plan has no monthly/yearly pair. */
+  annualSaving: number | null;
+  /** WHICH basket that percentage came from. Naming it is what stops one surface
+   *  advertising a saving another surface doesn't charge. */
+  annualSavingBasis: "flat" | "basket" | null;
+  members: { max: number | null };
+  /** Included usage per cycle for the default basket, and where it pools. */
+  included: { tokens: number; scope: "per_seat" | "pool" | "none" };
+  sale: Sale;
+  interval: BillingInterval;
+}
+
+export interface DerivePlanViewsOptions {
+  /** Which interval the headline shows. Default "yearly". */
+  interval?: BillingInterval;
+  locale?: string;
+  currency?: string;
+  /** Override the formatter. Intl gives "18,00 €" for it-IT; a house style may
+   *  want "€18". */
+  formatMoney?: (minor: Money, currency: string, locale: string) => string;
+  /** Its card becomes `cta.kind: "current"`. */
+  currentPlan?: string | null;
+  /** false → every CTA disabled with a reason (e.g. a non-admin viewer). */
+  canManage?: boolean | { reason: string };
+  hrefs?: {
+    signup?: string;
+    contact?: string;
+    checkout?: (plan: string) => string;
+  };
+  /** Also include `display.hidden` plans and `sale: "legacy"`. Default false. */
+  includeHidden?: boolean;
+}
+
+const defaultFormatMoney = (minor: Money, currency: string, locale: string): string => {
+  const text = new Intl.NumberFormat(locale, {
+    style: "currency",
+    currency: currency.toUpperCase(),
+    currencyDisplay: "narrowSymbol",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  }).format(minor / 100);
+  return text;
+};
+
+/** The default basket's cost for an interval, so a headline and a saving are
+ *  computed from the same quantities. */
+function basketTotal(model: PlanModel, interval: BillingInterval): Money {
+  if (model.sells.kind === "flat") return model.sells.price[interval];
+  const basket = defaultBasket(model);
+  return model.seatTypes.reduce(
+    (sum, s) => sum + (basket[s.key] ?? 0) * s.price[interval],
+    0,
+  );
+}
+
+function priceKindOf(model: PlanModel): PlanPriceView["kind"] {
+  if (model.sale === "quote") return "quote";
+  if (model.sells.kind === "nothing") return "free";
+  return model.sells.kind === "seats" ? "seats" : "flat";
+}
+
+function ctaFor(
+  model: PlanModel,
+  opts: DerivePlanViewsOptions,
+): CtaView {
+  const label = model.display?.cta?.label ?? model.display?.name ?? model.key;
+  const manage = opts.canManage ?? true;
+  const disabledReason = manage === true ? null : typeof manage === "object" ? manage.reason : "";
+  const href = model.display?.cta?.href ?? null;
+
+  if (opts.currentPlan && opts.currentPlan === model.key) {
+    return { kind: "current", label, href: null, disabledReason: null };
+  }
+  if (disabledReason !== null) {
+    return { kind: "unavailable", label, href: null, disabledReason };
+  }
+  switch (model.sale) {
+    case "quote":
+      return { kind: "contact", label, href: href ?? opts.hrefs?.contact ?? null, disabledReason: null };
+    case "free":
+      return { kind: "signup", label, href: href ?? opts.hrefs?.signup ?? null, disabledReason: null };
+    case "legacy":
+      return { kind: "unavailable", label, href: null, disabledReason: "No longer offered" };
+    case "self_serve":
+      return {
+        kind: "checkout",
+        label,
+        href: href ?? opts.hrefs?.checkout?.(model.key) ?? null,
+        disabledReason: null,
+      };
+  }
+}
+
+export function derivePlanViews(
+  plans: PlanCatalog,
+  opts: DerivePlanViewsOptions = {},
+): readonly PlanView[] {
+  const interval = opts.interval ?? "yearly";
+  const locale = opts.locale ?? "en-US";
+  const currency = opts.currency ?? "usd";
+  const fmt = opts.formatMoney ?? defaultFormatMoney;
+  const money = (minor: Money): MoneyView => ({ minor, text: fmt(minor, currency, locale) });
+  const other: BillingInterval = interval === "yearly" ? "monthly" : "yearly";
+
+  return normalizePlans(plans)
+    .filter((m) => opts.includeHidden || (!m.display?.hidden && m.sale !== "legacy"))
+    .map((model): PlanView => {
+      const rows: SeatRowView[] = model.seatTypes.map((s) => ({
+        key: s.key,
+        label: s.display?.label ?? s.key,
+        usage: s.display?.usage ?? null,
+        shared: s.shared,
+        free: s.price.monthly === 0 && s.price.yearly === 0,
+        min: s.min,
+        max: s.max,
+        // The annual figure per MONTH, because that is how a seat is compared;
+        // `total` keeps what is actually charged.
+        perMonth: {
+          monthly: money(s.price.monthly),
+          yearly: money(Math.round(s.price.yearly / 12)),
+        },
+        total: { monthly: money(s.price.monthly), yearly: money(s.price.yearly) },
+        includedTokens: s.includedTokens,
+      }));
+
+      const kind = priceKindOf(model);
+      const sells = model.sells;
+      const headline =
+        kind === "quote"
+          ? null
+          : kind === "free"
+            ? money(0)
+            : sells.kind === "flat"
+              ? money(interval === "yearly" ? Math.round(sells.price.yearly / 12) : sells.price.monthly)
+              : // A seat-typed plan's headline is its cheapest non-shared seat:
+                // the "from" figure, per month.
+                money(
+                  Math.min(
+                    ...rows
+                      .filter((r) => !r.shared && !r.free)
+                      .map((r) => r.perMonth[interval].minor),
+                  ) || 0,
+                );
+
+      const unit: PlanPriceView["unit"] =
+        kind === "quote" || kind === "free"
+          ? null
+          : sells.kind === "flat"
+            ? "month"
+            : interval === "yearly"
+              ? "seat_month"
+              : "seat_month";
+
+      const hasBoth = model.intervals.includes("monthly") && model.intervals.includes("yearly");
+      const monthlyTotal = basketTotal(model, "monthly");
+      const yearlyTotal = basketTotal(model, "yearly");
+      const twelve = monthlyTotal * 12;
+      const annualSaving =
+        hasBoth && twelve > 0 && yearlyTotal > 0
+          ? Math.floor(((twelve - yearlyTotal) / twelve) * 100)
+          : null;
+
+      const pool = poolSizeOf(model);
+      const basket = defaultBasket(model);
+      const includedPerSeat = model.seatTypes.reduce(
+        (sum, s) => sum + s.includedTokens * (basket[s.key] ?? 0),
+        0,
+      );
+
+      return {
+        key: model.key,
+        name: model.display?.name ?? model.key,
+        tagline: model.display?.tagline ?? null,
+        badge: model.display?.badge ?? null,
+        featured: model.display?.featured ?? false,
+        order: model.display?.order ?? Number.MAX_SAFE_INTEGER,
+        featuresIntro: model.display?.featuresIntro ?? null,
+        features: model.display?.features ?? [],
+        price: {
+          kind,
+          headline,
+          unit,
+          alternate:
+            hasBoth && kind !== "quote" && kind !== "free"
+              ? {
+                  interval: other,
+                  perMonth: money(
+                    other === "yearly" ? Math.round(yearlyTotal / 12) : monthlyTotal,
+                  ),
+                  total: money(other === "yearly" ? yearlyTotal : monthlyTotal),
+                }
+              : null,
+          totals: { monthly: money(monthlyTotal), yearly: money(yearlyTotal) },
+          rows,
+          pooled: model.display?.pooled
+            ? { title: model.display.pooled.title, note: model.display.pooled.note ?? null }
+            : null,
+        },
+        cta: ctaFor(model, opts),
+        annualSaving,
+        annualSavingBasis: annualSaving === null ? null : sells.kind === "flat" ? "flat" : "basket",
+        members: { max: model.limits.members },
+        included:
+          pool !== null
+            ? { tokens: pool, scope: "pool" }
+            : includedPerSeat > 0
+              ? { tokens: includedPerSeat, scope: "per_seat" }
+              : { tokens: 0, scope: "none" },
+        sale: model.sale,
+        interval,
+      };
+    })
+    .sort((a, b) => a.order - b.order);
+}
+
+export function derivePlanView(
+  plans: PlanCatalog,
+  key: string,
+  opts: DerivePlanViewsOptions = {},
+): PlanView | null {
+  return derivePlanViews(plans, { ...opts, includeHidden: true }).find((v) => v.key === key) ?? null;
+}
+
+// ── Markdown, for a docs site ───────────────────────────────────────────────
+//
+// Same view models the React cards use. A hand-written pricing table drifts from
+// the config the moment either changes — and it had, in four places at once, in
+// two directions.
+
+export interface MarkdownOptions {
+  columns?: readonly ("name" | "members" | "included" | "monthly" | "yearly" | "seats")[];
+  /** Escape `$` so MDX doesn't read it as an expression. Default true. */
+  mdx?: boolean;
+  /** Header for the `included` column. Default "Included / cycle". */
+  includedLabel?: string;
+}
+
+const esc = (s: string, mdx: boolean): string =>
+  mdx ? s.replace(/\$/g, "\\$").replace(/\|/g, "\\|") : s.replace(/\|/g, "\\|");
+
+/** A plan table. Quoted plans show "Contact us" rather than a fabricated price. */
+export function renderPlansMarkdown(
+  views: readonly PlanView[],
+  opts: MarkdownOptions = {},
+): string {
+  const mdx = opts.mdx ?? true;
+  const columns = opts.columns ?? ["name", "members", "included", "monthly", "yearly"];
+  const head: Record<string, string> = {
+    name: "Plan",
+    members: "Seats",
+    included: opts.includedLabel ?? "Included / cycle",
+    monthly: "Monthly",
+    yearly: "Yearly",
+    seats: "Seat types",
+  };
+  const cell = (v: PlanView, col: string): string => {
+    switch (col) {
+      case "name":
+        return `**${v.name}**`;
+      case "members":
+        return v.members.max === null ? "Unlimited" : String(v.members.max);
+      case "included":
+        return v.included.tokens ? v.included.tokens.toLocaleString("en-US") : "—";
+      case "monthly":
+      case "yearly": {
+        if (v.sale === "quote") return "Contact us";
+        const per = col === "monthly" ? "monthly" : "yearly";
+        // Per-seat plans quote a seat; everything else quotes what the default
+        // basket is CHARGED for that interval (`price.totals`, not the per-month
+        // headline).
+        const seatRows = v.price.rows.filter((r) => !r.shared && !r.free);
+        if (seatRows.length) {
+          return seatRows.map((r) => `${r.total[per].text} / seat`).join(" · ");
+        }
+        return v.price.totals[per].minor > 0 ? v.price.totals[per].text : "Free";
+      }
+      case "seats":
+        return v.price.rows.length
+          ? v.price.rows.map((r) => r.label + (r.shared ? " (shared)" : "")).join(", ")
+          : "—";
+      default:
+        return "";
+    }
+  };
+  const lines = [
+    `| ${columns.map((c) => head[c]).join(" | ")} |`,
+    `|${columns.map(() => "---").join("|")}|`,
+    ...views.map((v) => `| ${columns.map((c) => esc(cell(v, c), mdx)).join(" | ")} |`),
+  ];
+  return lines.join("\n");
+}
+
+/** A cost-per-action table, optionally grouped. Replaces a hand-maintained one. */
+export function renderRateCardMarkdown(
+  rateCard: Record<string, number>,
+  opts: {
+    groups?: Record<string, readonly string[]>;
+    unit?: string;
+    mdx?: boolean;
+    /** Heading level for group titles. Default 3. */
+    headingLevel?: number;
+  } = {},
+): string {
+  const mdx = opts.mdx ?? true;
+  const unit = opts.unit ?? "Cost (tokens)";
+  const table = (entries: [string, number][]): string =>
+    [
+      `| Tool | ${unit} |`,
+      "|---|---|",
+      ...entries
+        .sort(([a], [b]) => (a < b ? -1 : 1))
+        .map(([k, v]) => `| \`${esc(k, mdx)}\` | ${v} |`),
+    ].join("\n");
+
+  const all = Object.entries(rateCard);
+  if (!opts.groups) return table(all);
+
+  const hashes = "#".repeat(opts.headingLevel ?? 3);
+  const grouped = new Set<string>();
+  const sections: string[] = [];
+  for (const [title, keys] of Object.entries(opts.groups)) {
+    const entries = all.filter(([k]) => keys.includes(k));
+    if (!entries.length) continue;
+    for (const [k] of entries) grouped.add(k);
+    sections.push(`${hashes} ${title}\n\n${table(entries)}`);
+  }
+  // Anything the caller forgot to group still appears — a silently dropped tool
+  // is a tool a customer is charged for without being told.
+  const rest = all.filter(([k]) => !grouped.has(k));
+  if (rest.length) sections.push(`${hashes} Other\n\n${table(rest)}`);
+  return sections.join("\n\n");
+}

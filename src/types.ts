@@ -73,6 +73,10 @@ export interface BillingAdapter {
     plan: string | null;
     status: string | null;
     subscriptionId: string | null;
+    /** Start of the current period. An included allowance is measured over the
+     *  SUBSCRIPTION window, not the calendar month — an annual package measured
+     *  monthly would reset twelve times a year. */
+    periodStart?: string | null;
     periodEnd: string | null;
   }>;
   /** Record subscription state. `plan: undefined` leaves the plan as-is; `null`
@@ -83,6 +87,7 @@ export interface BillingAdapter {
       plan?: string | null;
       status: string | null;
       subscriptionId: string | null;
+      periodStart?: string | null;
       periodEnd: string | null;
     },
   ): Promise<void>;
