@@ -63,9 +63,10 @@ export function BillingAddressForm({
   onChange,
   appearance,
   locale,
-  /** Prefilled name line. Stripe requires one when `display.name` is shown; it
-   *  is hidden by default here because the invoice name is its own field. */
+  /** Label the name line as a person (`full`) rather than an organization.
+   *  It is NOT a way to hide the field — Stripe always collects a name. */
   showName = false,
+  defaultName,
   googleMapsApiKey,
   currency = "eur",
   className,
@@ -75,11 +76,24 @@ export function BillingAddressForm({
   /**
    * Called on every edit. `null` while the address is incomplete, so a caller
    * can disable Save until Stripe considers it valid for the chosen country.
+   *
+   * "Incomplete" includes an empty NAME, which is easy to miss: every address
+   * field can be filled and this still reports null. Pass `defaultName` so the
+   * caller's Save button isn't disabled by a field they never asked for.
    */
   onChange: (address: AddressValue | null) => void;
   appearance?: Appearance;
   locale?: StripeElementLocale;
   showName?: boolean;
+  /**
+   * Prefill for the name field.
+   *
+   * Not cosmetic: Stripe ALWAYS collects a name here and will not report the
+   * address `complete` until it has one, so a form left with an empty name can
+   * never be saved. Pass the name you already hold (the invoice name, the
+   * account name) and the field starts satisfied.
+   */
+  defaultName?: string;
   /**
    * Your own Google Maps Places key. Supplying it is the documented way to get
    * autocomplete standalone, and skips the hidden Payment Element described
@@ -106,9 +120,10 @@ export function BillingAddressForm({
         autocomplete: googleMapsApiKey
           ? { mode: "google_maps_api" as const, apiKey: googleMapsApiKey }
           : { mode: "automatic" as const },
-        ...(defaultValue
-          ? {
-              defaultValues: {
+        defaultValues: {
+          ...(defaultName ? { name: defaultName } : {}),
+          ...(defaultValue
+            ? {
                 address: {
                   line1: defaultValue.line1,
                   line2: defaultValue.line2 ?? undefined,
@@ -117,9 +132,9 @@ export function BillingAddressForm({
                   postal_code: defaultValue.postal_code ?? undefined,
                   country: defaultValue.country,
                 },
-              },
-            }
-          : {}),
+              }
+            : {}),
+        },
       }) as const,
     // Mount-time only, deliberately: rebuilding the options mid-edit remounts
     // the element and wipes what the user has typed. `defaultValue` is a
