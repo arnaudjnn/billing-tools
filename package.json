@@ -50,6 +50,11 @@
       "import": "./dist/ui/index.js",
       "default": "./dist/ui/index.js"
     },
+    "./ui/authkit": {
+      "types": "./dist/ui/authkit.d.ts",
+      "import": "./dist/ui/authkit.js",
+      "default": "./dist/ui/authkit.js"
+    },
     "./dev": {
       "types": "./dist/dev/stripe-cli.d.ts",
       "import": "./dist/dev/stripe-cli.js",
@@ -80,6 +85,7 @@
   },
   "peerDependencies": {
     "@modelcontextprotocol/sdk": ">=1.25.0",
+    "@workos-inc/authkit-nextjs": ">=2",
     "mcp-handler": ">=1.1.0",
     "react": "^18 || ^19",
     "zod": "^3.25.0"
@@ -89,6 +95,9 @@
       "optional": true
     },
     "react": {
+      "optional": true
+    },
+    "@workos-inc/authkit-nextjs": {
       "optional": true
     }
   },
@@ -101,6 +110,7 @@
     "@stripe/stripe-js": "^9.12.1",
     "@types/node": "^20",
     "@types/react": "^19.2.17",
+    "@workos-inc/authkit-nextjs": "^4.3.1",
     "mcp-handler": "^1.1.0",
     "react": "^19.2.8",
     "semantic-release": "^24.2.0",

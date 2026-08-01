@@ -53,10 +53,12 @@ export type PlanSource = {
   getSubscription(orgId: string): Promise<{ plan?: string | null } | null>;
 };
 
-// Shape of the one AuthKit function used here. Declared locally because
-// `@workos-inc/authkit-nextjs` is an OPTIONAL peer and is deliberately not a
-// devDependency — installing it would drag Next.js into this package's tree for
-// the sake of a single call signature.
+// Shape of the one AuthKit function used here, declared locally on purpose.
+// `@workos-inc/authkit-nextjs` is an OPTIONAL peer, and this module is exported
+// from the package ROOT — so a consumer that doesn't use AuthKit would still
+// have a bundler try to resolve a statically-typed import of it and fail the
+// build. Widening the specifier keeps the dependency genuinely optional; only
+// `ui/authkit`, which nobody else imports, binds to it for real.
 type AuthKit = {
   withAuth: () => Promise<{
     user: {
