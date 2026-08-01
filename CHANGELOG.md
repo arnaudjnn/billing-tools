@@ -1,3 +1,10 @@
+## [0.62.2](https://github.com/arnaudjnn/billing-tools/compare/v0.62.1...v0.62.2) (2026-08-01)
+
+
+### Bug Fixes
+
+* **limits:** only compare limits that can refuse the same caller ([fa8af4c](https://github.com/arnaudjnn/billing-tools/commit/fa8af4ccd4eb707f2724da9a6f370a5016a9aaeb))
+
 ## [0.62.1](https://github.com/arnaudjnn/billing-tools/compare/v0.62.0...v0.62.1) (2026-08-01)
 
 
