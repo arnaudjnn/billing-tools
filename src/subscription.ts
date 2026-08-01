@@ -184,6 +184,70 @@ async function liveSubscriptions(customerId: string): Promise<Stripe.Subscriptio
  * a mistake shows up as a wrong line on the next invoice rather than a wrong
  * charge now.
  */
+/**
+ * The Stripe prices a basket resolves to, as `priceId → quantity`.
+ *
+ * Shared by the change and its preview, deliberately: the number quoted to a
+ * customer and the number charged to them must come from the same arithmetic, or
+ * the quote is a guess that happens to be right most of the time.
+ */
+async function desiredPrices(
+  plans: PlanCatalog,
+  target: PlanModel,
+  interval: BillingInterval,
+  seats: Quantities,
+  currency?: string,
+): Promise<Map<string, number>> {
+  const prices = await resolvePlanPrices(plans, { currency });
+  const desired = new Map<string, number>();
+  const idFor = (key: string) => {
+    const id = prices.get(key);
+    if (!id) throw new PlanChangeError("invalid_basket", `No Stripe price for ${key}`);
+    return id;
+  };
+  if (target.sells.kind === "flat") {
+    desired.set(idFor(lookupKeyFor(target.key, interval)), 1);
+  } else {
+    for (const [seatType, qty] of Object.entries(seats)) {
+      if (qty <= 0) continue;
+      desired.set(idFor(lookupKeyFor(target.key, interval, seatType)), qty);
+    }
+  }
+  return desired;
+}
+
+/** The item mutations that turn `sub` into `desired`, plus the tax rates that
+ *  must ride along. Also shared between the change and its preview. */
+function diffItems(
+  sub: Stripe.Subscription,
+  desired: Map<string, number>,
+  taxRates?: string[],
+): { items: Stripe.SubscriptionUpdateParams.Item[]; carried: string[] } {
+  // Tax rates already on the subscription carry onto ADDED lines. Without this, an
+  // account that computes its own tax (manual TaxRates rather than Stripe Tax)
+  // invoices a newly added line at 0%.
+  const carried =
+    taxRates ?? [...new Set(sub.items.data.flatMap((i) => (i.tax_rates ?? []).map((r) => r.id)))];
+
+  const items: Stripe.SubscriptionUpdateParams.Item[] = [];
+  const seen = new Set<string>();
+  for (const item of sub.items.data) {
+    const want = desired.get(item.price.id);
+    if (want != null) {
+      seen.add(item.price.id);
+      if ((item.quantity ?? 1) !== want) items.push({ id: item.id, quantity: want });
+    } else {
+      items.push({ id: item.id, deleted: true });
+    }
+  }
+  for (const [priceId, quantity] of desired) {
+    if (!seen.has(priceId)) {
+      items.push({ price: priceId, quantity, ...(carried.length ? { tax_rates: carried } : {}) });
+    }
+  }
+  return { items, carried };
+}
+
 export async function changePlan(
   adapter: BillingAdapter,
   orgId: string,
@@ -341,46 +405,8 @@ export async function changePlan(
     throw new PlanChangeError("invalid_basket", problems.map((problem) => describeBasketProblem(problem)).join("; "), problems);
   }
 
-  const prices = await resolvePlanPrices(opts.plans, { currency: opts.currency });
-  const desired = new Map<string, number>();
-  if (target.sells.kind === "flat") {
-    const key = lookupKeyFor(target.key, interval);
-    const id = prices.get(key);
-    if (!id) throw new PlanChangeError("invalid_basket", `No Stripe price for ${key}`);
-    desired.set(id, 1);
-  } else {
-    for (const [seatType, qty] of Object.entries(seats)) {
-      if (qty <= 0) continue;
-      const key = lookupKeyFor(target.key, interval, seatType);
-      const id = prices.get(key);
-      if (!id) throw new PlanChangeError("invalid_basket", `No Stripe price for ${key}`);
-      desired.set(id, qty);
-    }
-  }
-
-  // Tax rates already on the subscription carry onto ADDED lines. Without this, an
-  // account that computes its own tax (manual TaxRates rather than Stripe Tax)
-  // invoices a newly added line at 0%.
-  const carried =
-    opts.taxRates ??
-    [...new Set(sub.items.data.flatMap((i) => (i.tax_rates ?? []).map((r) => r.id)))];
-
-  const items: Stripe.SubscriptionUpdateParams.Item[] = [];
-  const seen = new Set<string>();
-  for (const item of sub.items.data) {
-    const want = desired.get(item.price.id);
-    if (want != null) {
-      seen.add(item.price.id);
-      if ((item.quantity ?? 1) !== want) items.push({ id: item.id, quantity: want });
-    } else {
-      items.push({ id: item.id, deleted: true });
-    }
-  }
-  for (const [priceId, quantity] of desired) {
-    if (!seen.has(priceId)) {
-      items.push({ price: priceId, quantity, ...(carried.length ? { tax_rates: carried } : {}) });
-    }
-  }
+  const desired = await desiredPrices(opts.plans, target, interval, seats, opts.currency);
+  const { items, carried } = diffItems(sub, desired, opts.taxRates);
 
   if (items.length === 0) {
     return { kind: "noop", customerId, subscriptionId: sub.id, plan: currentPlanKey ?? target.key, status: sub.status, effectiveAt };
@@ -460,6 +486,147 @@ export async function changePlan(
     plan: target.key,
     status: updated.status,
     effectiveAt: periodEndOf(updated),
+  };
+}
+
+/** What a plan change would cost, before committing to it. */
+export interface PlanChangePreview {
+  /** What `changePlan` would do with these same arguments. */
+  kind: "immediate" | "scheduled" | "checkout" | "canceling" | "noop";
+  currency: string;
+  /**
+   * Charged (or refunded, if negative) NOW, in minor units.
+   *
+   * This is the prorated difference: the unused remainder of what they are on,
+   * credited against the cost of what they are moving to. Zero for a change that
+   * takes effect at the period boundary, which is the honest answer — a
+   * downgrade charges nothing today.
+   */
+  dueNow: number;
+  /** The credit half of that arithmetic, positive, for surfaces that itemise it. */
+  credit: number;
+  /** The recurring amount from the next full period onward. */
+  nextTotal: number | null;
+  /** When the change takes effect — now, or the period end for a scheduled one. */
+  effectiveAt: string | null;
+  /** The proration lines Stripe would write, for an itemised summary. */
+  lines: Array<{ description: string; amount: number; proration: boolean }>;
+}
+
+/**
+ * Quote a plan change without making it.
+ *
+ * The number here is the number `changePlan` charges, because both build the
+ * basket with `desiredPrices` and the mutation with `diffItems` — a preview that
+ * recomputed the diff its own way would agree until the day it didn't, and the
+ * day it didn't would be a customer disputing a charge.
+ *
+ * A scheduled (downgrade) change quotes `dueNow: 0` and the new recurring total,
+ * which is what actually happens: the customer keeps what they paid for until it
+ * runs out, and Stripe issues no refund.
+ */
+export async function previewPlanChange(
+  adapter: BillingAdapter,
+  orgId: string,
+  opts: {
+    plans: PlanCatalog;
+    to: { plan: string; interval?: BillingInterval; seats?: Quantities };
+    currency?: string;
+    timing?: PlanChangeTiming;
+    taxRates?: string[];
+    subscriptionId?: string;
+  },
+): Promise<PlanChangePreview> {
+  const stripe = getStripe();
+  const target = planModel(opts.plans, opts.to.plan);
+  if (!target) throw new PlanChangeError("unknown_plan", `Unknown plan "${opts.to.plan}"`);
+
+  const interval = opts.to.interval ?? (target.intervals.includes("monthly") ? "monthly" : "yearly");
+  const currency = opts.currency ?? "usd";
+  const empty = (kind: PlanChangePreview["kind"], effectiveAt: string | null = null): PlanChangePreview => ({
+    kind,
+    currency,
+    dueNow: 0,
+    credit: 0,
+    nextTotal: null,
+    effectiveAt,
+    lines: [],
+  });
+
+  const customerId = await getBillingCustomerId(adapter, orgId);
+  if (!customerId) return empty("checkout");
+
+  const live = await liveSubscriptions(customerId);
+  const sub = opts.subscriptionId ? live.find((s) => s.id === opts.subscriptionId) : live.length > 1 ? undefined : live[0];
+  if (!sub && live.length > 1) {
+    throw new PlanChangeError(
+      "multiple_subscriptions",
+      `Customer ${customerId} has ${live.length} live subscriptions; pass subscriptionId to say which one to preview`,
+      live.map((s) => s.id),
+    );
+  }
+  // Nothing to prorate against: this is a first purchase, quoted by Checkout.
+  if (!sub) return empty("checkout");
+
+  const targetIsFree = target.sells.kind === "nothing" || target.sale === "free";
+  if (targetIsFree) return empty("canceling", periodEndOf(sub));
+
+  const seats = opts.to.seats ?? defaultBasket(target);
+  const problems = validateBasket(opts.plans, { plan: target.key, interval, seats });
+  if (problems.length) {
+    throw new PlanChangeError("invalid_basket", problems.map((p) => describeBasketProblem(p)).join("; "), problems);
+  }
+
+  const desired = await desiredPrices(opts.plans, target, interval, seats, opts.currency);
+  const { items } = diffItems(sub, desired, opts.taxRates);
+  if (items.length === 0) return empty("noop", periodEndOf(sub));
+
+  const currentPlanKey = sub.metadata?.plan ?? null;
+  const currentModel = currentPlanKey ? planModel(opts.plans, currentPlanKey) : null;
+  const isDowngrade = currentModel ? planRank(target) < planRank(currentModel) : false;
+  const timing = opts.timing ?? "auto";
+  if (timing === "period_end" || (timing === "auto" && isDowngrade)) {
+    // Nothing is charged today. What the customer wants to know is the new
+    // recurring amount, which is the preview with the change applied at the
+    // boundary — no proration lines at all.
+    const at = await stripe.invoices.createPreview({
+      customer: customerId,
+      subscription: sub.id,
+      subscription_details: { items, proration_behavior: "none" },
+    });
+    return {
+      kind: "scheduled",
+      currency: at.currency ?? currency,
+      dueNow: 0,
+      credit: 0,
+      nextTotal: at.total,
+      effectiveAt: periodEndOf(sub),
+      lines: [],
+    };
+  }
+
+  const preview = await stripe.invoices.createPreview({
+    customer: customerId,
+    subscription: sub.id,
+    subscription_details: { items, proration_behavior: "create_prorations" },
+  });
+
+  const lines = preview.lines.data.map((l) => ({
+    description: l.description ?? "",
+    amount: l.amount,
+    proration: Boolean((l as unknown as { proration?: boolean }).proration),
+  }));
+  // The credit for the unused remainder arrives as negative proration lines.
+  const credit = lines.filter((l) => l.proration && l.amount < 0).reduce((s, l) => s - l.amount, 0);
+
+  return {
+    kind: "immediate",
+    currency: preview.currency ?? currency,
+    dueNow: preview.amount_due,
+    credit,
+    nextTotal: preview.total,
+    effectiveAt: new Date().toISOString(),
+    lines,
   };
 }
 

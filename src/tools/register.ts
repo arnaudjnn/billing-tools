@@ -4,6 +4,8 @@ import { resolveConfig } from "../types.js";
 import { registerKeyTools } from "./keys.js";
 import { registerBillingOnlyTools, type TopUpToolOptions } from "./billing.js";
 import { registerManagementTools } from "./management.js";
+import { registerProfileTools } from "./profile.js";
+import { registerSubscriptionTools, type SubscriptionToolOptions } from "./subscription.js";
 import { ensurePlans, normalizePlans, poolSizeOf, type PlanCatalog } from "../plans.js";
 
 // Keys whose values must never hit the logs (magic-auth codes, API keys, etc.).
@@ -65,6 +67,13 @@ export interface RegisterBillingToolsOptions {
    *  subscription (gtm-tools keeps it in org metadata). Used by the usage tools
    *  and to resolve the billing cycle a top-up is filed against. */
   resolvePlan?: (orgId: string) => Promise<string | null>;
+  /** Register the billing-account tools (invoice details, tax id, saved cards).
+   *  Default true — they need only a Stripe customer. */
+  profileTools?: boolean;
+  /** Register the lifecycle tools (`change_plan`, `preview_plan_change`,
+   *  `cancel_plan`, `get_plan`). Needs `plans`; pass `false` to leave plan
+   *  changes to the app's own UI. */
+  subscriptionTools?: boolean | Omit<SubscriptionToolOptions, "plans">;
   /** Tax and return URLs for `buy_tokens`. Supply `taxRates` on any account that
    *  charges tax on its subscriptions: without it a top-up invoices at 0%. */
   topUp?: TopUpToolOptions;
@@ -81,7 +90,14 @@ export function registerBillingTools(server: McpServer, opts: RegisterBillingToo
     plans: opts.plans,
     resolvePlan: opts.resolvePlan,
   });
-  if (opts.plans) registerPlanTools(server, opts.plans, opts.defaultPlan, config.currency);
+  if (opts.profileTools !== false) registerProfileTools(server, opts.adapter);
+  if (opts.plans) {
+    registerPlanTools(server, opts.plans, opts.defaultPlan, config.currency);
+    if (opts.subscriptionTools !== false) {
+      const sub = typeof opts.subscriptionTools === "object" ? opts.subscriptionTools : {};
+      registerSubscriptionTools(server, opts.adapter, config, { ...sub, plans: opts.plans });
+    }
+  }
 }
 
 // list_plans: returns the configured plans + live Stripe prices, provisioning
@@ -160,4 +176,16 @@ export const BILLING_TOOL_NAMES = [
   "request_top_up",
   "approve_top_up",
   "deny_top_up",
+  // The billing account itself (registerProfileTools).
+  "get_billing_profile",
+  "set_billing_profile",
+  "set_tax_id",
+  "list_payment_methods",
+  "set_default_payment_method",
+  "remove_payment_method",
+  // The subscription lifecycle (registerSubscriptionTools; needs `plans`).
+  "get_plan",
+  "preview_plan_change",
+  "change_plan",
+  "cancel_plan",
 ] as const;

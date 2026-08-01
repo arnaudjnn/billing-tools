@@ -149,7 +149,7 @@ export function registerBillingCommands(program: Command, opts: CliOptions) {
   topup
     .command("request <member_id> <amount>")
     .description("Request extra tokens for a member's seat this cycle")
-    .option("--cycle <cycle>", 'Cycle key the grant applies to (default current "YYYY-MM")')
+    .option("--cycle <cycle>", "Cycle key the grant applies to (default: the current billing cycle)")
     .action(async (memberId: string, amount: string, o: { cycle?: string }) => {
       const args: Record<string, unknown> = { member_id: memberId, amount: parseInt(amount, 10) };
       if (o.cycle) args.cycle = o.cycle;
@@ -163,4 +163,181 @@ export function registerBillingCommands(program: Command, opts: CliOptions) {
     .command("deny <request_id>")
     .description("Deny a pending top-up request")
     .action(async (id: string) => print(await callTool(requireConfig(), "deny_top_up", { request_id: id })));
+
+  registerPlanCommands(program, requireConfig);
+}
+
+// ── Plans, the billing account, and the rest of the tool surface ────────────
+//
+// Split out only for length. The rule these follow: the CLI is a thin shell over
+// the SAME tools the API and MCP expose, so a command exists here if and only if
+// a tool exists there — a capability reachable from one surface and not another
+// is the gap this whole pass was about.
+function registerPlanCommands(program: Command, requireConfig: () => ApiClientConfig) {
+  program
+    .command("plans")
+    .description("List the available plans, with prices and included usage")
+    .action(async () => print(await callTool(requireConfig(), "list_plans")));
+
+  const plan = program.command("plan").description("Show and change this workspace's plan");
+  plan
+    .command("show", { isDefault: true })
+    .description("Current plan, any scheduled change, and the moves available")
+    .action(async () => print(await callTool(requireConfig(), "get_plan")));
+  plan
+    .command("preview <plan>")
+    .description("What moving to a plan would cost — prorated, without making the change")
+    .option("--interval <interval>", "monthly | yearly")
+    .option("--seats <json>", 'Seats per type, e.g. \'{"standard":3}\'')
+    .option("--timing <timing>", "auto | now | period_end")
+    .action(async (target: string, o: { interval?: string; seats?: string; timing?: string }) =>
+      print(await callTool(requireConfig(), "preview_plan_change", planArgs(target, o))),
+    );
+  plan
+    .command("change <plan>")
+    .description("Move to another plan (upgrades prorate now, downgrades apply at the period end)")
+    .option("--interval <interval>", "monthly | yearly")
+    .option("--seats <json>", 'Seats per type, e.g. \'{"standard":3}\'')
+    .option("--timing <timing>", "auto | now | period_end")
+    .option("--proration <mode>", "next_invoice | invoice_now | none")
+    .action(async (target: string, o: { interval?: string; seats?: string; timing?: string; proration?: string }) => {
+      const args = planArgs(target, o);
+      if (o.proration) args.proration = o.proration;
+      print(await callTool(requireConfig(), "change_plan", args));
+    });
+  plan
+    .command("cancel")
+    .description("Cancel at the end of the period already paid for")
+    .action(async () => print(await callTool(requireConfig(), "cancel_plan")));
+
+  program
+    .command("limits")
+    .description("Every usage limit that applies right now, and when each resets")
+    .option("--caller-kind <kind>", "user | api")
+    .option("--caller-id <id>", "Member or API-key id")
+    .action(async (o: { callerKind?: string; callerId?: string }) => {
+      const args: Record<string, unknown> = {};
+      if (o.callerKind) args.caller_kind = o.callerKind;
+      if (o.callerId) args.caller_id = o.callerId;
+      print(await callTool(requireConfig(), "get_usage_limits", args));
+    });
+
+  program
+    .command("portal")
+    .description("Open the Stripe billing portal (manage subscription, cards, invoices)")
+    .action(async () => print(await callTool(requireConfig(), "get_billing_portal")));
+
+  const autoReload = program
+    .command("auto-reload")
+    .description("Automatic top-up when the balance runs low");
+  autoReload
+    .command("set <threshold> <reload_to>")
+    .description("Recharge to <reload_to> tokens whenever the balance falls to <threshold>")
+    .action(async (threshold: string, reloadTo: string) =>
+      print(
+        await callTool(requireConfig(), "set_auto_reload", {
+          enabled: true,
+          threshold: parseInt(threshold, 10),
+          reload_to: parseInt(reloadTo, 10),
+        }),
+      ),
+    );
+  autoReload
+    .command("off")
+    .description("Turn automatic top-up off")
+    .action(async () =>
+      print(await callTool(requireConfig(), "set_auto_reload", { enabled: false, threshold: 0, reload_to: 1 })),
+    );
+
+  // ── The billing account ───────────────────────────────────────────────────
+  const profile = program
+    .command("profile")
+    .description("Invoice recipient, company name, billing address and tax id");
+  profile
+    .command("show", { isDefault: true })
+    .description("Show the billing details")
+    .action(async () => print(await callTool(requireConfig(), "get_billing_profile")));
+  profile
+    .command("set")
+    .description("Update the billing details (only the flags you pass are changed)")
+    .option("--invoice-email <email>")
+    .option("--company-name <name>")
+    .option("--invoice-locale <locale>", 'e.g. "it"')
+    .option("--line1 <line1>")
+    .option("--line2 <line2>")
+    .option("--city <city>")
+    .option("--state <state>")
+    .option("--postal-code <code>")
+    .option("--country <country>", "Two-letter code, e.g. IT")
+    .action(async (o: Record<string, string | undefined>) => {
+      const map: Record<string, string> = {
+        invoiceEmail: "invoice_email",
+        companyName: "company_name",
+        invoiceLocale: "invoice_locale",
+        line1: "address_line1",
+        line2: "address_line2",
+        city: "address_city",
+        state: "address_state",
+        postalCode: "address_postal_code",
+        country: "address_country",
+      };
+      const args: Record<string, unknown> = {};
+      for (const [flag, arg] of Object.entries(map)) if (o[flag] !== undefined) args[arg] = o[flag];
+      print(await callTool(requireConfig(), "set_billing_profile", args));
+    });
+  profile
+    .command("tax-id <value>")
+    .description('Set the tax id printed on invoices (empty string removes it)')
+    .option("--type <type>", 'Stripe tax id type, e.g. "eu_vat" (inferred from the country when omitted)')
+    .action(async (value: string, o: { type?: string }) => {
+      const args: Record<string, unknown> = { value };
+      if (o.type) args.type = o.type;
+      print(await callTool(requireConfig(), "set_tax_id", args));
+    });
+
+  const cards = program.command("cards").description("Saved payment methods");
+  cards
+    .command("list", { isDefault: true })
+    .description("List saved cards and which one is the default")
+    .action(async () => print(await callTool(requireConfig(), "list_payment_methods")));
+  cards
+    .command("default <payment_method_id>")
+    .description("Bill future charges to this card")
+    .action(async (id: string) =>
+      print(await callTool(requireConfig(), "set_default_payment_method", { payment_method_id: id })),
+    );
+  cards
+    .command("remove <payment_method_id>")
+    .description("Remove a saved card (adding one needs a browser — use `portal`)")
+    .action(async (id: string) =>
+      print(await callTool(requireConfig(), "remove_payment_method", { payment_method_id: id })),
+    );
+
+  const invoice = program.command("invoice").description("A single invoice");
+  invoice
+    .command("show <invoice_id>")
+    .description("Invoice detail")
+    .action(async (id: string) => print(await callTool(requireConfig(), "view_invoice", { invoice_id: id })));
+  invoice
+    .command("download <invoice_id>")
+    .description("A link to the invoice PDF")
+    .action(async (id: string) => print(await callTool(requireConfig(), "download_invoice", { invoice_id: id })));
+}
+
+/** Shared parsing for the plan commands: the seat basket arrives as JSON. */
+function planArgs(
+  plan: string,
+  o: { interval?: string; seats?: string; timing?: string },
+): Record<string, unknown> {
+  const args: Record<string, unknown> = { plan };
+  if (o.interval) args.interval = o.interval;
+  if (o.timing) args.timing = o.timing;
+  if (o.seats) {
+    try {
+      args.seats = JSON.parse(o.seats);
+    } catch {
+      throw new Error(`--seats must be JSON, e.g. '{"standard":3}' (got: ${o.seats})`);
+    }
+  }
+  return args;
 }
