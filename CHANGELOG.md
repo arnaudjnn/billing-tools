@@ -1,3 +1,10 @@
+# [0.52.0](https://github.com/arnaudjnn/billing-tools/compare/v0.51.0...v0.52.0) (2026-08-01)
+
+
+### Features
+
+* **address:** free autocomplete without a Google Maps key ([c9a3961](https://github.com/arnaudjnn/billing-tools/commit/c9a3961bdcd938bf9fe4ffd22a014c625d019869))
+
 # [0.51.0](https://github.com/arnaudjnn/billing-tools/compare/v0.50.0...v0.51.0) (2026-08-01)
 
 
