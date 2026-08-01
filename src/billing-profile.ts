@@ -56,7 +56,9 @@ export async function updateBillingProfile(
   const customerId = await adapter.getBillingCustomerId(orgId);
   if (!customerId) throw new Error("No billing customer for this organization");
 
-  const update: { email?: string | null; name?: string | null } = {};
+  // Stripe clears these with an EMPTY STRING, not null — the SDK types reject
+  // null, and sending it would be a no-op if they didn't.
+  const update: { email?: string; name?: string } = {};
 
   if (patch.invoiceEmail !== undefined) {
     const email = patch.invoiceEmail?.trim() || null;
@@ -69,7 +71,7 @@ export async function updateBillingProfile(
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       throw new Error("That doesn't look like an email address");
     }
-    update.email = email;
+    update.email = email ?? "";
   }
 
   if (patch.companyName !== undefined) {
@@ -77,7 +79,7 @@ export async function updateBillingProfile(
     if (name && name.length > COMPANY_NAME_MAX) {
       throw new Error(`Name must be at most ${COMPANY_NAME_MAX} characters`);
     }
-    update.name = name;
+    update.name = name ?? "";
   }
 
   if (Object.keys(update).length === 0) return getBillingProfile(adapter, orgId);
