@@ -150,7 +150,13 @@ export interface MemberUsage {
   pack: (UsageWindow & { extra: number }) | null;
   /** Caller-scoped rate limits, measured for this member. */
   windows: UsageWindow[];
-  /** Total counted usage in the billing cycle. */
+  /**
+   * What this member spent in the billing cycle, read from the ledger directly.
+   *
+   * Meaningful on EVERY plan shape, which is why it is not taken from the pack: a
+   * pooled plan has no pack, and reporting 0 for every member of a pooled plan
+   * was hiding an answer the ledger already had.
+   */
   usedInCycle: number;
 }
 
@@ -180,22 +186,46 @@ export async function memberUsage(
   const at = input.now ?? Date.now();
   const customerId = await getBillingCustomerId(adapter, input.orgId);
   if (!customerId) return [];
+  const ledger = input.ledger ?? stripeBalanceUsageLedger();
+
+  // The org's own reading, once: it fixes the cycle window every member is
+  // measured over, so twenty members cannot end up with twenty slightly
+  // different windows as the clock moves through the loop.
+  const org = await usageSummary(adapter, config, {
+    orgId: input.orgId,
+    plans: input.plans,
+    plan: input.plan,
+    ledger,
+    now: at,
+  });
 
   return Promise.all(
     input.members.map(async (m) => {
       const kind = m.kind ?? "user";
-      const summary = await usageSummary(adapter, config, {
-        orgId: input.orgId,
-        plans: input.plans,
-        plan: input.plan,
-        caller: { kind, id: m.id },
-        ledger: input.ledger,
-        now: at,
-      });
-      // The pack is the per-member figure when the plan has one; without a pack
-      // (a pool or a pure wallet) fall back to the caller-scoped window, and
-      // failing that to zero, which is honest: a pooled plan does not attribute.
-      const usedInCycle = summary.pack?.used ?? summary.windows.find((w) => w.scope === "caller")?.used ?? 0;
+      const [summary, usedInCycle] = await Promise.all([
+        usageSummary(adapter, config, {
+          orgId: input.orgId,
+          plans: input.plans,
+          plan: input.plan,
+          caller: { kind, id: m.id },
+          ledger,
+          now: at,
+        }),
+        // Asked of the ledger directly rather than taken from the pack, because a
+        // POOLED plan has no pack and would otherwise report 0 for everyone. The
+        // pool is shared, but who spent it is recorded, so "your share of the
+        // package" is answerable and is what an admin is looking for.
+        ledger.total({
+          orgId: input.orgId,
+          customerId,
+          start: org.cycle.start,
+          end: org.cycle.end ?? undefined,
+          filter:
+            kind === "api"
+              ? { callerKind: "api" }
+              : { callerKind: "user", callerId: m.id },
+        }),
+      ]);
       return {
         id: m.id,
         kind,
