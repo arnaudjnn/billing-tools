@@ -3,7 +3,13 @@ import { z } from "zod";
 import type { BillingAdapter, ResolvedConfig } from "../types.js";
 import { currentPrincipal, enforceAccess, enforceAdmin } from "../auth.js";
 import { getBillingCustomerId, usageSince, stripeConfigured } from "../billing.js";
-import { requestTopUp, listTopUpRequests, approveTopUp, denyTopUp } from "../topup.js";
+import {
+  requestTopUp,
+  listTopUpRequests,
+  approveTopUp,
+  denyTopUp,
+  grantExtraAllowance,
+} from "../topup.js";
 import { currentCycle } from "../allowance.js";
 import { assignSeatType, listSeatAssignments } from "../seats.js";
 import { normalizePlans, type PlanCatalog } from "../plans.js";
@@ -238,6 +244,64 @@ member for the cycle (added on top of their seat pack by the meter).`,
       const r = await approveTopUp(adapter, auth.orgId, request_id);
       if (!r.ok) return err(`Request not found or already handled: ${request_id}`);
       return json({ status: "approved", request_id });
+    },
+  );
+
+  server.tool(
+    "grant_top_up",
+    `Grant a member extra allowance for the current cycle WITHOUT waiting for them to
+request it, as a percentage of their own seat pack (default 25%). Admin action: the
+caller's own permission is checked by the app, not here.`,
+    {
+      member_id: z.string().describe("WorkOS user id of the member to top up"),
+      percent: z
+        .number()
+        .min(1)
+        .max(1000)
+        .optional()
+        .default(25)
+        .describe("Percentage of the member's seat pack to add (25 = +25%)"),
+      tokens: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe("Absolute tokens instead of a percentage"),
+    },
+    async ({ member_id, percent, tokens }) => {
+      const auth = await enforceAccess(adapter);
+      if ("isError" in auth) return auth;
+      if (!opts.plans) return err("No plans configured.");
+
+      const plan = opts.resolvePlan
+        ? await opts.resolvePlan(auth.orgId)
+        : ((await adapter.getSubscription?.(auth.orgId))?.plan ?? null);
+
+      const res = await grantExtraAllowance(adapter, {
+        orgId: auth.orgId,
+        plans: opts.plans,
+        plan,
+        memberId: member_id,
+        // An explicit token figure wins; otherwise the percentage (default 25).
+        ...(tokens != null ? { amount: tokens } : { percent }),
+      });
+
+      if (!res.ok) {
+        return err(
+          res.reason === "not_capped"
+            ? "This plan has no per-seat packs, so extra allowance cannot be granted. " +
+                "Its limits are workspace-wide (see get_usage_limits)."
+            : "Invalid amount.",
+        );
+      }
+      return json({
+        status: "granted",
+        member_id,
+        granted: res.granted,
+        seat_pack: res.packSize,
+        total_extra_this_cycle: res.total,
+        cycle: res.cycle,
+      });
     },
   );
 

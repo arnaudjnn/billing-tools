@@ -267,6 +267,8 @@ export {
   listTopUpRequests,
   approveTopUp,
   denyTopUp,
+  grantTopUp,
+  grantExtraAllowance,
   extraAllowance,
   type TopUpRequest,
 } from "./topup.js";

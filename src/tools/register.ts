@@ -175,6 +175,7 @@ export const BILLING_TOOL_NAMES = [
   "list_top_up_requests",
   "request_top_up",
   "approve_top_up",
+  "grant_top_up",
   "deny_top_up",
   // The billing account itself (registerProfileTools).
   "get_billing_profile",

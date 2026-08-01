@@ -1,4 +1,6 @@
 import type { BillingAdapter } from "./types.js";
+import { cycleWindowFor, packSizeOf, planModel, type PlanCatalog } from "./plan-model.js";
+import { getSeatType } from "./seats.js";
 
 // Top-up requests, stored entirely in the org's metadata via the adapter (no new
 // database): a user-seat over its cap requests extra tokens → an owner approves →
@@ -19,6 +21,8 @@ export interface TopUpRequest {
   cycle: string; // cycle key the grant applies to (consumer-defined, e.g. "2026-07")
   status: "pending" | "approved" | "denied";
   createdAt: string;
+  /** Set when an admin granted it outright rather than approving a request. */
+  grantedBy?: string;
 }
 
 type Grants = Record<string, Record<string, number>>;
@@ -70,6 +74,148 @@ export async function approveTopUp(
   await writeJson(adapter, orgId, REQUESTS_KEY, list);
   await writeJson(adapter, orgId, GRANTS_KEY, grants);
   return { ok: true };
+}
+
+/**
+ * Grant extra allowance to a member DIRECTLY, with no request to approve.
+ *
+ * The request→approve flow assumed the member notices the wall and asks. An admin
+ * looking at a usage screen has already noticed, and had no way to act: every path
+ * into a grant needed a `TopUpRequest` that only the member could create. This is
+ * that missing half.
+ *
+ * The grant is also recorded as an already-approved request, so it appears in the
+ * same history as the ones that were asked for. A grant that existed only as a
+ * number in `topUpGrants` would leave an allowance nobody could explain.
+ *
+ * `id` makes it idempotent: a double-clicked button grants once.
+ */
+export async function grantTopUp(
+  adapter: BillingAdapter,
+  orgId: string,
+  input: {
+    memberId: string;
+    amount: number;
+    /** MUST be the key the meter measures with — see `grantExtraAllowance`. */
+    cycle: string;
+    /** Who granted it, for the history. */
+    grantedBy?: string;
+    id?: string;
+    createdAt?: string;
+  },
+): Promise<{ ok: boolean; total: number; reason?: "invalid_amount" | "duplicate" }> {
+  if (!Number.isFinite(input.amount) || input.amount <= 0) {
+    return { ok: false, total: 0, reason: "invalid_amount" };
+  }
+  const list = await readJson<TopUpRequest[]>(adapter, orgId, REQUESTS_KEY, []);
+  if (input.id && list.some((r) => r.id === input.id)) {
+    const grants = await readJson<Grants>(adapter, orgId, GRANTS_KEY, {});
+    return { ok: true, total: grants[input.memberId]?.[input.cycle] ?? 0, reason: "duplicate" };
+  }
+
+  const grants = await readJson<Grants>(adapter, orgId, GRANTS_KEY, {});
+  grants[input.memberId] = grants[input.memberId] ?? {};
+  const total = (grants[input.memberId][input.cycle] ?? 0) + input.amount;
+  grants[input.memberId][input.cycle] = total;
+
+  list.push({
+    id: input.id ?? `grant_${input.memberId}_${input.cycle}_${input.amount}`,
+    memberId: input.memberId,
+    amount: input.amount,
+    cycle: input.cycle,
+    status: "approved",
+    createdAt: input.createdAt ?? new Date().toISOString(),
+    ...(input.grantedBy ? { grantedBy: input.grantedBy } : {}),
+  });
+
+  await writeJson(adapter, orgId, REQUESTS_KEY, list.slice(-MAX_STORED_REQUESTS));
+  await writeJson(adapter, orgId, GRANTS_KEY, grants);
+  return { ok: true, total };
+}
+
+/**
+ * The same grant, with the cycle resolved the way the METER resolves it.
+ *
+ * This is the part a caller must not be trusted with. A grant is stored under a
+ * cycle key and `resolveAllowance` looks it up under the key that
+ * `cycleWindowFor(model, subscriptionPeriod)` produces — the SUBSCRIPTION period
+ * when there is one, the calendar month otherwise. A caller passing a plausible
+ * "2026-08" for an org whose period starts on the 12th writes a grant that is
+ * never read, and nothing anywhere reports an error: the admin sees "granted",
+ * the member stays blocked. So the resolution lives here, once, and both the tool
+ * and any UI go through it.
+ *
+ * Returns `not_capped` for a plan that caps nothing per seat (a pool, or a pure
+ * wallet). There a grant is not merely useless, it is unreadable: the meter only
+ * adds extra allowance on top of a seat PACK, so it would be silently ignored.
+ */
+export async function grantExtraAllowance(
+  adapter: BillingAdapter,
+  input: {
+    orgId: string;
+    plans: PlanCatalog;
+    plan?: string | null;
+    memberId: string;
+    /**
+     * Extra as a PERCENTAGE of the member's own seat pack (25 = +25%).
+     *
+     * The natural unit for this decision: "a quarter more than their seat" means
+     * the same thing on a 1 000-token seat and a 5 000-token one, where a fixed
+     * +250 is a rounding error on one and a third of the other. The pack is
+     * resolved here from the member's seat type, so no caller has to know it.
+     */
+    percent?: number;
+    /** An absolute number of tokens instead. Exactly one of the two. */
+    amount?: number;
+    grantedBy?: string;
+    id?: string;
+    now?: number;
+  },
+): Promise<{
+  ok: boolean;
+  /** The member's grand total for the cycle, after this grant. */
+  total?: number;
+  /** What this call actually added, in tokens. */
+  granted?: number;
+  /** The pack the percentage was taken from. */
+  packSize?: number;
+  cycle?: string;
+  reason?: "invalid_amount" | "not_capped" | "duplicate";
+}> {
+  const model = planModel(input.plans, input.plan ?? null);
+  if (!model || model.cap.kind !== "per_seat") return { ok: false, reason: "not_capped" };
+
+  // A percentage is meaningless without the pack it is a percentage OF, and the
+  // pack depends on the member's seat type, so resolve the seat the same way the
+  // meter does rather than assuming the default seat.
+  const seatType = (await getSeatType(adapter, input.orgId, input.memberId)) || "standard";
+  const packSize = packSizeOf(model, seatType);
+  if (packSize == null) return { ok: false, reason: "not_capped" };
+
+  const amount =
+    input.amount ??
+    (input.percent != null ? Math.round((packSize * input.percent) / 100) : NaN);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return { ok: false, reason: "invalid_amount", packSize };
+  }
+
+  let period: { start?: string | null; end?: string | null } | null = null;
+  try {
+    const sub = await adapter.getSubscription?.(input.orgId);
+    period = sub ? { start: sub.periodStart ?? null, end: sub.periodEnd ?? null } : null;
+  } catch {
+    period = null;
+  }
+  const cycle = cycleWindowFor(model, period, input.now ?? Date.now());
+
+  const res = await grantTopUp(adapter, input.orgId, {
+    memberId: input.memberId,
+    amount,
+    cycle: cycle.key,
+    grantedBy: input.grantedBy,
+    id: input.id,
+  });
+  return { ...res, granted: amount, packSize, cycle: cycle.key };
 }
 
 export async function denyTopUp(
