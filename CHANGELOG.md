@@ -1,3 +1,10 @@
+# [0.54.0](https://github.com/arnaudjnn/billing-tools/compare/v0.53.1...v0.54.0) (2026-08-01)
+
+
+### Features
+
+* **billing-profile:** invoice language ([2c72e19](https://github.com/arnaudjnn/billing-tools/commit/2c72e190dc0e83d3b5b3f7ac36f50985896652bb))
+
 ## [0.53.1](https://github.com/arnaudjnn/billing-tools/compare/v0.53.0...v0.53.1) (2026-08-01)
 
 
