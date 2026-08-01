@@ -185,15 +185,33 @@ export async function checkBillingSetup(opts: {
   if (opts.currency) {
     const want = opts.currency.toLowerCase();
     const sample: string[] = [];
+    // Auto-reload charges a card off-session. Enabled with no card on file, it
+    // silently does nothing every time the balance runs out — the customer is
+    // simply blocked, with no failure anywhere to explain why.
+    const reloadNoCard: string[] = [];
     let seen = 0;
     for await (const customer of stripe.customers.list({ limit: 100 })) {
       seen++;
       if (customer.currency && customer.currency !== want) {
         if (sample.length < 5) sample.push(`${customer.id} (${customer.currency})`);
       }
+      if (customer.metadata?.auto_reload_enabled === "true" && reloadNoCard.length < 5) {
+        const pms = await stripe.paymentMethods.list({ customer: customer.id, type: "card", limit: 1 });
+        if (pms.data.length === 0) reloadNoCard.push(customer.id);
+      }
       // A sample is enough to answer "is this environment mixed?" — walking
       // every customer of a live account is not what a preflight should do.
       if (seen >= 500) break;
+    }
+    if (reloadNoCard.length) {
+      checks.push({
+        level: "warn",
+        title: "Auto-reload with no card",
+        detail:
+          `${reloadNoCard.length} customer(s) have auto-reload enabled but no saved card: ${reloadNoCard.join(", ")}. ` +
+          "Each recharge attempt returns without charging, so they are blocked at zero balance with no error",
+        fix: "Have them add a card (get_billing_portal), or turn auto-reload off so the refusal is honest",
+      });
     }
     checks.push(
       sample.length === 0
@@ -253,6 +271,38 @@ export async function checkBillingSetup(opts: {
     );
   }
 
+  // ── Top-ups sold untaxed by an account that taxes everything else ─────────
+  //
+  // Both charges the library can raise without a form behind them — the
+  // `buy_tokens` Checkout and the auto-reload invoice — were untaxed, so a
+  // seller charging 22% on its seats charged 0% on a top-up bought through the
+  // same account. Detected by comparing what the recent invoices actually did.
+  {
+    let taxed = 0;
+    let untaxedTopUps: string[] = [];
+    for await (const inv of stripe.invoices.list({ limit: 100, status: "paid" })) {
+      const hasTax = (inv.total_taxes ?? []).length > 0 || (inv.default_tax_rates ?? []).length > 0;
+      if (hasTax) taxed++;
+      const isTopUp =
+        inv.metadata?.auto_reload === "true" ||
+        inv.lines.data.some((l) => /token/i.test(l.description ?? ""));
+      if (isTopUp && !hasTax && untaxedTopUps.length < 5) untaxedTopUps.push(inv.id ?? "(unknown)");
+      if (taxed > 0 && untaxedTopUps.length >= 5) break;
+    }
+    if (taxed > 0 && untaxedTopUps.length) {
+      checks.push({
+        level: "error",
+        title: "Top-ups invoiced without tax",
+        detail:
+          `this account charges tax on other invoices, but ${untaxedTopUps.length} token/auto-reload ` +
+          `invoice(s) carry none: ${untaxedTopUps.join(", ")}`,
+        fix:
+          "Pass `topUp.taxRates` to registerBillingTools for buy_tokens, and `config.tax.rates` for the " +
+          "auto-reload invoice — neither has an address form to derive a rate from on its own",
+      });
+    }
+  }
+
   return { livemode, checks, healthy: !checks.some((c) => c.level === "error") };
 }
 
@@ -262,7 +312,15 @@ export async function checkBillingSetup(opts: {
  * Static: no Stripe call, so it can run in CI next to a typecheck. Separate from
  * `checkBillingSetup` because it asks about the CONFIG rather than the account.
  */
-export function checkPlansConfig(plans: PlanCatalog): DoctorResult {
+export function checkPlansConfig(
+  plans: PlanCatalog,
+  options?: {
+    /** Whether this deployment can actually sell a plan. Pass true when a
+     *  checkout is mounted; without it, self-serve plans are flagged as
+     *  advertised-but-unbuyable. */
+    hasCheckout?: boolean;
+  },
+): DoctorResult {
   const checks: Check[] = [];
   const models = normalizePlans(plans);
 
@@ -378,6 +436,25 @@ export function checkPlansConfig(plans: PlanCatalog): DoctorResult {
         fix: 'Use sale: "free"',
       });
     }
+  }
+
+  // A catalogue nothing can sell. gtm-tools shipped exactly this: plans declared
+  // and advertised on a pricing page, no checkout and no subscription sync, so
+  // `resolvePlan` was permanently null and the pooled cap never activated —
+  // wallet-only in practice, while the site promised plans.
+  const sellable = models.filter((m) => m.sale === "self_serve" && m.sells.kind !== "nothing");
+  if (sellable.length && !options?.hasCheckout) {
+    checks.push({
+      level: "warn",
+      title: "Self-serve plans with no way to buy them",
+      detail:
+        `${sellable.map((m) => m.key).join(", ")} are marked self_serve, but this deployment reports no ` +
+        "checkout path. Without one no subscription is ever created, so any pool or per-seat cap stays " +
+        "inert and the plan is advertised but unreachable",
+      fix:
+        "Mount a checkout (createBilling's `mcp`/`restDispatch` with the change_plan tool, or the app's own " +
+        'flow) and pass `hasCheckout: true` here — or mark the plans sale: "quote"',
+    });
   }
 
   if (checks.length === 0) {

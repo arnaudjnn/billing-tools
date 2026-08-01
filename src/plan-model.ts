@@ -305,7 +305,17 @@ export interface PlanLimits {
 
 export interface PlanSpec {
   sells: Sells;
-  /** Default: `seats` → purchased_seats, otherwise none. */
+  /**
+   * Default `none`, for every `sells` — including seats.
+   *
+   * Crediting an invoiced plan's own included tokens discounts its own renewal
+   * (a Stripe credit balance auto-applies to the next invoice; measured at ~48%
+   * off a seat). An included allowance belongs in `cap`, which is counted rather
+   * than credited, so a plan that says nothing gets the safe answer instead of
+   * the one `checkPlansConfig` immediately flags as an error. A LEGACY config
+   * still maps to `purchased_seats` — that was its behaviour, and changing it
+   * would silently stop grants a live customer already receives.
+   */
   grant?: Grant;
   /** Default: `seats` → per_seat, otherwise wallet. A POOL IS NEVER INFERRED —
    *  its size is a commercial decision, so it has to be written down. */
@@ -459,7 +469,7 @@ export function normalizePlan(key: string, spec: PlanDef | PlanSpec): PlanModel 
     return {
       key,
       sells: spec.sells,
-      grant: spec.grant ?? { kind: spec.sells.kind === "seats" ? "purchased_seats" : "none" },
+      grant: spec.grant ?? { kind: "none" },
       cap: spec.cap ?? { kind: spec.sells.kind === "seats" ? "per_seat" : "wallet" },
       replenish: spec.replenish ?? {},
       sale: spec.sale,

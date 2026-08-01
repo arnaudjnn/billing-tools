@@ -1,0 +1,26 @@
+name: Test
+
+# Runs on every push and PR, and BEFORE a release can happen — this library
+# moves money, and until now nothing stopped a broken build being published.
+#
+# The suite is offline by design: no Stripe key, no WorkOS key, no network. The
+# paths that genuinely need Stripe live in the test-clock script, which is run
+# deliberately against the test account rather than on every push.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Same flag the release job uses: the peer deps are supplied by the host app.
+      - run: npm install --legacy-peer-deps
+      - run: npm run typecheck
+      - run: npm test
