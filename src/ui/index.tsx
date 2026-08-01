@@ -1065,3 +1065,6 @@ export { INVOICE_EMAIL_MAX, COMPANY_NAME_MAX } from "./limits.js";
 
 // Standalone billing-address form (Stripe's Address Element, no payment).
 export { BillingAddressForm, type AddressValue } from "./address.js";
+
+// Languages Stripe can issue an invoice in (leaf module: safe for the browser).
+export { INVOICE_LOCALES, type InvoiceLocale } from "./locales.js";

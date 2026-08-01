@@ -38,12 +38,21 @@ export type BillingProfile = {
    * what future invoices charge.
    */
   address: BillingAddress | null;
+  /**
+   * Language for invoices, receipts, credit notes and the hosted invoice page.
+   *
+   * Stripe stores an ordered LIST of preferred locales; this exposes the first,
+   * because a settings UI asks for one language and round-tripping a list
+   * through a single select would silently drop the rest.
+   */
+  invoiceLocale: string | null;
 };
 
 const EMPTY: BillingProfile = {
   invoiceEmail: null,
   companyName: null,
   address: null,
+  invoiceLocale: null,
 };
 
 /** Stripe returns every address field, nulled out, even when none was set. */
@@ -82,11 +91,12 @@ export async function getBillingProfile(
     invoiceEmail: customer.email || null,
     companyName: customer.name || null,
     address: readAddress(customer.address),
+    invoiceLocale: customer.preferred_locales?.[0] ?? null,
   };
 }
 
 /**
- * Set or clear the invoice recipient, company name and billing address.
+ * Set or clear the invoice recipient, company name, address and language.
  *
  * Only the keys you pass are touched, so saving one field can't silently wipe
  * the other. Passing null (or an empty string) clears that field back to the
@@ -99,6 +109,7 @@ export async function updateBillingProfile(
     invoiceEmail?: string | null;
     companyName?: string | null;
     address?: BillingAddress | null;
+    invoiceLocale?: string | null;
   },
 ): Promise<BillingProfile> {
   const customerId = await adapter.getBillingCustomerId(orgId);
@@ -117,6 +128,7 @@ export async function updateBillingProfile(
       postal_code?: string;
       country: string;
     } | null;
+    preferred_locales?: string[];
   } = {};
 
   if (patch.invoiceEmail !== undefined) {
@@ -162,6 +174,13 @@ export async function updateBillingProfile(
       : null;
   }
 
+  if (patch.invoiceLocale !== undefined) {
+    const locale = patch.invoiceLocale?.trim() || null;
+    // An empty LIST is how Stripe clears the preference, falling back to its
+    // own default (English) rather than leaving the previous language pinned.
+    update.preferred_locales = locale ? [locale] : [];
+  }
+
   if (Object.keys(update).length === 0) return getBillingProfile(adapter, orgId);
 
   const customer = await getStripe().customers.update(customerId, update);
@@ -169,5 +188,6 @@ export async function updateBillingProfile(
     invoiceEmail: customer.email || null,
     companyName: customer.name || null,
     address: readAddress(customer.address),
+    invoiceLocale: customer.preferred_locales?.[0] ?? null,
   };
 }
