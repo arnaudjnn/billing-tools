@@ -93,8 +93,11 @@ export function BillingAddressForm({
               },
             }
           : {}),
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-time only: re-keying the element mid-edit resets the fields
       }) as const,
+    // Mount-time only, deliberately: rebuilding the options mid-edit remounts
+    // the element and wipes what the user has typed. `defaultValue` is a
+    // starting point, not a controlled value.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
 
