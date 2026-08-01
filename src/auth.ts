@@ -8,11 +8,29 @@ import {
   stripeConfigured,
 } from "./billing.js";
 
+/**
+ * Who is making this call, when that is known.
+ *
+ * An org API key identifies an ORG, not a person — it is the credential a
+ * headless agent holds, and there is no user behind it. A session-backed caller
+ * (the app's own server actions, an OAuth token minted for a user) does know,
+ * and passing it here is what lets the admin-only tools tell an owner from a
+ * member. Absent, the caller is treated as org-scoped, which is what every
+ * caller was before this existed.
+ */
+export interface Principal {
+  /** The user id the adapter's `isAdmin` understands (a WorkOS user id). */
+  userId: string;
+  /** Pre-resolved role, when the caller already knows it — skips the lookup. */
+  isAdmin?: boolean;
+}
+
 interface AuthStore {
   authHeader: string | null;
   // Pre-resolved org (e.g. the MCP transport verified an OAuth JWT). When set,
   // enforceAccess returns it without re-validating an API key.
   orgId?: string;
+  principal?: Principal;
 }
 
 export const authContext = new AsyncLocalStorage<AuthStore>();
@@ -24,6 +42,24 @@ export function runWithAuth<T>(header: string | null, fn: () => T): T {
 // Used by the MCP transport's OAuth path: run with a pre-resolved org.
 export function runWithResolvedOrg<T>(header: string | null, orgId: string, fn: () => T): T {
   return authContext.run({ authHeader: header, orgId }, fn);
+}
+
+/** Run with a known caller, so admin-only tools can check their role. Use this
+ *  from a session-backed surface (a server action, an OAuth token carrying a
+ *  user). The org may be pre-resolved or left to the API key. */
+export function runWithPrincipal<T>(
+  ctx: { authHeader?: string | null; orgId?: string; principal: Principal },
+  fn: () => T,
+): T {
+  return authContext.run(
+    { authHeader: ctx.authHeader ?? null, orgId: ctx.orgId, principal: ctx.principal },
+    fn,
+  );
+}
+
+/** The caller, if this surface established one. */
+export function currentPrincipal(): Principal | null {
+  return authContext.getStore()?.principal ?? null;
 }
 
 // Resolve the caller's org from the Bearer API key (via the adapter). Returns
@@ -56,6 +92,49 @@ export async function enforceAccess(
     };
   }
   return { authorized: true, orgId: resolved.orgId };
+}
+
+/**
+ * `enforceAccess`, plus a role check when the surface knows who is calling.
+ *
+ * The rule, and why it is shaped like this: an ORG API KEY has no user behind
+ * it, so there is no role to check and it stays owner-level — that is what the
+ * credential means, and it is what every caller got before this function
+ * existed, so adding the check breaks nobody. A caller that DOES identify a user
+ * (a server action, an OAuth token for a person) gets checked against the
+ * adapter, which is what stops a member from approving their own top-up or
+ * moving themselves onto a premium seat through the API while the app's own UI
+ * refuses them.
+ *
+ * An adapter with no `isAdmin` cannot answer, so the call is allowed rather than
+ * refused: silently locking out every management tool would be a worse failure
+ * than the one being prevented.
+ */
+export async function enforceAdmin(
+  adapter: BillingAdapter,
+  action: string,
+): Promise<{ authorized: true; orgId: string; principal: Principal | null } | ToolErrorResult> {
+  const auth = await enforceAccess(adapter);
+  if ("isError" in auth) return auth;
+
+  const principal = currentPrincipal();
+  if (!principal) return { authorized: true, orgId: auth.orgId, principal: null };
+  if (principal.isAdmin === true) return { authorized: true, orgId: auth.orgId, principal };
+  if (!adapter.isAdmin) return { authorized: true, orgId: auth.orgId, principal };
+
+  const ok = await adapter.isAdmin(auth.orgId, principal.userId);
+  if (!ok) {
+    return {
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: `Forbidden (403): ${action} requires an owner or admin of this workspace.`,
+        },
+      ],
+    };
+  }
+  return { authorized: true, orgId: auth.orgId, principal };
 }
 
 export async function isInternalOrg(

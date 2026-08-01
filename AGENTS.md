@@ -62,6 +62,22 @@ Deliberate exceptions (already SDK-first everywhere else — don't "fix" these):
 - `invitations.accept` reimplements acceptance via `createOrganizationMembership` + `revokeInvitation`: WorkOS's own accept needs the invited user's session.
 - `auth.ts:enforceAccess` emits the literal `"Unauthorized (401)"` string the REST/MCP route factories pattern-match downstream — a cross-layer wire contract.
 
+## Who is calling — org vs principal (`src/auth.ts`)
+
+Every call resolves to an **org**. An org API key means exactly that: the org, with no person behind it, which is what a headless agent holds. So org-keyed calls are owner-level, deliberately and unchanged.
+
+A surface that DOES know the human — a server action, an OAuth token minted for a user — wraps the call in `runWithPrincipal({ authHeader?, orgId?, principal: { userId, isAdmin? } })`. Admin-only tools then call **`enforceAdmin(adapter, action)`**, which is `enforceAccess` plus `adapter.isAdmin` when a principal is present. `approve_top_up`, `deny_top_up` and `assign_seat_type` use it, and `request_top_up` lets a known non-admin request only for themselves (`member_id` arrives from the caller; unchecked, a member could queue grants against anyone's seat for an owner to rubber-stamp).
+
+Two deliberate fallbacks, both "allow": no principal (the org-key case above), and an adapter with no `isAdmin` — silently disabling every management tool for adapters without a role concept is a worse failure than the one being prevented. Consequence worth knowing: with only org keys in play, the API is as permissive as it was, and the app's own UI gate is still what separates a member from an owner. **Extension point:** an OAuth path that can identify the user should resolve a principal alongside the org and pass it here.
+
+## Cycles — one definition (`currentCycle`)
+
+Anything that files something against a billing cycle must key it with `currentCycle(adapter, {orgId, plans, plan})`, the same window the meter reads. This is not stylistic: `request_top_up` used to write a calendar month while the meter read the subscription period, so for **every org with a subscription** an approved top-up granted nothing, with no error anywhere. `extraAllowance` still consults `legacyCycleKey()` as a read-only fallback so pre-fix grants survive; that fallback can go once no live org holds one.
+
+## Tax on charges the library raises itself
+
+A subscription is taxed by whoever builds its Checkout Session. Two charges have no session: the **auto-reload invoice** and the **top-up** bought through `buy_tokens`. Both were untaxed — an account charging 22% IVA on seats invoiced 0% on a top-up. Now `config.tax.rates(customerId)` (or `automatic`) covers the auto-reload, and `registerBillingTools({ topUp })` covers `buy_tokens`. Manual rates and `automatic_tax` are mutually exclusive — Stripe rejects both together. Auto-reload bills as an **invoice**, not a PaymentIntent: a receipt is not a valid sales document, and it is the one purchase the customer never confirms. It carries an idempotency key per customer/target/hour because the meter fires it, fire-and-forget, on every metered call.
+
 ## Agent auth — auth.md (`src/agent-auth/`)
 
 `createAgentAuth({ adapter, config, branding, paths?, identityTypes?, baseUrl?, claimStore?, policy? })` returns framework-agnostic `(Request)=>Response` handlers implementing the [WorkOS auth.md](https://workos.com/auth-md) agent self-registration protocol: `authMd` (the narrative), `protectedResource` (RFC 9728 PRM), `authorizationServer` (RFC 8414 + `agent_auth` block), `identity` (`POST /agent/identity` — `anonymous` + `verified_email`), `claim`, `token`/`handleClaimGrant` (the `urn:workos:agent-auth:grant-type:claim` polling grant), `revoke` (RFC 7009), and `wwwAuthenticate(req)` (the `Bearer resource_metadata="…"` value). Everything flows through the **adapter + magic-auth + shared getWorkOS** — no direct WorkOS calls. Base URL derives from the request's forwarded host/proto by default (works behind any proxy) or an explicit override. `anonymous` needs `adapter.createAnonymousOrg` (WorkOSOrgAdapter ships it; mirror apps that need a workspace row should omit `anonymous` from `identityTypes`). Claim state is a pluggable `ClaimStore` (default `inMemoryClaimStore`, sha256-at-rest, 10-min TTL; inject Redis/DB for multi-instance). Mount the REST/MCP factories with `resourceMetadata` so every 401 advertises the PRM discovery doc. Humans keep using magic-auth + Checkout; this is the headless-agent path.

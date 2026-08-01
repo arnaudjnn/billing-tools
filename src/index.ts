@@ -17,7 +17,11 @@ export {
   authContext,
   runWithAuth,
   runWithResolvedOrg,
+  runWithPrincipal,
+  currentPrincipal,
   enforceAccess,
+  enforceAdmin,
+  type Principal,
   enforceTokens,
 } from "./auth.js";
 

@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { BillingAdapter, ResolvedConfig } from "../types.js";
-import { enforceAccess } from "../auth.js";
+import { currentPrincipal, enforceAccess, enforceAdmin } from "../auth.js";
 import { getBillingCustomerId, usageSince, stripeConfigured } from "../billing.js";
 import { requestTopUp, listTopUpRequests, approveTopUp, denyTopUp } from "../topup.js";
 import { currentCycle } from "../allowance.js";
@@ -165,7 +165,9 @@ the assignment (back to the default seat).`,
       seat_type: z.string().optional().describe("Seat type key, or empty to clear"),
     },
     async ({ member_id, seat_type }) => {
-      const auth = await enforceAccess(adapter);
+      // Who sits on which seat decides who spends what, so it is an admin action
+      // wherever the caller is a known person.
+      const auth = await enforceAdmin(adapter, "assign_seat_type");
       if ("isError" in auth) return auth;
       const st = seat_type && seat_type.length ? seat_type : null;
       if (st && knownSeatTypes.size && !knownSeatTypes.has(st)) {
@@ -203,6 +205,15 @@ approve_top_up). Use when a user seat has hit its per-cycle pack.`,
     async ({ member_id, amount, cycle }) => {
       const auth = await enforceAccess(adapter);
       if ("isError" in auth) return auth;
+      // Requesting is not an admin action — asking is the whole point. But a
+      // known non-admin caller may only ask for THEMSELVES: `member_id` arrives
+      // from the caller, and an unchecked one lets a member queue a grant against
+      // anyone's seat, which an owner approving in bulk would rubber-stamp.
+      const principal = currentPrincipal();
+      if (principal && member_id !== principal.userId) {
+        const admin = principal.isAdmin ?? (await adapter.isAdmin?.(auth.orgId, principal.userId)) ?? true;
+        if (!admin) return err("Forbidden (403): you can only request a top-up for yourself.");
+      }
       const id = crypto.randomUUID();
       const c = cycle ?? (await cycleFor(auth.orgId)).key;
       await requestTopUp(adapter, auth.orgId, {
@@ -222,7 +233,7 @@ approve_top_up). Use when a user seat has hit its per-cycle pack.`,
 member for the cycle (added on top of their seat pack by the meter).`,
     { request_id: z.string().describe("The request id from list_top_up_requests") },
     async ({ request_id }) => {
-      const auth = await enforceAccess(adapter);
+      const auth = await enforceAdmin(adapter, "approve_top_up");
       if ("isError" in auth) return auth;
       const r = await approveTopUp(adapter, auth.orgId, request_id);
       if (!r.ok) return err(`Request not found or already handled: ${request_id}`);
@@ -235,7 +246,7 @@ member for the cycle (added on top of their seat pack by the meter).`,
     `Deny a pending top-up request.`,
     { request_id: z.string().describe("The request id from list_top_up_requests") },
     async ({ request_id }) => {
-      const auth = await enforceAccess(adapter);
+      const auth = await enforceAdmin(adapter, "deny_top_up");
       if ("isError" in auth) return auth;
       const r = await denyTopUp(adapter, auth.orgId, request_id);
       if (!r.ok) return err(`Request not found or already handled: ${request_id}`);
