@@ -37,10 +37,10 @@ export function AuthKitSessionProvider({
   plan?: string | null;
   children: React.ReactNode;
 }) {
-  const { user, organizationId, role } = useAuth();
+  const { user, organizationId, role, loading } = useAuth();
 
   const session = React.useMemo<BillingSession>(() => {
-    if (!user) return ANONYMOUS_SESSION;
+    if (!user) return { ...ANONYMOUS_SESSION, loading };
     return {
       user: {
         id: user.id,
@@ -53,8 +53,9 @@ export function AuthKitSessionProvider({
       role: role ?? null,
       isAdmin: role === "admin",
       plan,
+      loading: false,
     };
-  }, [user, organizationId, role, plan]);
+  }, [user, organizationId, role, plan, loading]);
 
   return <SessionProvider session={session}>{children}</SessionProvider>;
 }

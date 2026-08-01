@@ -32,6 +32,14 @@ export type BillingSession = {
   isAdmin: boolean;
   /** Plan key from organization metadata, e.g. "hobby" / "pro". */
   plan: string | null;
+  /**
+   * The session is still being resolved, so `user` being null means "not known
+   * yet" rather than "signed out".
+   *
+   * Only ever true under the client-seeded provider, which waits for AuthKit to
+   * resolve in the browser. A server-seeded session is resolved by definition.
+   */
+  loading: boolean;
 };
 
 export const ANONYMOUS_SESSION: BillingSession = {
@@ -40,6 +48,7 @@ export const ANONYMOUS_SESSION: BillingSession = {
   role: null,
   isAdmin: false,
   plan: null,
+  loading: false,
 };
 
 const ADMIN_ROLE = "admin";
@@ -120,5 +129,6 @@ export async function resolveSession(
     role,
     isAdmin: role === ADMIN_ROLE,
     plan,
+    loading: false,
   };
 }
