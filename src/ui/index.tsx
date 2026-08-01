@@ -974,16 +974,31 @@ export function useCheckoutTax(opts: {
   // the effect on every render.
   const retaxRef = React.useRef(retax);
   retaxRef.current = retax;
+  // The SESSION, likewise. `useCheckoutElements` hands back a fresh snapshot
+  // object on every render, so depending on it directly is an infinite loop:
+  // effect → setTax → render → new `checkout` identity → effect → … The values
+  // that decide whether to recalculate (country, state, tax number) are plain
+  // strings and are the real dependencies; the session is only the thing the
+  // work is done THROUGH, so it belongs in a ref, and "is there one" is a
+  // boolean.
+  const checkoutRef = React.useRef(checkout);
+  checkoutRef.current = checkout;
+  const hasSession = checkout !== null;
 
   React.useEffect(() => {
-    if (!checkout || !country) return;
+    if (!hasSession || !country) return;
     const key = `${country}|${state ?? ""}|${taxNumber ?? ""}`;
     if (appliedFor.current === key) return;
 
     const id = ++runId.current;
-    setTax((t) => ({ ...t, pending: true }));
+    // Identity-stable when it changes nothing: a state object that is merely
+    // equal-but-new re-renders, which is what turns any stray re-render into a
+    // loop. Belt and braces with the dependency fix above.
+    setTax((t) => (t.pending ? t : { ...t, pending: true }));
 
     const timer = setTimeout(async () => {
+      const checkout = checkoutRef.current;
+      if (!checkout) return;
       // A box, not a plain `let`: assigned inside a callback, which
       // TypeScript's control-flow analysis cannot see, so a bare variable stays
       // narrowed to its initial `null` at the read below.
@@ -1021,7 +1036,7 @@ export function useCheckoutTax(opts: {
     }, debounceMs);
 
     return () => clearTimeout(timer);
-  }, [checkout, country, state, taxNumber, debounceMs]);
+  }, [hasSession, country, state, taxNumber, debounceMs]);
 
   return tax;
 }
