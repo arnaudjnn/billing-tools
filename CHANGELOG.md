@@ -1,3 +1,10 @@
+# [0.47.0](https://github.com/arnaudjnn/billing-tools/compare/v0.46.1...v0.47.0) (2026-08-01)
+
+
+### Features
+
+* **checkout:** reuse the session already open for a basket ([293e7c5](https://github.com/arnaudjnn/billing-tools/commit/293e7c5b13f5381b3ac34ea9fc3e10efed17a4fd))
+
 ## [0.46.1](https://github.com/arnaudjnn/billing-tools/compare/v0.46.0...v0.46.1) (2026-08-01)
 
 
