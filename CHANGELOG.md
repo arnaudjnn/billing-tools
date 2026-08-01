@@ -1,3 +1,10 @@
+# [0.61.0](https://github.com/arnaudjnn/billing-tools/compare/v0.60.0...v0.61.0) (2026-08-01)
+
+
+### Features
+
+* **pricing:** the comparison table in config, keyed by plan and derivable ([6b97c12](https://github.com/arnaudjnn/billing-tools/commit/6b97c120dae5cadc3b5ff6e075265fd7473e9a4a))
+
 # [0.60.0](https://github.com/arnaudjnn/billing-tools/compare/v0.59.0...v0.60.0) (2026-08-01)
 
 
