@@ -1,3 +1,11 @@
+# [0.45.0](https://github.com/arnaudjnn/billing-tools/compare/v0.44.0...v0.45.0) (2026-08-01)
+
+
+### Features
+
+* **checkout:** open the payment form without the wait ([c7c047d](https://github.com/arnaudjnn/billing-tools/commit/c7c047dc7871e26c2f01bfede66ba674be2c0a0a))
+* **ui:** default useCheckoutTax's tax number to the one on the session ([e9237eb](https://github.com/arnaudjnn/billing-tools/commit/e9237ebf21f86bfcb574c3323d3abae86afc958c))
+
 # [0.43.0](https://github.com/arnaudjnn/billing-tools/compare/v0.42.0...v0.43.0) (2026-08-01)
 
 
