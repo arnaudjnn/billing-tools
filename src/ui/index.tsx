@@ -1068,3 +1068,6 @@ export { BillingAddressForm, type AddressValue } from "./address.js";
 
 // Languages Stripe can issue an invoice in (leaf module: safe for the browser).
 export { INVOICE_LOCALES, type InvoiceLocale } from "./locales.js";
+
+// Tax-ID types Stripe accepts (leaf module: safe for the browser).
+export { TAX_ID_TYPES, splitTaxIdType, type TaxIdType } from "./tax-id-types.js";
