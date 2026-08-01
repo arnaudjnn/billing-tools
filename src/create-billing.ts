@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { BillingAdapter, BillingConfig } from "./types.js";
 import { resolveConfig } from "./types.js";
-import { registerBillingTools } from "./tools/register.js";
+import { registerBillingTools, type RegisterBillingToolsOptions } from "./tools/register.js";
 import { createDispatcher } from "./dispatch.js";
 import { createToolListHandler, createToolDispatchHandler } from "./routes/rest.js";
 import { createMcpTransport } from "./routes/mcp.js";
@@ -40,6 +40,15 @@ export interface CreateBillingOptions {
   /** Declarative plans → auto-provisioned Stripe products/prices + list_plans. */
   plans?: PlanCatalog;
   defaultPlan?: string;
+  /** Tax and return URLs for `buy_tokens`. Supply `taxRates` on any account that
+   *  charges tax on its subscriptions — a top-up has no address form of its own,
+   *  so without this it invoices at 0%. */
+  topUp?: RegisterBillingToolsOptions["topUp"];
+  /** How to find an org's plan when it isn't on the adapter's subscription. */
+  resolvePlan?: (orgId: string) => Promise<string | null>;
+  /** Lifecycle tools (`change_plan`, `preview_plan_change`, …). Default on when
+   *  `plans` is set; pass false to keep plan changes in the app's own UI. */
+  subscriptionTools?: RegisterBillingToolsOptions["subscriptionTools"];
   /** Register your app's own product tools alongside the billing tools. */
   registerTools?: (server: McpServer) => void;
   /** Enable auth.md agent self-registration. Omit to leave it off. */
@@ -163,6 +172,9 @@ export function createBilling(opts: CreateBillingOptions) {
       toolCosts: opts.toolCosts,
       plans: opts.plans,
       defaultPlan: opts.defaultPlan,
+      topUp: opts.topUp,
+      subscriptionTools: opts.subscriptionTools,
+      resolvePlan: opts.resolvePlan ?? opts.meter?.resolvePlan,
     });
     opts.registerTools?.(server);
   };
