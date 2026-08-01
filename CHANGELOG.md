@@ -1,3 +1,10 @@
+# [0.55.0](https://github.com/arnaudjnn/billing-tools/compare/v0.54.0...v0.55.0) (2026-08-01)
+
+
+### Features
+
+* **config:** defaultLocale for new customers' invoices ([9ca5d58](https://github.com/arnaudjnn/billing-tools/commit/9ca5d583cf5cfca7b29507f0cd26fd8fe6f894b6))
+
 # [0.54.0](https://github.com/arnaudjnn/billing-tools/compare/v0.53.1...v0.54.0) (2026-08-01)
 
 
