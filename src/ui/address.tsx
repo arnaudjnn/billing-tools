@@ -155,8 +155,7 @@ export function BillingAddressForm({
           // tab order.
           <div
             aria-hidden
-            // @ts-expect-error -- `inert` lands in React's types after 19.2
-            inert=""
+            inert
             style={{
               position: "absolute",
               left: "-9999px",
