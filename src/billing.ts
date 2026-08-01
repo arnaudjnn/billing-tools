@@ -107,6 +107,32 @@ export async function getBillingCustomerId(
   return adapter.getBillingCustomerId(orgId);
 }
 
+/** Subscription state as the billing-sync recorded it, through the seam.
+ *
+ *  All-null when the adapter has no org-metadata store to keep it in, which
+ *  reads the same as "no subscription" — the caller's fallback either way. The
+ *  point of having it here is that an app holding a `BillingAdapter` shouldn't
+ *  have to reach past it to WorkOS (and re-derive the metadata key names) to
+ *  read what the engine wrote. */
+export async function getOrgSubscription(
+  adapter: BillingAdapter,
+  orgId: string,
+): Promise<{
+  plan: string | null;
+  status: string | null;
+  subscriptionId: string | null;
+  periodEnd: string | null;
+}> {
+  return (
+    (await adapter.getSubscription?.(orgId)) ?? {
+      plan: null,
+      status: null,
+      subscriptionId: null,
+      periodEnd: null,
+    }
+  );
+}
+
 // Idempotent: return the org's Stripe customer id, creating the customer +
 // welcome credit and persisting the pointer via the adapter on first use.
 export async function ensureStripeCustomer(

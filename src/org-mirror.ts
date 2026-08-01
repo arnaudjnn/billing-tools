@@ -26,17 +26,23 @@ import type { WorkOSOrgMap } from "./adapters/workos-org.js";
 // same row.
 
 export interface WorkOSOrgMirrorOptions {
-  /** The stored WorkOS org id for a local id, or null if none is recorded yet. */
+  /**
+   * The stored WorkOS org id for a local id, or null if none is recorded yet
+   * (which triggers the reconcile).
+   *
+   * THROW if the local id has no row at all: null means "no pointer, go find or
+   * make the org", and answering that for a row that doesn't exist would mint an
+   * org for nothing.
+   */
   readPointer(localId: string): Promise<string | null>;
   /** Persist the pointer. Called whenever it was missing or had drifted. */
   writePointer(localId: string, workosOrgId: string): Promise<void>;
   /** The local id a WorkOS org id maps back to, when the app can answer it from
    *  its own store. Return null to fall back to the org's `externalId`. */
   reversePointer?(workosOrgId: string): Promise<string | null>;
-  /** Organization name to create with. Receives the local id; default "Workspace". */
+  /** Organization name to create with. Receives the local id; default "Workspace".
+   *  Only consulted on the reconcile path, so it can cost a query. */
   nameFor?(localId: string): Promise<string> | string;
-  /** Thrown when a local id has no row at all. Default: a generic Error. */
-  onMissing?(localId: string): Error;
 }
 
 export interface WorkOSOrgMirror extends WorkOSOrgMap {

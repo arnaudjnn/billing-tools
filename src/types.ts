@@ -61,6 +61,33 @@ export interface BillingAdapter {
   getOrgMetadata?(orgId: string): Promise<Record<string, string>>;
   /** Merge a patch into the org metadata (null value = delete the key). */
   setOrgMetadata?(orgId: string, patch: Record<string, string | null>): Promise<void>;
+
+  // Subscription state + seat count. The billing-sync engine relies on these,
+  // but they were only ever declared on the concrete WorkOSOrgAdapter — so an
+  // app holding the seam type had no way to READ what the engine had written,
+  // and wrote its own metadata reader instead (scartoffie had one). Optional,
+  // because an adapter with no org-metadata store legitimately has none.
+
+  /** Subscription state as the sync engine records it. */
+  getSubscription?(orgId: string): Promise<{
+    plan: string | null;
+    status: string | null;
+    subscriptionId: string | null;
+    periodEnd: string | null;
+  }>;
+  /** Record subscription state. `plan: undefined` leaves the plan as-is; `null`
+   *  clears it (back to the default plan). */
+  setSubscription?(
+    orgId: string,
+    sub: {
+      plan?: string | null;
+      status: string | null;
+      subscriptionId: string | null;
+      periodEnd: string | null;
+    },
+  ): Promise<void>;
+  /** Active members, for per-seat grants and seat limits. */
+  memberCount?(orgId: string): Promise<number>;
   /** Whether a user is an admin/owner of the org (gates auto-top-up + approvals). */
   isAdmin?(orgId: string, userId: string): Promise<boolean>;
 }
