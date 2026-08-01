@@ -44,6 +44,8 @@
 // against, with no money moving. Credit stays what it is actually for —
 // PURCHASED tokens (a top-up), which the customer really can spend.
 
+import type { Localized, LocalizedList } from "./i18n.js";
+
 // ── Primitives ──────────────────────────────────────────────────────────────
 
 export type BillingInterval = "monthly" | "yearly";
@@ -70,29 +72,37 @@ export const INTERVALS: readonly BillingInterval[] = ["monthly", "yearly"];
 // via Intl, with an override.
 
 export interface SeatTypeDisplay {
-  /** "Posto Standard" / "Standard seat". */
-  label: string;
+  /** "Standard seat". A plain string, or one per locale. */
+  label: Localized;
   /** One muted line on what the seat buys. */
-  usage?: string;
+  usage?: Localized;
 }
 
 export interface PlanDisplay {
-  /** Commercial proper noun: "Pro". */
-  name: string;
+  /**
+   * Commercial proper noun: "Pro".
+   *
+   * Every text field here is {@link Localized} — a plain string for one language,
+   * or `{ en: …, it: … }` to serve several from one config. The library resolves
+   * it against the surface's locale, falling back to the language subtag and then
+   * to `defaultLocale` (English).
+   */
+  name: Localized;
   /** Short fragment under the name. No full stop. */
-  tagline?: string;
+  tagline?: Localized;
   /** Ascending. Plans without one sort after, in config order. */
   order?: number;
-  /** Badge TEXT, so the library needs no i18n: "Consigliato" / "Most popular". */
-  badge?: string;
+  /** Badge text: "Most popular". */
+  badge?: Localized;
   featured?: boolean;
   /** Lead-in above the bullets: "Everything in Hobby, plus:". */
-  featuresIntro?: string;
-  features?: readonly string[];
+  featuresIntro?: Localized;
+  /** A list, or one list per locale — translations legitimately differ in length. */
+  features?: LocalizedList;
   /** The library picks the CTA *kind* from `sale`; the words are the app's. */
-  cta?: { label: string; href?: string };
+  cta?: { label: Localized; href?: string };
   /** Copy for a plan with no per-seat figure to show (a committed package). */
-  pooled?: { title: string; note?: string };
+  pooled?: { title: Localized; note?: Localized };
   /** Keep out of generated pricing surfaces (internal or grandfathered). */
   hidden?: boolean;
 }

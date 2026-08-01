@@ -1,4 +1,14 @@
 import {
+  formatMessage,
+  resolveLocalized,
+  resolveLocalizedList,
+  resolveMessages,
+  type LocaleOptions,
+  type Localized,
+  type Messages,
+  type PartialMessages,
+} from "./i18n.js";
+import {
   defaultBasket,
   normalizePlans,
   poolSizeOf,
@@ -152,11 +162,16 @@ export interface PlanView {
   sale: Sale;
   interval: BillingInterval;}
 
-export interface DerivePlanViewsOptions {
+export interface DerivePlanViewsOptions extends LocaleOptions {
   /** Which interval the headline shows. Default "yearly". */
   interval?: BillingInterval;
-  locale?: string;
   currency?: string;
+  /**
+   * Override the handful of words the library supplies itself ("Unlimited",
+   * "Monthly", "Contact us", the refusal messages). Anything not overridden stays
+   * ENGLISH — see DEFAULT_MESSAGES.
+   */
+  messages?: PartialMessages;
   /** Override the formatter. Intl gives "18,00 €" for it-IT; a house style may
    *  want "€18". */
   formatMoney?: (minor: Money, currency: string, locale: string) => string;
@@ -205,7 +220,8 @@ function ctaFor(
   model: PlanModel,
   opts: DerivePlanViewsOptions,
 ): CtaView {
-  const label = model.display?.cta?.label ?? model.display?.name ?? model.key;
+  const text = (v: Localized | undefined) => resolveLocalized(v, opts);
+  const label = text(model.display?.cta?.label) ?? text(model.display?.name) ?? model.key;
   const manage = opts.canManage ?? true;
   const disabledReason = manage === true ? null : typeof manage === "object" ? manage.reason : "";
   const href = model.display?.cta?.href ?? null;
@@ -240,6 +256,8 @@ export function derivePlanViews(
   const interval = opts.interval ?? "yearly";
   const locale = opts.locale ?? "en-US";
   const currency = opts.currency ?? "usd";
+  const messages = resolveMessages(opts.messages);
+  const text = (v: Localized | undefined) => resolveLocalized(v, opts);
   const fmt = opts.formatMoney ?? defaultFormatMoney;
   const money = (minor: Money): MoneyView => ({ minor, text: fmt(minor, currency, locale) });
   const other: BillingInterval = interval === "yearly" ? "monthly" : "yearly";
@@ -249,8 +267,8 @@ export function derivePlanViews(
     .map((model): PlanView => {
       const rows: SeatRowView[] = model.seatTypes.map((s) => ({
         key: s.key,
-        label: s.display?.label ?? s.key,
-        usage: s.display?.usage ?? null,
+        label: text(s.display?.label) ?? s.key,
+        usage: text(s.display?.usage) ?? null,
         shared: s.shared,
         free: s.price.monthly === 0 && s.price.yearly === 0,
         min: s.min,
@@ -311,13 +329,13 @@ export function derivePlanViews(
 
       return {
         key: model.key,
-        name: model.display?.name ?? model.key,
-        tagline: model.display?.tagline ?? null,
-        badge: model.display?.badge ?? null,
+        name: text(model.display?.name) ?? model.key,
+        tagline: text(model.display?.tagline) ?? null,
+        badge: text(model.display?.badge) ?? null,
         featured: model.display?.featured ?? false,
         order: model.display?.order ?? Number.MAX_SAFE_INTEGER,
-        featuresIntro: model.display?.featuresIntro ?? null,
-        features: model.display?.features ?? [],
+        featuresIntro: text(model.display?.featuresIntro) ?? null,
+        features: resolveLocalizedList(model.display?.features, opts),
         price: {
           kind,
           headline,
@@ -337,7 +355,10 @@ export function derivePlanViews(
           maxSeats: sells.kind === "seats" ? (sells.maxSeats ?? null) : null,
           rows,
           pooled: model.display?.pooled
-            ? { title: model.display.pooled.title, note: model.display.pooled.note ?? null }
+            ? {
+                title: text(model.display.pooled.title) ?? "",
+                note: text(model.display.pooled.note) ?? null,
+              }
             : null,
         },
         cta: ctaFor(model, opts),

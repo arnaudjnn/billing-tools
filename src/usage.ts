@@ -1,7 +1,7 @@
 import { getBillingCustomerId } from "./billing.js";
 import { resolveAllowance, type AllowanceState, type LimitState } from "./allowance.js";
 import { getSeatType } from "./seats.js";
-import { planModel, type CycleWindow, type Every, type PlanCatalog } from "./plan-model.js";
+import type { CycleWindow, Every, PlanCatalog } from "./plan-model.js";
 import { stripeBalanceUsageLedger, type UsageLedger } from "./usage-ledger.js";
 import type { BillingAdapter, ResolvedConfig } from "./types.js";
 
@@ -97,7 +97,6 @@ export async function usageSummary(
   config: ResolvedConfig,
   input: UsageSummaryInput,
 ): Promise<UsageSummary> {
-  const model = planModel(input.plans, input.plan ?? null);
   const at = input.now ?? Date.now();
 
   // A member's seat decides which pack and which seat-scoped limits apply, so
@@ -124,8 +123,11 @@ export async function usageSummary(
     plan: state.plan,
     cycle: state.cycle,
     windows: state.limits.map(toWindow),
+    // No label for the cap's own rows. The plan's `display` strings are localized
+    // (a Record of locale → text), and picking one here would be this library
+    // choosing a language; the app labels these two rows itself.
     pool: state.pool
-      ? capWindow("cycle", model?.display?.pooled?.title ?? null, state.pool.size, state.pool.used, state.cycle)
+      ? capWindow("cycle", null, state.pool.size, state.pool.used, state.cycle)
       : null,
     pack: state.pack
       ? {

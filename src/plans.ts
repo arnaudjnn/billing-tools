@@ -1,5 +1,6 @@
 import type Stripe from "stripe";
 import { getStripe } from "./billing.js";
+import { resolveLocalized } from "./i18n.js";
 import {
   grantFor,
   INTERVALS,
@@ -285,7 +286,9 @@ export async function ensurePlans(
       const product = await stripe.products.create({
         // The display name when the config has one, so the Stripe Dashboard and
         // an invoice line read like the product rather than like its key.
-        name: planModel(plans, plan)?.display?.name ?? cap(plan),
+        // Resolved in the DEFAULT locale: a Stripe product name is one string
+        // for the account, not per viewer.
+        name: resolveLocalized(planModel(plans, plan)?.display?.name) ?? cap(plan),
         metadata: { managedBy: MANAGED_BY, plan },
       });
       productId = product.id;

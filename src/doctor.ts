@@ -315,24 +315,35 @@ export function checkPlansConfig(plans: PlanCatalog): DoctorResult {
         });
       }
     }
-    // A wider window that is tighter than a narrower one can never be reached:
-    // the narrow one refuses first, every time. Ordering is by window length, so
-    // this catches "300 a week" sitting under "1000 a day".
+    // A wider window that is no larger than a narrower one can never be reached:
+    // the narrow one refuses first, every time. This catches "300 a week" sitting
+    // under "1000 a day".
+    //
+    // Only limits that can apply to the SAME caller are compared. Two limits with
+    // different scopes, or on different seat types, never meet — an hourly cap on
+    // the shared API seat does not shadow a weekly cap on a person's, and
+    // comparing them was a false positive on a perfectly good config.
     const lengths: Record<string, number> = { hour: 1, day: 2, week: 3, month: 4, cycle: 5 };
-    const sorted = [...m.limits.rate].sort((a, b) => lengths[a.every] - lengths[b.every]);
-    for (let i = 1; i < sorted.length; i++) {
-      const narrow = sorted[i - 1];
-      const wide = sorted[i];
-      if ((narrow.scope ?? "org") !== (wide.scope ?? "org")) continue;
-      if (wide.tokens <= narrow.tokens) {
-        checks.push({
-          level: "warn",
-          title: `Plan "${m.key}" has an unreachable ${wide.every} limit`,
-          detail:
-            `the ${wide.every} limit (${wide.tokens}) is no larger than the ${narrow.every} one ` +
-            `(${narrow.tokens}), so the ${narrow.every} window always refuses first`,
-          fix: `Raise the ${wide.every} limit above the ${narrow.every} one, or drop one of them`,
-        });
+    const groups = new Map<string, typeof m.limits.rate[number][]>();
+    for (const l of m.limits.rate) {
+      const key = `${l.scope ?? "org"}:${l.seatType ?? ""}`;
+      groups.set(key, [...(groups.get(key) ?? []), l]);
+    }
+    for (const group of groups.values()) {
+      const sorted = [...group].sort((a, b) => lengths[a.every] - lengths[b.every]);
+      for (let i = 1; i < sorted.length; i++) {
+        const narrow = sorted[i - 1];
+        const wide = sorted[i];
+        if (wide.tokens <= narrow.tokens) {
+          checks.push({
+            level: "warn",
+            title: `Plan "${m.key}" has an unreachable ${wide.every} limit`,
+            detail:
+              `the ${wide.every} limit (${wide.tokens}) is no larger than the ${narrow.every} one ` +
+              `(${narrow.tokens}) on the same callers, so the ${narrow.every} window always refuses first`,
+            fix: `Raise the ${wide.every} limit above the ${narrow.every} one, or drop one of them`,
+          });
+        }
       }
     }
     if (m.cap.kind === "pool" && poolSizeOf(m) === 0) {
