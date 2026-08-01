@@ -153,6 +153,12 @@ export {
   derivePlanView,
   renderPlansMarkdown,
   renderRateCardMarkdown,
+  // The comparison table: authored as a table, cells keyed BY PLAN (a positional
+  // tuple silently shifted every cell when a plan moved), and rows that restate a
+  // configured number can be DERIVED from it instead.
+  defineCompare,
+  deriveCompareTable,
+  compareRowLabels,
   type PlanView,
   type PlanPriceView,
   type SeatRowView,
@@ -160,6 +166,18 @@ export {
   type MoneyView,
   type DerivePlanViewsOptions,
   type MarkdownOptions,
+  type CompareConfig,
+  type CompareSection,
+  type CompareGroup,
+  type CompareRow,
+  type CompareValue,
+  type CompareSource,
+  type CompareCell,
+  type CompareTableView,
+  type CompareSectionView,
+  type CompareGroupView,
+  type CompareRowView,
+  type DeriveCompareOptions,
 } from "./pricing.js";
 
 // Included allowance as a counted WINDOW (a pool, or a per-seat pack) rather than

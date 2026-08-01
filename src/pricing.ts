@@ -145,9 +145,12 @@ export interface PlanView {
   members: { max: number | null };
   /** Included usage per cycle for the default basket, and where it pools. */
   included: { tokens: number; scope: "per_seat" | "pool" | "none" };
+  /** Intervals the plan is actually SOLD on — `["yearly"]` for an annual-only
+   *  commitment. Not derivable from the rendered price: a quoted plan shows no
+   *  price at all yet still has a billing cycle. */
+  intervals: readonly BillingInterval[];
   sale: Sale;
-  interval: BillingInterval;
-}
+  interval: BillingInterval;}
 
 export interface DerivePlanViewsOptions {
   /** Which interval the headline shows. Default "yearly". */
@@ -347,6 +350,7 @@ export function derivePlanViews(
             : includedPerSeat > 0
               ? { tokens: includedPerSeat, scope: "per_seat" }
               : { tokens: 0, scope: "none" },
+        intervals: model.intervals,
         sale: model.sale,
         interval,
       };
@@ -470,4 +474,201 @@ export function renderRateCardMarkdown(
   const rest = all.filter(([k]) => !grouped.has(k));
   if (rest.length) sections.push(`${hashes} Other\n\n${table(rest)}`);
   return sections.join("\n\n");
+}
+
+// ── The comparison table ────────────────────────────────────────────────────
+//
+// A feature matrix is cross-plan by nature — a row says something about EVERY
+// plan — so it is authored as a table (section → group → row) rather than
+// scattered across the plans, where a single row's label would have to be kept
+// in sync in three places.
+//
+// Two things make it worth having in the config rather than in a component:
+//
+//  1. Cells are keyed BY PLAN. The shape this replaces was a positional tuple
+//     zipped against the plan list, so adding or reordering a plan silently
+//     shifted every cell in the table by a column.
+//  2. A row can be DERIVED from the plan model (`from`), so the rows that restate
+//     a configured number cannot contradict it. That drift was live: the matrix
+//     advertised "50 searches a day" and "up to 10 members" against a config of
+//     1000 tokens a cycle and a limit of 100.
+//
+// Three ways to write a row, because most rows are the boring case:
+//
+//   { label: "Full-text search",  in: ["hobby", "pro"] }          // ✓ / ✓ / —
+//   { label: "Searches",          values: { hobby: "50" } }        // text per plan
+//   { label: "Members",           from: "members" }                // from the config
+
+/** What a cell can say when it is authored by hand. */
+export type CompareValue = boolean | string | number;
+
+/** Fill a row from the plan model instead of by hand. */
+export type CompareSource =
+  /** `limits.members` — a count, or the unlimited label. */
+  | "members"
+  /** `included.tokens` per cycle. */
+  | "included"
+  /** The plan's headline price for the selected interval. */
+  | "price"
+  /** The intervals the plan is sold on. */
+  | "intervals"
+  /** The names of its purchasable seat types. */
+  | "seatTypes";
+
+export interface CompareRow {
+  label: string;
+  /** One muted line under the label, when the label alone isn't enough. */
+  hint?: string;
+  /** Boolean shorthand: these plans get a tick, everything else a dash. */
+  in?: readonly string[];
+  /** Explicit per-plan values. A plan with no entry reads as "not included". */
+  values?: Record<string, CompareValue>;
+  /** Derive the value from each plan. Beats `values` when both are present,
+   *  because the config is the thing that can't be wrong. */
+  from?: CompareSource;
+}
+
+export interface CompareGroup {
+  /** The sub-heading inside a section. */
+  label: string;
+  rows: readonly CompareRow[];
+}
+
+export interface CompareSection {
+  title: string;
+  description?: string;
+  /** Icon NAME, resolved by the app — the library ships no components. */
+  icon?: string;
+  groups: readonly CompareGroup[];
+}
+
+export type CompareConfig = readonly CompareSection[];
+
+/** Identity helper, for literal types and autocomplete on a compare config. */
+export function defineCompare<T extends CompareConfig>(compare: T): T {
+  return compare;
+}
+
+/** A resolved cell: the component renders a tick, a dash, or text — it never has
+ *  to interpret a value. */
+export type CompareCell =
+  | { kind: "yes" }
+  | { kind: "no" }
+  | { kind: "text"; text: string };
+
+export interface CompareRowView {
+  label: string;
+  hint: string | null;
+  /** Keyed by plan, and also ordered to match `columns`. */
+  cells: Record<string, CompareCell>;
+}
+
+export interface CompareGroupView {
+  label: string;
+  rows: readonly CompareRowView[];
+}
+
+export interface CompareSectionView {
+  title: string;
+  description: string | null;
+  icon: string | null;
+  groups: readonly CompareGroupView[];
+}
+
+export interface CompareTableView {
+  /** The plans, in the same order as the pricing cards. */
+  columns: readonly { key: string; name: string; featured: boolean }[];
+  sections: readonly CompareSectionView[];
+}
+
+export interface DeriveCompareOptions extends DerivePlanViewsOptions {
+  /** The few words the library would otherwise have to invent. */
+  labels?: {
+    /** For an unlimited `members` row. Default "Unlimited". */
+    unlimited?: string;
+    /** Joins a list (seat types, intervals). Default ", ". */
+    separator?: string;
+    /** Interval names for an `intervals` row. Default English. */
+    monthly?: string;
+    yearly?: string;
+  };
+}
+
+/**
+ * Resolve a compare config against the plans into something a table can render.
+ *
+ * Columns come from the same derivation as the pricing cards, so the table's
+ * plans are in the same order, with the same names, and a hidden or legacy plan
+ * is absent from both.
+ */
+export function deriveCompareTable(
+  plans: PlanCatalog,
+  compare: CompareConfig,
+  opts: DeriveCompareOptions = {},
+): CompareTableView {
+  const views = derivePlanViews(plans, opts);
+  const labels = {
+    unlimited: opts.labels?.unlimited ?? "Unlimited",
+    separator: opts.labels?.separator ?? ", ",
+    monthly: opts.labels?.monthly ?? "Monthly",
+    yearly: opts.labels?.yearly ?? "Yearly",
+  };
+  const locale = opts.locale ?? "en-US";
+  const number = (n: number) => new Intl.NumberFormat(locale).format(n);
+
+  const cellFor = (row: CompareRow, view: PlanView): CompareCell => {
+    if (row.from) {
+      switch (row.from) {
+        case "members":
+          return {
+            kind: "text",
+            text: view.members.max === null ? labels.unlimited : number(view.members.max),
+          };
+        case "included":
+          return view.included.tokens > 0
+            ? { kind: "text", text: number(view.included.tokens) }
+            : { kind: "no" };
+        case "price":
+          return view.price.headline
+            ? { kind: "text", text: view.price.headline.text }
+            : { kind: "text", text: "—" };
+        case "intervals": {
+          const names = view.intervals.map((i) => (i === "monthly" ? labels.monthly : labels.yearly));
+          return names.length ? { kind: "text", text: names.join(labels.separator) } : { kind: "no" };
+        }
+        case "seatTypes": {
+          const names = view.price.rows.filter((r) => !r.shared).map((r) => r.label);
+          return names.length ? { kind: "text", text: names.join(labels.separator) } : { kind: "no" };
+        }
+      }
+    }
+    if (row.in) return row.in.includes(view.key) ? { kind: "yes" } : { kind: "no" };
+    const value = row.values?.[view.key];
+    if (value === undefined || value === false) return { kind: "no" };
+    if (value === true) return { kind: "yes" };
+    return { kind: "text", text: typeof value === "number" ? number(value) : value };
+  };
+
+  return {
+    columns: views.map((v) => ({ key: v.key, name: v.name, featured: v.featured })),
+    sections: compare.map((section) => ({
+      title: section.title,
+      description: section.description ?? null,
+      icon: section.icon ?? null,
+      groups: section.groups.map((group) => ({
+        label: group.label,
+        rows: group.rows.map((row) => ({
+          label: row.label,
+          hint: row.hint ?? null,
+          cells: Object.fromEntries(views.map((v) => [v.key, cellFor(row, v)])),
+        })),
+      })),
+    })),
+  };
+}
+
+/** Every row label in a compare config — for a search box, or to check that a
+ *  row hasn't been written twice. */
+export function compareRowLabels(compare: CompareConfig): string[] {
+  return compare.flatMap((s) => s.groups.flatMap((g) => g.rows.map((r) => r.label)));
 }
