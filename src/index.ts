@@ -148,6 +148,21 @@ export {
   type PlanActions,
 } from "./subscription.js";
 
+// i18n: the config's display text can be one string or one per locale, and the
+// handful of words the LIBRARY supplies default to English and are overridable.
+export {
+  resolveLocalized,
+  resolveLocalizedList,
+  resolveMessages,
+  formatMessage,
+  DEFAULT_MESSAGES,
+  type Localized,
+  type LocalizedList,
+  type LocaleOptions,
+  type Messages,
+  type PartialMessages,
+} from "./i18n.js";
+
 // Pricing view models: the plan config turned into what a surface renders. Also
 // available as the leaf entry point `@arnaudjnn/billing-tools/pricing`, which
 // pulls in neither Stripe nor WorkOS — so a client component and a docs

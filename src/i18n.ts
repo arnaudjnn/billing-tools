@@ -12,7 +12,7 @@
 //     overridable per consumer.
 //
 // Money formatting is already locale-aware via Intl (with a `formatMoney` escape
-// hatch, because it-IT gives "18,00 €" where a house style may want "€18").
+// hatch, because de-DE renders "18,00 €" where a house style may want "€18").
 
 /**
  * A string, or the same string per locale.
@@ -22,7 +22,7 @@
  *
  *     name: "Pro"
  *     name: { en: "Pro", it: "Pro" }
- *     tagline: { en: "Search, analyse, organise", it: "Cercate, analizzate, organizzate" }
+ *     tagline: { en: "Search, analyse, organise", fr: "Cherchez, analysez, organisez" }
  */
 export type Localized = string | Readonly<Record<string, string>>;
 
@@ -31,19 +31,16 @@ export type Localized = string | Readonly<Record<string, string>>;
 export type LocalizedList = readonly string[] | Readonly<Record<string, readonly string[]>>;
 
 export interface LocaleOptions {
-  /** BCP 47 tag the surface is rendering in, e.g. "it" or "it-IT". */
+  /** BCP 47 tag the surface is rendering in, e.g. "fr" or "fr-CA". */
   locale?: string;
   /** Fallback when a locale has no entry. Default "en". */
   defaultLocale?: string;
 }
 
-const isMap = (v: unknown): v is Record<string, unknown> =>
-  typeof v === "object" && v !== null && !Array.isArray(v);
-
 /**
  * Pick the best entry for `locale`.
  *
- * Exact tag → language subtag ("it-IT" → "it") → the default locale and ITS
+ * Exact tag → language subtag ("fr-CA" → "fr") → the default locale and ITS
  * language → the first entry. The last step is deliberate: a config with one
  * language under an unexpected key should still render, rather than showing a
  * customer nothing at all.

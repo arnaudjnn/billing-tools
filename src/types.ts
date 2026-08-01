@@ -65,7 +65,7 @@ export interface BillingAdapter {
   // Subscription state + seat count. The billing-sync engine relies on these,
   // but they were only ever declared on the concrete WorkOSOrgAdapter — so an
   // app holding the seam type had no way to READ what the engine had written,
-  // and wrote its own metadata reader instead (scartoffie had one). Optional,
+  // and wrote its own metadata reader instead (a consumer had one). Optional,
   // because an adapter with no org-metadata store legitimately has none.
 
   /** Subscription state as the sync engine records it. */

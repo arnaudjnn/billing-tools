@@ -119,6 +119,17 @@ The window comes from the SUBSCRIPTION period, not the calendar month: an annual
 
 **Presentation** lives on the plan, and derives via `@arnaudjnn/billing-tools/pricing` (a leaf entry — no Stripe, no WorkOS, no React): `derivePlanViews(plans, {interval, currency, locale, formatMoney, currentPlan, canManage, hrefs})` → `PlanView[]`, which a React card and `renderPlansMarkdown`/`renderRateCardMarkdown` both consume. Note `price.headline` is a per-MONTH comparison figure and `price.totals` is what is actually charged — and `annualSaving` carries `annualSavingBasis`, because the two surfaces of the app this came from derived that percentage from different baskets and advertised 17% while charging 14%.
 
+## i18n (`src/i18n.ts`)
+
+Two kinds of text, two owners. **The library ships English and nothing else.**
+
+- **App-authored** (plan name, tagline, badge, features, CTA label, pooled copy, seat labels, every compare title/label/text value) is `Localized` — a plain string for one language, or `{ en: …, fr: … }` for several. A plain string is unchanged from before, so a single-language config needs no edit. Resolution is exact tag → language subtag (`fr-CA` → `fr`) → `defaultLocale` (default `en`) and its subtag → first entry; that last step is deliberate, so a config keyed unexpectedly still renders something.
+- **Library-authored** — the structural words it cannot avoid supplying: `Unlimited` in a members column, `Monthly`/`Yearly` in a derived billing-cycle row, generated markdown headers, `Contact us`, `Free`, and the refusal messages a customer reads. All of it is `DEFAULT_MESSAGES` (English), overridden per consumer via `messages` on `derivePlanViews` / `deriveCompareTable` / `renderPlansMarkdown` / `renderRateCardMarkdown`, and via the optional last argument of `describeBasketProblem` / `describeDenial`. Partial bundles are filled from English, so a missing key is never a blank string. Placeholders are `{name}`, substituted by `formatMessage`.
+
+Money already localises through `Intl` (`locale` + `currency`), with `formatMoney` as the escape hatch for a house style Intl won't reproduce.
+
+**Keep this package English-only** — including comments and examples. Consumer-specific wording belongs in the consumer.
+
 ## Changing a price, changing the currency
 
 **A price is one edit.** Change the amount in `PLANS` and deploy: the next call mints a new Stripe price, transfers the `lookup_key` onto it, archives the old one and reuses the product; the `resolvePlanPrices` memo is keyed on the config, so nothing to flush. Verified end-to-end. But a Stripe price is IMMUTABLE and a subscription references one by id, so **existing subscribers keep paying the old amount** — `ensurePlans` will not silently reprice live customers. `migrateSubscriptions({ plans, plan, interval, dryRun })` is that step, made explicit: it walks the plan's superseded prices, moves live subscriptions (active/trialing/past_due/unpaid/paused) onto the current one preserving quantity and seat type, defaults to `proration_behavior: "none"` (new amount from the next renewal), only touches prices this library minted, and is idempotent. Do the dry run first.

@@ -77,7 +77,7 @@ export {
 
 // Library DEFAULT seat types, priced in USD (the lib's default currency — see
 // ensurePlans `opts.currency ?? "usd"`). Consumers use these as-is or override
-// (scartoffie, for instance, sets currency "eur" and its own EUR amounts).
+// (a euro-denominated consumer sets currency "eur" and its own amounts).
 // Amounts are cents; `yearly` is the annual total per seat. The `api` seat is
 // the shared agent/API pool (≈ 5× a premium seat). `includedTokens` are example
 // packs — tune per product.
@@ -228,8 +228,8 @@ export async function ensurePlans(
   // This has to be stated, not left to Stripe. Stripe Tax REFUSES to calculate on
   // a price whose tax_behavior is `unspecified`, and the account-level default is
   // `inferred_by_currency` — which for EUR infers INCLUSIVE, silently turning a
-  // "€42,08 + IVA" listing into "€42,08 including IVA" (same charge, less revenue).
-  // Exclusive matches how a "+ IVA" price is quoted, which is what these seat
+  // "42.08 + VAT" listing into "42.08 including VAT" (same charge, less revenue).
+  // Exclusive matches how a "+ VAT" price is quoted, which is what these seat
   // prices are.
   const taxBehavior = opts.taxBehavior ?? "exclusive";
   const result: EnsuredPrice[] = [];

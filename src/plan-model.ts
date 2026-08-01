@@ -44,7 +44,13 @@
 // against, with no money moving. Credit stays what it is actually for —
 // PURCHASED tokens (a top-up), which the customer really can spend.
 
-import type { Localized, LocalizedList } from "./i18n.js";
+import {
+  formatMessage,
+  resolveMessages,
+  type Localized,
+  type LocalizedList,
+  type PartialMessages,
+} from "./i18n.js";
 
 // ── Primitives ──────────────────────────────────────────────────────────────
 
@@ -619,25 +625,38 @@ export function validateBasket(
   return problems;
 }
 
-/** One-line summary of a basket problem, for an error message. */
-export function describeBasketProblem(p: BasketProblem): string {
-  switch (p.code) {
+/**
+ * One-line summary of a basket problem, for an error a customer may read.
+ *
+ * English unless a `messages` bundle says otherwise — the same bundle the pricing
+ * derivations take, so an app translates these once.
+ */
+export function describeBasketProblem(
+  problem: BasketProblem,
+  messages?: PartialMessages,
+): string {
+  const m = resolveMessages(messages);
+  switch (problem.code) {
     case "unknown_plan":
-      return "Unknown plan";
+      return m.unknownPlan;
     case "not_purchasable":
-      return `This plan is not self-serve (${p.sale})`;
+      return formatMessage(m.notPurchasable, { sale: problem.sale });
     case "unknown_seat_type":
-      return `Unknown seat type "${p.seatType}"`;
+      return formatMessage(m.unknownSeatType, { seatType: problem.seatType });
     case "below_minimum":
-      return `At least ${p.min} seats are required (got ${p.got})`;
+      return formatMessage(m.seatMinimum, { min: problem.min, got: problem.got });
     case "seat_limit":
-      return `At most ${p.max} seats (got ${p.got})`;
+      return formatMessage(m.seatMaximum, { max: problem.max, got: problem.got });
     case "seat_type_limit":
-      return `At most ${p.max} "${p.seatType}" seat(s) (got ${p.got})`;
+      return formatMessage(m.seatTypeMaximum, {
+        max: problem.max,
+        seatType: problem.seatType,
+        got: problem.got,
+      });
     case "member_limit":
-      return `This plan allows at most ${p.max} members (got ${p.got})`;
+      return formatMessage(m.memberMaximum, { max: problem.max, got: problem.got });
     case "interval_unavailable":
-      return `This plan is not sold ${p.interval}`;
+      return formatMessage(m.intervalUnavailable, { interval: problem.interval });
   }
 }
 

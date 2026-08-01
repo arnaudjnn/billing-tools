@@ -10,7 +10,7 @@ import type { WorkOSOrgMap } from "./adapters/workos-org.js";
 // fall back to `getOrganizationByExternalId`, create the org if it isn't there,
 // write the pointer back, and reverse-map through `org.externalId` when the
 // pointer is missing. Both apps on this library had grown their own copy — and
-// scartoffie had grown TWO, one in the app and one in its toolkit, each with its
+// one consumer had grown TWO, one in the app and one in its toolkit, each with its
 // own WorkOS client.
 //
 // What is genuinely app-specific is only where the pointer lives: a Postgres

@@ -29,7 +29,7 @@ import {
 // It ships no strings. Every word (name, tagline, features, CTA label, badge)
 // is authored by the app on the plan itself; this only formats numbers and
 // decides shapes. `unit` is a KEY rather than prose for that reason — one
-// consumer writes "/mese", the other "/month".
+// consumer renders "/month", another "/mo", another in its own language.
 //
 // What this file exists to prevent, from the app it was extracted from:
 //   • an annual saving advertised at 17% next to a checkout charging 14% — two
@@ -55,6 +55,20 @@ export {
   poolSizeOf,
   packSizeOf,
 } from "./plan-model.js";
+export {
+  resolveLocalized,
+  resolveLocalizedList,
+  resolveMessages,
+  formatMessage,
+  DEFAULT_MESSAGES,
+} from "./i18n.js";
+export type {
+  Localized,
+  LocalizedList,
+  LocaleOptions,
+  Messages,
+  PartialMessages,
+} from "./i18n.js";
 export type {
   BillingInterval,
   Money,
@@ -103,7 +117,7 @@ export interface PlanPriceView {
   kind: "free" | "seats" | "flat" | "quote";
   /** Headline for the selected interval. Null when the price is quoted. */
   headline: MoneyView | null;
-  /** A key, not prose: the app supplies "/mese" or "per seat / month". */
+  /** A key, not prose: the app supplies "/month" or "per seat / month". */
   unit: "month" | "year" | "seat_month" | "seat_year" | null;
   /** The other interval, for a muted "billed annually" line. */
   alternate: { interval: BillingInterval; perMonth: MoneyView; total: MoneyView } | null;
@@ -172,7 +186,7 @@ export interface DerivePlanViewsOptions extends LocaleOptions {
    * ENGLISH — see DEFAULT_MESSAGES.
    */
   messages?: PartialMessages;
-  /** Override the formatter. Intl gives "18,00 €" for it-IT; a house style may
+  /** Override the formatter. Intl renders "18,00 €" for de-DE; a house style may
    *  want "€18". */
   formatMoney?: (minor: Money, currency: string, locale: string) => string;
   /** Its card becomes `cta.kind: "current"`. */
@@ -397,8 +411,11 @@ export interface MarkdownOptions {
   columns?: readonly ("name" | "members" | "included" | "monthly" | "yearly" | "seats")[];
   /** Escape `$` so MDX doesn't read it as an expression. Default true. */
   mdx?: boolean;
-  /** Header for the `included` column. Default "Included / cycle". */
+  /** Header for the `included` column. Overrides `messages.columnIncluded`. */
   includedLabel?: string;
+  /** Column headers and the "Contact us" / "Unlimited" / "Free" cells. English
+   *  unless overridden. */
+  messages?: PartialMessages;
 }
 
 const esc = (s: string, mdx: boolean): string =>
@@ -411,25 +428,26 @@ export function renderPlansMarkdown(
 ): string {
   const mdx = opts.mdx ?? true;
   const columns = opts.columns ?? ["name", "members", "included", "monthly", "yearly"];
+  const m = resolveMessages(opts.messages);
   const head: Record<string, string> = {
-    name: "Plan",
-    members: "Seats",
-    included: opts.includedLabel ?? "Included / cycle",
-    monthly: "Monthly",
-    yearly: "Yearly",
-    seats: "Seat types",
+    name: m.columnPlan,
+    members: m.columnSeats,
+    included: opts.includedLabel ?? m.columnIncluded,
+    monthly: m.columnMonthly,
+    yearly: m.columnYearly,
+    seats: m.columnSeatTypes,
   };
   const cell = (v: PlanView, col: string): string => {
     switch (col) {
       case "name":
         return `**${v.name}**`;
       case "members":
-        return v.members.max === null ? "Unlimited" : String(v.members.max);
+        return v.members.max === null ? m.unlimited : String(v.members.max);
       case "included":
         return v.included.tokens ? v.included.tokens.toLocaleString("en-US") : "—";
       case "monthly":
       case "yearly": {
-        if (v.sale === "quote") return "Contact us";
+        if (v.sale === "quote") return m.contactUs;
         const per = col === "monthly" ? "monthly" : "yearly";
         // Per-seat plans quote a seat; everything else quotes what the default
         // basket is CHARGED for that interval (`price.totals`, not the per-month
@@ -438,7 +456,7 @@ export function renderPlansMarkdown(
         if (seatRows.length) {
           return seatRows.map((r) => `${r.total[per].text} / seat`).join(" · ");
         }
-        return v.price.totals[per].minor > 0 ? v.price.totals[per].text : "Free";
+        return v.price.totals[per].minor > 0 ? v.price.totals[per].text : m.free;
       }
       case "seats":
         return v.price.rows.length
@@ -465,13 +483,15 @@ export function renderRateCardMarkdown(
     mdx?: boolean;
     /** Heading level for group titles. Default 3. */
     headingLevel?: number;
+    messages?: PartialMessages;
   } = {},
 ): string {
   const mdx = opts.mdx ?? true;
-  const unit = opts.unit ?? "Cost (tokens)";
+  const m = resolveMessages(opts.messages);
+  const unit = opts.unit ?? m.columnCost;
   const table = (entries: [string, number][]): string =>
     [
-      `| Tool | ${unit} |`,
+      `| ${m.columnTool} | ${unit} |`,
       "|---|---|",
       ...entries
         .sort(([a], [b]) => (a < b ? -1 : 1))
@@ -493,7 +513,7 @@ export function renderRateCardMarkdown(
   // Anything the caller forgot to group still appears — a silently dropped tool
   // is a tool a customer is charged for without being told.
   const rest = all.filter(([k]) => !grouped.has(k));
-  if (rest.length) sections.push(`${hashes} Other\n\n${table(rest)}`);
+  if (rest.length) sections.push(`${hashes} ${m.otherGroup}\n\n${table(rest)}`);
   return sections.join("\n\n");
 }
 
@@ -520,8 +540,9 @@ export function renderRateCardMarkdown(
 //   { label: "Searches",          values: { hobby: "50" } }        // text per plan
 //   { label: "Members",           from: "members" }                // from the config
 
-/** What a cell can say when it is authored by hand. */
-export type CompareValue = boolean | string | number;
+/** What a cell can say when it is authored by hand. A text value is
+ *  {@link Localized}, so a matrix can serve several languages. */
+export type CompareValue = boolean | number | Localized;
 
 /** Fill a row from the plan model instead of by hand. */
 export type CompareSource =
@@ -537,9 +558,9 @@ export type CompareSource =
   | "seatTypes";
 
 export interface CompareRow {
-  label: string;
+  label: Localized;
   /** One muted line under the label, when the label alone isn't enough. */
-  hint?: string;
+  hint?: Localized;
   /** Boolean shorthand: these plans get a tick, everything else a dash. */
   in?: readonly string[];
   /** Explicit per-plan values. A plan with no entry reads as "not included". */
@@ -551,13 +572,13 @@ export interface CompareRow {
 
 export interface CompareGroup {
   /** The sub-heading inside a section. */
-  label: string;
+  label: Localized;
   rows: readonly CompareRow[];
 }
 
 export interface CompareSection {
-  title: string;
-  description?: string;
+  title: Localized;
+  description?: Localized;
   /** Icon NAME, resolved by the app — the library ships no components. */
   icon?: string;
   groups: readonly CompareGroup[];
@@ -603,13 +624,13 @@ export interface CompareTableView {
 }
 
 export interface DeriveCompareOptions extends DerivePlanViewsOptions {
-  /** The few words the library would otherwise have to invent. */
+  /**
+   * @deprecated Use `messages`, which covers these four and the rest of the
+   * library's own words in one bundle. Kept working because it shipped.
+   */
   labels?: {
-    /** For an unlimited `members` row. Default "Unlimited". */
     unlimited?: string;
-    /** Joins a list (seat types, intervals). Default ", ". */
     separator?: string;
-    /** Interval names for an `intervals` row. Default English. */
     monthly?: string;
     yearly?: string;
   };
@@ -628,14 +649,11 @@ export function deriveCompareTable(
   opts: DeriveCompareOptions = {},
 ): CompareTableView {
   const views = derivePlanViews(plans, opts);
-  const labels = {
-    unlimited: opts.labels?.unlimited ?? "Unlimited",
-    separator: opts.labels?.separator ?? ", ",
-    monthly: opts.labels?.monthly ?? "Monthly",
-    yearly: opts.labels?.yearly ?? "Yearly",
-  };
+  // `labels` predates the messages bundle; it maps onto four of its keys.
+  const m = resolveMessages({ ...opts.labels, ...opts.messages });
   const locale = opts.locale ?? "en-US";
   const number = (n: number) => new Intl.NumberFormat(locale).format(n);
+  const text = (v: Localized | undefined) => resolveLocalized(v, opts);
 
   const cellFor = (row: CompareRow, view: PlanView): CompareCell => {
     if (row.from) {
@@ -643,7 +661,7 @@ export function deriveCompareTable(
         case "members":
           return {
             kind: "text",
-            text: view.members.max === null ? labels.unlimited : number(view.members.max),
+            text: view.members.max === null ? m.unlimited : number(view.members.max),
           };
         case "included":
           return view.included.tokens > 0
@@ -652,14 +670,14 @@ export function deriveCompareTable(
         case "price":
           return view.price.headline
             ? { kind: "text", text: view.price.headline.text }
-            : { kind: "text", text: "—" };
+            : { kind: "text", text: view.sale === "quote" ? m.contactUs : m.free };
         case "intervals": {
-          const names = view.intervals.map((i) => (i === "monthly" ? labels.monthly : labels.yearly));
-          return names.length ? { kind: "text", text: names.join(labels.separator) } : { kind: "no" };
+          const names = view.intervals.map((i) => (i === "monthly" ? m.monthly : m.yearly));
+          return names.length ? { kind: "text", text: names.join(m.separator) } : { kind: "no" };
         }
         case "seatTypes": {
           const names = view.price.rows.filter((r) => !r.shared).map((r) => r.label);
-          return names.length ? { kind: "text", text: names.join(labels.separator) } : { kind: "no" };
+          return names.length ? { kind: "text", text: names.join(m.separator) } : { kind: "no" };
         }
       }
     }
@@ -667,20 +685,22 @@ export function deriveCompareTable(
     const value = row.values?.[view.key];
     if (value === undefined || value === false) return { kind: "no" };
     if (value === true) return { kind: "yes" };
-    return { kind: "text", text: typeof value === "number" ? number(value) : value };
+    if (typeof value === "number") return { kind: "text", text: number(value) };
+    const resolved = text(value);
+    return resolved ? { kind: "text", text: resolved } : { kind: "no" };
   };
 
   return {
     columns: views.map((v) => ({ key: v.key, name: v.name, featured: v.featured })),
     sections: compare.map((section) => ({
-      title: section.title,
-      description: section.description ?? null,
+      title: text(section.title) ?? "",
+      description: text(section.description) ?? null,
       icon: section.icon ?? null,
       groups: section.groups.map((group) => ({
-        label: group.label,
+        label: text(group.label) ?? "",
         rows: group.rows.map((row) => ({
-          label: row.label,
-          hint: row.hint ?? null,
+          label: text(row.label) ?? "",
+          hint: text(row.hint) ?? null,
           cells: Object.fromEntries(views.map((v) => [v.key, cellFor(row, v)])),
         })),
       })),
@@ -688,8 +708,15 @@ export function deriveCompareTable(
   };
 }
 
-/** Every row label in a compare config — for a search box, or to check that a
- *  row hasn't been written twice. */
-export function compareRowLabels(compare: CompareConfig): string[] {
-  return compare.flatMap((s) => s.groups.flatMap((g) => g.rows.map((r) => r.label)));
+/** Every row label in a compare config, in one locale — for a search index, or to
+ *  check that a row hasn't been written twice. */
+export function compareRowLabels(
+  compare: CompareConfig,
+  opts: LocaleOptions = {},
+): string[] {
+  return compare.flatMap((s) =>
+    s.groups.flatMap((g) =>
+      g.rows.map((r) => resolveLocalized(r.label, opts) ?? "").filter(Boolean),
+    ),
+  );
 }

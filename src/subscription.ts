@@ -256,7 +256,7 @@ export async function changePlan(
     }
     const problems = validateBasket(opts.plans, { plan: target.key, interval, seats: opts.to.seats });
     if (problems.length) {
-      throw new PlanChangeError("invalid_basket", problems.map(describeBasketProblem).join("; "), problems);
+      throw new PlanChangeError("invalid_basket", problems.map((problem) => describeBasketProblem(problem)).join("; "), problems);
     }
     if (!opts.returnUrl) {
       throw new PlanChangeError("needs_return_url", "No live subscription, so a Checkout Session is needed — pass returnUrl");
@@ -338,7 +338,7 @@ export async function changePlan(
   const seats = opts.to.seats ?? defaultBasket(target);
   const problems = validateBasket(opts.plans, { plan: target.key, interval, seats });
   if (problems.length) {
-    throw new PlanChangeError("invalid_basket", problems.map(describeBasketProblem).join("; "), problems);
+    throw new PlanChangeError("invalid_basket", problems.map((problem) => describeBasketProblem(problem)).join("; "), problems);
   }
 
   const prices = await resolvePlanPrices(opts.plans, { currency: opts.currency });
