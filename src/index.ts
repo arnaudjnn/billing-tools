@@ -281,3 +281,10 @@ export {
   detachPaymentMethod,
 } from "./payment-methods.js";
 export type { SavedCard } from "./payment-methods.js";
+export {
+  getBillingProfile,
+  updateBillingProfile,
+  INVOICE_EMAIL_MAX,
+  COMPANY_NAME_MAX,
+} from "./billing-profile.js";
+export type { BillingProfile } from "./billing-profile.js";
