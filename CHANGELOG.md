@@ -1,3 +1,10 @@
+# [0.48.0](https://github.com/arnaudjnn/billing-tools/compare/v0.47.0...v0.48.0) (2026-08-01)
+
+
+### Features
+
+* **payment-methods:** manage saved cards without the Stripe portal ([677b204](https://github.com/arnaudjnn/billing-tools/commit/677b20449f7190c4977a0a169fbac7d8a1ef78a6))
+
 # [0.47.0](https://github.com/arnaudjnn/billing-tools/compare/v0.46.1...v0.47.0) (2026-08-01)
 
 
