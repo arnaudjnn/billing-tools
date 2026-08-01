@@ -1,3 +1,10 @@
+# [0.58.0](https://github.com/arnaudjnn/billing-tools/compare/v0.57.0...v0.58.0) (2026-08-01)
+
+
+### Features
+
+* **plans:** accept either plan shape everywhere, and report the real one ([9fb78ad](https://github.com/arnaudjnn/billing-tools/commit/9fb78adf2acdf531ffd3dbdcad33e3e0259dea49))
+
 # [0.57.0](https://github.com/arnaudjnn/billing-tools/compare/v0.56.0...v0.57.0) (2026-08-01)
 
 
