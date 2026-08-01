@@ -1,3 +1,10 @@
+# [0.51.0](https://github.com/arnaudjnn/billing-tools/compare/v0.50.0...v0.51.0) (2026-08-01)
+
+
+### Features
+
+* **adapter:** expose subscription state on the seam ([78de890](https://github.com/arnaudjnn/billing-tools/commit/78de890593a4c6d66dbc6b52a45bb092c0153eb9))
+
 # [0.50.0](https://github.com/arnaudjnn/billing-tools/compare/v0.49.1...v0.50.0) (2026-08-01)
 
 
