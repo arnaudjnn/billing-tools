@@ -127,6 +127,12 @@ export interface Messages {
   poolExhausted: string;
   seatAllowanceReached: string;
   insufficientBalance: string;
+  /** Payment-form fallbacks, used only when Stripe returns an error with no
+   *  message of its own (Stripe's own messages are already localized by the
+   *  Elements locale, so these are the rare path, not the usual one). */
+  paymentDetailsInvalid: string;
+  cardNotSaved: string;
+  paymentFailed: string;
 }
 
 /**
@@ -164,6 +170,9 @@ export const DEFAULT_MESSAGES: Messages = {
   seatAllowanceReached:
     "Seat token allowance reached for this cycle. Ask an owner for a top-up, or buy tokens.",
   insufficientBalance: "Insufficient tokens (balance {balance}). Buy tokens to continue.",
+  paymentDetailsInvalid: "Invalid payment details",
+  cardNotSaved: "Card not saved",
+  paymentFailed: "Payment failed",
 };
 
 export type PartialMessages = Partial<Messages>;

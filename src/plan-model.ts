@@ -274,7 +274,7 @@ export interface RateLimit {
   /**
    * The ceiling, in the unit the ledger counts: token cost. With a rate card of
    * 1 token per action that IS a request count, which is how these read on a
-   * usage screen ("300 richieste a settimana").
+   * usage screen ("300 requests per week").
    */
   tokens: Money;
   /**
@@ -837,6 +837,12 @@ export function cycleWindowFor(
     const until = rollover ? null : end;
     return { start: from, end: until, key: new Date(from).toISOString().slice(0, 10) };
   }
+  // The calendar-month fallback DOES know when it ends, so it says so: a usage
+  // screen showing an included window with no reset time is the one row that
+  // cannot answer "when do I get more", and on a free plan (no subscription, so
+  // always this branch) that is every row that matters.
+  const d = new Date(now);
   const month = startOfMonthUTC(now);
-  return { start: month, end: null, key: new Date(month).toISOString().slice(0, 7) };
+  const nextMonth = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
+  return { start: month, end: nextMonth, key: new Date(month).toISOString().slice(0, 7) };
 }

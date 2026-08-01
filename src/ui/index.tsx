@@ -1,5 +1,6 @@
 "use client";
 
+import { resolveMessages, type PartialMessages } from "../i18n.js";
 import {
   AddressElement,
   Elements,
@@ -158,6 +159,12 @@ export type BillingPaymentFormProps = {
   /** Where Stripe returns the browser after an off-site step (3DS, bank redirect). */
   returnUrl: string;
   /**
+   * Overrides for the few words this form supplies itself. English by default —
+   * this package ships English only. Stripe's own error messages already follow
+   * the Elements locale, so these are only the no-message fallback.
+   */
+  messages?: PartialMessages;
+  /**
    * What the client secret refers to. `"setup"` saves a card for later without
    * charging it — a SetupIntent — which is what an "add a card" screen needs;
    * `"payment"` (the default) takes the money now.
@@ -191,6 +198,7 @@ export function BillingPaymentForm({
   collectTaxId = false,
   returnUrl,
   intent = "payment",
+  messages,
   children,
   onSuccess,
   onError,
@@ -199,6 +207,7 @@ export function BillingPaymentForm({
   const stripe = useStripe();
   const elements = useElements();
   const [submitting, setSubmitting] = React.useState(false);
+  const t = resolveMessages(messages);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -208,7 +217,7 @@ export function BillingPaymentForm({
       // Surface field-level problems before touching the intent.
       const submitted = await elements.submit();
       if (submitted.error) {
-        onError?.(submitted.error.message ?? "Dati di pagamento non validi");
+        onError?.(submitted.error.message ?? t.paymentDetailsInvalid);
         return;
       }
       const confirmArgs = {
@@ -222,8 +231,7 @@ export function BillingPaymentForm({
           : await stripe.confirmPayment(confirmArgs);
       if (error) {
         onError?.(
-          error.message ??
-            (intent === "setup" ? "Carta non salvata" : "Pagamento non riuscito"),
+          error.message ?? (intent === "setup" ? t.cardNotSaved : t.paymentFailed),
         );
         return;
       }
