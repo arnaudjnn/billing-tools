@@ -4,7 +4,7 @@ import {
   getBillingCustomerId,
   getTokenBalance,
   deductTokens,
-  tryAutoReload,
+  autoReloadFor,
   stripeConfigured,
 } from "./billing.js";
 
@@ -103,6 +103,6 @@ export async function enforceTokens(
     };
   }
   await deductTokens(customerId, toolName, cost, config.currency);
-  tryAutoReload(customerId, config.currency).catch(() => {});
+  autoReloadFor(customerId, config).catch(() => {});
   return null;
 }

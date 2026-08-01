@@ -90,6 +90,33 @@ export interface AllowanceInput {
  * hand out twelve packages. The calendar month remains the fallback for an org
  * with no subscription, which is what this library always did.
  */
+/**
+ * The cycle the meter is measuring right now — the ONE definition of "this
+ * cycle" in the library.
+ *
+ * It is exported because anything that files something against a cycle has to
+ * agree with the thing that reads it back. A top-up grant stored under a key the
+ * meter never looks up is not a smaller grant, it is no grant at all, and it
+ * fails silently: the approval succeeds, the balance never moves. That is
+ * exactly what happened while `request_top_up` computed its own calendar month
+ * and the meter used the subscription period.
+ */
+export async function currentCycle(
+  adapter: BillingAdapter,
+  input: { orgId: string; plans?: PlanCatalog; plan?: string | null; now?: number },
+): Promise<CycleWindow> {
+  const model = planModel(input.plans ?? {}, input.plan ?? null);
+  const now = input.now ?? Date.now();
+  return cycleWindowFor(model, await subscriptionPeriod(adapter, input.orgId, model), now);
+}
+
+/** The calendar-month key this library used before the window came from the
+ *  subscription. Read-only fallback, so grants filed under it still apply. */
+export function legacyCycleKey(now: number = Date.now()): string {
+  const d = new Date(now);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
 export async function resolveAllowance(
   adapter: BillingAdapter,
   config: ResolvedConfig,
@@ -159,11 +186,14 @@ export async function resolveAllowance(
               ? { callerKind: "api" }
               : { callerKind: "user", callerId: input.caller?.id },
         }),
-    // Top-up grants raise a member's pack for the cycle, and are keyed by the
-    // same cycle identity the window produces, so the two can't drift.
+    // Top-up grants raise a member's pack for the cycle, keyed by the cycle
+    // identity `currentCycle` produces — the same one the approving tool writes,
+    // which is now guaranteed by both going through that function. The legacy
+    // calendar key is read as a fallback so grants approved before the two
+    // agreed still apply instead of vanishing.
     packSize == null || input.caller?.kind !== "user" || !input.caller.id
       ? Promise.resolve(0)
-      : extraAllowance(adapter, input.orgId, input.caller.id, cycle.key),
+      : extraAllowance(adapter, input.orgId, input.caller.id, cycle.key, legacyCycleKey(now)),
     Promise.all(limitReads),
   ]);
 

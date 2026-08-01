@@ -20,11 +20,28 @@ const NO_STRIPE = {
   content: [{ type: "text" as const, text: "Billing is not configured (STRIPE_SECRET_KEY unset)." }],
 };
 
+/**
+ * Per-org top-up settings, resolved at call time.
+ *
+ * A callback rather than a value because a top-up bought over MCP or the CLI has
+ * no address form: the rate has to be derived from what is already known about
+ * the customer (their stored billing country / VAT id), which only the app can
+ * look up.
+ */
+export interface TopUpToolOptions {
+  /** Stripe TaxRate ids for this org's top-up, e.g. via `taxRatesFor`. */
+  taxRates?: (orgId: string) => Promise<string[]> | string[];
+  automaticTax?: boolean;
+  successUrl?: string;
+  cancelUrl?: string;
+}
+
 export function registerBillingOnlyTools(
   server: McpServer,
   adapter: BillingAdapter,
   config: ResolvedConfig,
   toolCosts: Record<string, number>,
+  topUp: TopUpToolOptions = {},
 ) {
   // Resolve (or lazily create) the org's Stripe customer.
   const customerId = async (orgId: string): Promise<string> => {
@@ -71,7 +88,12 @@ export function registerBillingOnlyTools(
       if ("isError" in auth) return auth;
       if (!stripeConfigured()) return NO_STRIPE;
       const cid = await customerId(auth.orgId);
-      const url = await createTokenCheckoutSession(cid, auth.orgId, amount, config);
+      const url = await createTokenCheckoutSession(cid, auth.orgId, amount, config, {
+        taxRates: topUp.taxRates ? await topUp.taxRates(auth.orgId) : undefined,
+        automaticTax: topUp.automaticTax,
+        successUrl: topUp.successUrl,
+        cancelUrl: topUp.cancelUrl,
+      });
       const tokens = Math.round(amount * 100);
       return {
         content: [

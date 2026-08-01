@@ -4,6 +4,7 @@ import type { BillingAdapter, ResolvedConfig } from "../types.js";
 import { enforceAccess } from "../auth.js";
 import { getBillingCustomerId, usageSince, stripeConfigured } from "../billing.js";
 import { requestTopUp, listTopUpRequests, approveTopUp, denyTopUp } from "../topup.js";
+import { currentCycle } from "../allowance.js";
 import { assignSeatType, listSeatAssignments } from "../seats.js";
 import { normalizePlans, type PlanCatalog } from "../plans.js";
 import { usageSummary } from "../usage.js";
@@ -14,14 +15,9 @@ function json(obj: unknown) {
 function err(text: string) {
   return { isError: true as const, content: [{ type: "text" as const, text }] };
 }
-function monthStartUnix(): number {
-  const d = new Date();
-  return Math.floor(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1) / 1000);
-}
-function monthKey(): string {
-  const d = new Date();
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-}
+// No local "what cycle is it" any more. These tools file and report things
+// against a cycle, and the meter reads them back, so both go through
+// `currentCycle` — see the note there for what drifting apart cost.
 
 // Workspace-management tools: usage read, per-member seat assignment, and the
 // user-seat top-up request/approval flow. All ORG-SCOPED (auth = the org's key /
@@ -33,6 +29,18 @@ export function registerManagementTools(
   config: ResolvedConfig,
   opts: { plans?: PlanCatalog; resolvePlan?: (orgId: string) => Promise<string | null> } = {},
 ) {
+  // Every tool here that names a cycle resolves it the same way the meter does,
+  // including the plan lookup — a pooled or annual plan's cycle is its
+  // subscription period, and guessing it from the calendar silently misfiles.
+  const cycleFor = async (orgId: string) =>
+    currentCycle(adapter, {
+      orgId,
+      plans: opts.plans,
+      plan: opts.resolvePlan
+        ? await opts.resolvePlan(orgId)
+        : ((await adapter.getSubscription?.(orgId))?.plan ?? null),
+    });
+
   server.tool(
     "get_usage",
     `Get your workspace's token usage for the current cycle (summed from the Stripe
@@ -49,10 +57,15 @@ number of days instead of the calendar month.`,
       if (!stripeConfigured()) return err("Billing is not configured (STRIPE_SECRET_KEY unset).");
       const cid = await getBillingCustomerId(adapter, auth.orgId);
       if (!cid) return json({ usage: 0, note: "No billing account yet." });
-      const since = since_days ? Math.floor(Date.now() / 1000) - since_days * 86400 : monthStartUnix();
+      // The billing cycle, not the calendar month: on an annual plan those differ
+      // by up to eleven months, and this tool was reporting the wrong one.
+      const cycle = await cycleFor(auth.orgId);
+      const since = since_days
+        ? Math.floor(Date.now() / 1000) - since_days * 86400
+        : Math.floor(cycle.start / 1000);
       const filter = caller_kind ? { callerKind: caller_kind, callerId: caller_id } : undefined;
       const usage = await usageSince(cid, since, filter);
-      return json({ usage, since, cycle: monthKey(), filter: filter ?? null });
+      return json({ usage, since, cycle: cycle.key, filter: filter ?? null });
     },
   );
 
@@ -182,13 +195,16 @@ approve_top_up). Use when a user seat has hit its per-cycle pack.`,
     {
       member_id: z.string().describe("The member the extra allowance is for"),
       amount: z.number().int().min(1).describe("Extra tokens requested (e.g. 25% of the seat pack)"),
-      cycle: z.string().optional().describe('Cycle key the grant applies to (default current "YYYY-MM")'),
+      cycle: z
+        .string()
+        .optional()
+        .describe("Cycle key the grant applies to. Defaults to the current billing cycle — pass one only to backfill"),
     },
     async ({ member_id, amount, cycle }) => {
       const auth = await enforceAccess(adapter);
       if ("isError" in auth) return auth;
       const id = crypto.randomUUID();
-      const c = cycle ?? monthKey();
+      const c = cycle ?? (await cycleFor(auth.orgId)).key;
       await requestTopUp(adapter, auth.orgId, {
         id,
         memberId: member_id,

@@ -1,5 +1,5 @@
 import Stripe from "stripe";
-import type { BillingAdapter, ResolvedConfig } from "./types.js";
+import type { BillingAdapter, BillingConfig, ResolvedConfig } from "./types.js";
 
 // Token model: 1 token = 1 cent. Held in the Stripe customer credit balance,
 // where a negative balance = available credit. All functions keyed on a
@@ -15,6 +15,17 @@ export function getStripe(): Stripe {
 
 export function stripeConfigured(): boolean {
   return !!process.env.STRIPE_SECRET_KEY;
+}
+
+/**
+ * Replace the memoised client. TESTS ONLY.
+ *
+ * The money paths are worth asserting without a network, and the client is a
+ * module-local by design (one per process, built lazily). This is the seam that
+ * makes those assertions possible; nothing in the library calls it.
+ */
+export function __setStripeForTests(client: unknown): void {
+  _stripe = client as Stripe;
 }
 
 // ── Subscription pricing ────────────────────────────────────────────────────
@@ -287,14 +298,37 @@ export async function creditTokens(
   );
 }
 
+/**
+ * How a top-up is taxed and where it returns.
+ *
+ * Tax is an OPTION rather than a default because only the app knows where it is
+ * established and what the customer's place of supply is — the same reason the
+ * seat checkout takes `taxRates`. What is NOT acceptable is the previous
+ * behaviour: a seller charging 22% IVA on its seats and 0% on a top-up bought
+ * through the same account, on an invoice that states neither. `checkBillingSetup`
+ * warns when a taxed account sells untaxed top-ups.
+ */
+export interface TopUpCheckoutOptions {
+  /** Manual Stripe TaxRate ids, as `taxRatesFor` returns. */
+  taxRates?: string[];
+  /** Use Stripe Tax instead. Ignored when `taxRates` is given — Stripe rejects both. */
+  automaticTax?: boolean;
+  /** Defaults to `${baseUrl}/billing/success?tokens=…`. */
+  successUrl?: string;
+  /** Defaults to `${baseUrl}/billing/cancel`. */
+  cancelUrl?: string;
+}
+
 export async function createTokenCheckoutSession(
   stripeCustomerId: string,
   orgId: string,
   amountMajor: number,
   config: ResolvedConfig,
+  opts: TopUpCheckoutOptions = {},
 ): Promise<string> {
   const amountMinor = Math.round(amountMajor * 100);
   const tokens = amountMinor; // 1 token = 1 minor unit
+  const taxRates = opts.taxRates?.length ? opts.taxRates : null;
   const session = await getStripe().checkout.sessions.create({
     customer: stripeCustomerId,
     mode: "payment",
@@ -311,16 +345,20 @@ export async function createTokenCheckoutSession(
           unit_amount: amountMinor,
         },
         quantity: 1,
+        ...(taxRates ? { tax_rates: taxRates } : {}),
       },
     ],
+    // Manual rates and automatic tax are mutually exclusive in Stripe: passing
+    // both fails the request outright.
+    ...(!taxRates && opts.automaticTax ? { automatic_tax: { enabled: true } } : {}),
     invoice_creation: { enabled: true },
     payment_intent_data: {
       setup_future_usage: "off_session",
       metadata: { org_id: orgId, tokens: String(tokens) },
     },
     metadata: { org_id: orgId, tokens: String(tokens) },
-    success_url: `${config.baseUrl}/billing/success?tokens=${tokens}`,
-    cancel_url: `${config.baseUrl}/billing/cancel`,
+    success_url: opts.successUrl ?? `${config.baseUrl}/billing/success?tokens=${tokens}`,
+    cancel_url: opts.cancelUrl ?? `${config.baseUrl}/billing/cancel`,
   });
   return session.url!;
 }
@@ -370,9 +408,42 @@ export async function setAutoReloadSettings(
   });
 }
 
+/**
+ * Recharge a customer who has dropped to their auto-reload threshold.
+ *
+ * Two properties this must have, both learned the hard way:
+ *
+ * **It bills as an INVOICE, not a bare charge.** A PaymentIntent produces a
+ * receipt with no invoice number and no tax line. That is not a valid sales
+ * document for a business customer (an Italian buyer needs a fattura), and it
+ * meant the one purchase a customer never explicitly confirms was also the one
+ * with no paperwork. An invoice also carries the same tax treatment as every
+ * other line the account bills.
+ *
+ * **It is idempotent.** This is fired and forgotten from the meter on every
+ * metered call and from the auth path, so N concurrent calls all observe the
+ * same low balance and all used to charge. The key below collapses them: Stripe
+ * returns the first invoice for every duplicate within its 24h window, so the
+ * customer is charged once no matter how many callers raced.
+ */
+/** Fire-and-forget auto-reload with the deployment's tax settings applied.
+ *  Both trigger points (the meter and the auth gate) go through this, so a
+ *  reload can't be taxed on one path and untaxed on the other. */
+export async function autoReloadFor(
+  stripeCustomerId: string,
+  config: { currency: string; tax?: BillingConfig["tax"] },
+): Promise<void> {
+  const rates = config.tax?.rates ? await config.tax.rates(stripeCustomerId) : undefined;
+  await tryAutoReload(stripeCustomerId, config.currency, {
+    taxRates: rates,
+    automaticTax: config.tax?.automatic,
+  });
+}
+
 export async function tryAutoReload(
   stripeCustomerId: string,
   currency: string,
+  opts: { taxRates?: string[]; automaticTax?: boolean } = {},
 ): Promise<void> {
   const settings = await getAutoReloadSettings(stripeCustomerId);
   if (!settings || !settings.enabled) return;
@@ -391,19 +462,51 @@ export async function tryAutoReload(
   });
   if (pms.data.length === 0) return;
 
+  // Stable across concurrent triggers: same customer, same target, same hour.
+  // Not the exact balance — two racing callers can read balances a token apart
+  // and would then key differently, which is precisely the double charge.
+  const slot = new Date().toISOString().slice(0, 13);
+  const key = `autoreload:${stripeCustomerId}:${settings.reload_to}:${slot}`;
+  const taxRates = opts.taxRates?.length ? opts.taxRates : null;
+
   try {
-    const pi = await stripe.paymentIntents.create({
-      amount: tokensNeeded,
-      currency,
-      customer: stripeCustomerId,
-      payment_method: pms.data[0].id,
-      off_session: true,
-      confirm: true,
-      description: `Auto-reload: ${tokensNeeded} tokens`,
-      metadata: { auto_reload: "true", tokens: String(tokensNeeded) },
-    });
-    if (pi.status === "succeeded") {
-      await creditTokens(stripeCustomerId, tokensNeeded, `Auto-reload: ${tokensNeeded} tokens`, currency);
+    await stripe.invoiceItems.create(
+      {
+        customer: stripeCustomerId,
+        currency,
+        amount: tokensNeeded,
+        description: `Auto-reload: ${tokensNeeded} tokens`,
+        ...(taxRates ? { tax_rates: taxRates } : {}),
+      },
+      { idempotencyKey: `${key}:item` },
+    );
+
+    const invoice = await stripe.invoices.create(
+      {
+        customer: stripeCustomerId,
+        currency,
+        collection_method: "charge_automatically",
+        default_payment_method: pms.data[0].id,
+        auto_advance: false,
+        description: `Auto-reload: ${tokensNeeded} tokens`,
+        ...(!taxRates && opts.automaticTax ? { automatic_tax: { enabled: true } } : {}),
+        metadata: { auto_reload: "true", tokens: String(tokensNeeded) },
+      },
+      { idempotencyKey: `${key}:invoice` },
+    );
+    if (!invoice.id) return;
+
+    const paid = await stripe.invoices.pay(invoice.id, { off_session: true });
+    if (paid.status === "paid") {
+      // Same key: a retry that finds the invoice already paid must not credit
+      // a second time.
+      await creditTokens(
+        stripeCustomerId,
+        tokensNeeded,
+        `Auto-reload: ${tokensNeeded} tokens`,
+        currency,
+        `credit:${key}`,
+      );
     }
   } catch {
     // card declined / off-session failure — never block the triggering call

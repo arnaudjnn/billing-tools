@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { BillingAdapter, BillingConfig } from "../types.js";
 import { resolveConfig } from "../types.js";
 import { registerKeyTools } from "./keys.js";
-import { registerBillingOnlyTools } from "./billing.js";
+import { registerBillingOnlyTools, type TopUpToolOptions } from "./billing.js";
 import { registerManagementTools } from "./management.js";
 import { ensurePlans, normalizePlans, poolSizeOf, type PlanCatalog } from "../plans.js";
 
@@ -61,6 +61,13 @@ export interface RegisterBillingToolsOptions {
   plans?: PlanCatalog;
   /** Default plan key (e.g. "hobby"). */
   defaultPlan?: string;
+  /** How to find the org's current plan key, when it isn't on the adapter's
+   *  subscription (gtm-tools keeps it in org metadata). Used by the usage tools
+   *  and to resolve the billing cycle a top-up is filed against. */
+  resolvePlan?: (orgId: string) => Promise<string | null>;
+  /** Tax and return URLs for `buy_tokens`. Supply `taxRates` on any account that
+   *  charges tax on its subscriptions: without it a top-up invoices at 0%. */
+  topUp?: TopUpToolOptions;
 }
 
 // Register the billing-tools surface (auth/key management + token billing) on
@@ -69,8 +76,11 @@ export function registerBillingTools(server: McpServer, opts: RegisterBillingToo
   const config = resolveConfig(opts.config);
   if (opts.installLogging !== false) installInputLogging(server);
   registerKeyTools(server, opts.adapter, config);
-  registerBillingOnlyTools(server, opts.adapter, config, opts.toolCosts ?? {});
-  registerManagementTools(server, opts.adapter, config, { plans: opts.plans });
+  registerBillingOnlyTools(server, opts.adapter, config, opts.toolCosts ?? {}, opts.topUp ?? {});
+  registerManagementTools(server, opts.adapter, config, {
+    plans: opts.plans,
+    resolvePlan: opts.resolvePlan,
+  });
   if (opts.plans) registerPlanTools(server, opts.plans, opts.defaultPlan, config.currency);
 }
 

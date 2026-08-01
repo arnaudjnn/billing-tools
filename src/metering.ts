@@ -1,4 +1,4 @@
-import { deductTokens, getBillingCustomerId, stripeConfigured, tryAutoReload } from "./billing.js";
+import { autoReloadFor, deductTokens, getBillingCustomerId, stripeConfigured } from "./billing.js";
 import { isInternalOrg } from "./auth.js";
 import { describeDenial, fundingFor, resolveAllowance } from "./allowance.js";
 import { getSeatType } from "./seats.js";
@@ -142,7 +142,7 @@ export async function meterUsage(
       config.currency,
       caller ? { kind: caller.kind, id: caller.id } : undefined,
     )
-    tryAutoReload(customerId, config.currency).catch(() => {})
+    autoReloadFor(customerId, config).catch(() => {})
   }
   return { ok: true, funded: funding.source }
 }

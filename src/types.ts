@@ -118,9 +118,26 @@ export interface BillingConfig {
    * Default: unset, i.e. Stripe's English.
    */
   defaultLocale?: string;
+  /**
+   * How to tax the charges the library raises on its OWN initiative — today the
+   * auto-reload invoice, which no form precedes.
+   *
+   * A subscription is taxed by whoever builds its Checkout Session, which is the
+   * app. An auto-reload has no session and no address form: it fires from the
+   * meter, so the only way for it to carry the same VAT as everything else the
+   * account bills is for the deployment to say here how to work the rate out.
+   * Leave unset only on an account that charges no tax at all — `checkBillingSetup`
+   * warns when a taxed account is auto-reloading untaxed.
+   */
+  tax?: {
+    /** Stripe TaxRate ids for this customer, e.g. from `taxRatesFor`. */
+    rates?: (stripeCustomerId: string) => Promise<string[]> | string[];
+    /** Use Stripe Tax instead. Ignored when `rates` returns any. */
+    automatic?: boolean;
+  };
 }
 
-export type ResolvedConfig = Required<BillingConfig>;
+export type ResolvedConfig = Required<Omit<BillingConfig, "tax">> & Pick<BillingConfig, "tax">;
 
 export function resolveConfig(c: BillingConfig): ResolvedConfig {
   return {
@@ -129,6 +146,7 @@ export function resolveConfig(c: BillingConfig): ResolvedConfig {
     baseUrl: c.baseUrl,
     internalDomains: c.internalDomains ?? [],
     defaultLocale: c.defaultLocale ?? "",
+    tax: c.tax,
   };
 }
 
