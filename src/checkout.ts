@@ -145,6 +145,123 @@ export async function createCheckoutSession(opts: {
    */
   paymentMethods?: string[] | "automatic";
   metadata?: Record<string, string>;
+  /**
+   * Hand back the session already open for this exact basket instead of opening
+   * another one.
+   *
+   * `checkout.sessions.create` costs 400-500ms at Stripe, and it is the last
+   * thing standing between a customer arriving and a payment form existing. The
+   * same customer asking for the same basket twice — a reload, a back-button, a
+   * router prefetch followed by the click it was prefetching for — does not need
+   * two sessions, and creating them anyway leaves a trail of abandoned ones.
+   *
+   * Keyed on EVERYTHING that shapes the session (customer, plan, interval,
+   * seats, currency, return url, tax rates, metadata, …), so a reused session is
+   * one Stripe would have created identically. Requires `customerId`: without
+   * one every call mints a new customer, and there is nothing stable to key on.
+   *
+   * Off by default — reusing anything payment-related should be a decision, not
+   * a surprise. Dropped as soon as the session is paid (`checkoutSessionOutcome`)
+   * or expired, and after `ttlMs` (default 30 min, well inside Stripe's ~24h
+   * session lifetime).
+   */
+  reuse?: boolean | { ttlMs?: number };
+}): Promise<CheckoutSessionResult> {
+  const key = reuseKeyFor(opts);
+  if (key) {
+    const ttl =
+      (typeof opts.reuse === "object" ? opts.reuse.ttlMs : undefined) ?? REUSE_TTL_MS;
+    const hit = sessionCache.get(key);
+    if (hit && Date.now() - hit.at < ttl) return hit.result;
+    // Two renders of the same page at once (a prefetch and the navigation it was
+    // for) share one create rather than racing to make two sessions.
+    const inflight = sessionInflight.get(key);
+    if (inflight) return inflight;
+    const started = openCheckoutSession(opts).then((result) => {
+      sessionCache.set(key, { at: Date.now(), result });
+      sessionKeys.set(result.sessionId, key);
+      return result;
+    });
+    sessionInflight.set(
+      key,
+      started.finally(() => sessionInflight.delete(key)),
+    );
+    return started;
+  }
+  return openCheckoutSession(opts);
+}
+
+/** How long a reusable session is handed back for. Stripe expires an open
+ *  session after ~24h; this stays far inside that. */
+const REUSE_TTL_MS = 30 * 60 * 1000;
+
+const sessionCache = new Map<string, { at: number; result: CheckoutSessionResult }>();
+const sessionInflight = new Map<string, Promise<CheckoutSessionResult>>();
+/** sessionId → cache key, so a session can be dropped once it is paid. */
+const sessionKeys = new Map<string, string>();
+
+/** Identity of a reusable session: every input that changes what Stripe would
+ *  create. Null when reuse is off, or when there is no customer to key on. */
+function reuseKeyFor(opts: {
+  reuse?: boolean | { ttlMs?: number };
+  customerId?: string;
+  plan: string;
+  interval: BillingInterval;
+  seats: Quantities;
+  currency?: string;
+  returnUrl: string;
+  automaticTax?: boolean;
+  taxRates?: string[];
+  taxIdCollection?: boolean;
+  paymentMethods?: string[] | "automatic";
+  metadata?: Record<string, string>;
+}): string | null {
+  if (!opts.reuse || !opts.customerId) return null;
+  return JSON.stringify([
+    opts.customerId,
+    opts.plan,
+    opts.interval,
+    Object.entries(opts.seats)
+      .filter(([, qty]) => qty > 0)
+      .sort(([a], [b]) => (a < b ? -1 : 1)),
+    opts.currency ?? null,
+    opts.returnUrl,
+    opts.automaticTax ?? null,
+    opts.taxRates ?? null,
+    opts.taxIdCollection ?? null,
+    opts.paymentMethods ?? null,
+    opts.metadata ?? null,
+  ]);
+}
+
+/**
+ * Stop handing out a session.
+ *
+ * Called automatically once `checkoutSessionOutcome` sees it paid and by
+ * `expireCheckoutSession`; call it directly if payment is confirmed some other
+ * way. Handing a completed session to the next visitor would mount a form that
+ * cannot be confirmed.
+ */
+export function forgetCheckoutSession(sessionId: string): void {
+  const key = sessionKeys.get(sessionId);
+  if (key) sessionCache.delete(key);
+  sessionKeys.delete(sessionId);
+}
+
+async function openCheckoutSession(opts: {
+  plans: PlansConfig;
+  plan: string;
+  interval: BillingInterval;
+  seats: Quantities;
+  returnUrl: string;
+  customerId?: string;
+  email?: string;
+  currency?: string;
+  automaticTax?: boolean;
+  taxRates?: string[];
+  taxIdCollection?: boolean;
+  paymentMethods?: string[] | "automatic";
+  metadata?: Record<string, string>;
 }): Promise<CheckoutSessionResult> {
   const stripe = getStripe();
 
@@ -237,6 +354,9 @@ export async function checkoutSessionOutcome(sessionId: string): Promise<{
     expand: ["subscription"],
   });
   const subscription = session.subscription as Stripe.Subscription | null;
+  // Anything that is no longer an open basket must stop being handed out by the
+  // reuse cache — a completed session mounts a form that cannot be confirmed.
+  if (session.status !== "open") forgetCheckoutSession(sessionId);
   return {
     paid:
       session.status === "complete" &&
@@ -255,6 +375,7 @@ export async function checkoutSessionOutcome(sessionId: string): Promise<{
  *  left as-is. Optional — Stripe expires open sessions by itself (~24h) and an
  *  unconfirmed session has created nothing. */
 export async function expireCheckoutSession(sessionId: string): Promise<void> {
+  forgetCheckoutSession(sessionId);
   try {
     await getStripe().checkout.sessions.expire(sessionId);
   } catch {

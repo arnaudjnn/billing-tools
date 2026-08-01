@@ -246,6 +246,7 @@ export {
   createCheckoutSession,
   checkoutSessionOutcome,
   expireCheckoutSession,
+  forgetCheckoutSession,
   createSubscription,
   updateSubscription,
   cancelSubscription,
