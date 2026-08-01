@@ -1,3 +1,10 @@
+## [0.62.1](https://github.com/arnaudjnn/billing-tools/compare/v0.62.0...v0.62.1) (2026-08-01)
+
+
+### Bug Fixes
+
+* **create-billing:** let the one-call composition choose where usage is counted ([2da0230](https://github.com/arnaudjnn/billing-tools/commit/2da02309405f0725c9c9adea5b10fdc6c33f32f6))
+
 # [0.62.0](https://github.com/arnaudjnn/billing-tools/compare/v0.61.0...v0.62.0) (2026-08-01)
 
 
