@@ -1,3 +1,10 @@
+# [0.59.0](https://github.com/arnaudjnn/billing-tools/compare/v0.58.1...v0.59.0) (2026-08-01)
+
+
+### Features
+
+* **subscription:** changePlan — one entry point for up, down and off ([ab97eea](https://github.com/arnaudjnn/billing-tools/commit/ab97eea27a788e46aaeaf3c952b47827e886af64))
+
 ## [0.58.1](https://github.com/arnaudjnn/billing-tools/compare/v0.58.0...v0.58.1) (2026-08-01)
 
 
