@@ -1,3 +1,10 @@
+# [0.56.0](https://github.com/arnaudjnn/billing-tools/compare/v0.55.0...v0.56.0) (2026-08-01)
+
+
+### Features
+
+* **tax-ids:** the tax id printed on a customer's invoices ([fafe02b](https://github.com/arnaudjnn/billing-tools/commit/fafe02bbc8249427704fe7cb0b8b95508fe9415c))
+
 # [0.55.0](https://github.com/arnaudjnn/billing-tools/compare/v0.54.0...v0.55.0) (2026-08-01)
 
 
