@@ -255,7 +255,7 @@ export function fundingFor(
   // protected is the product, not the customer's money. The tightest window that
   // refuses is the one reported, so the message names a week rather than a month
   // when the week is what ran out.
-  for (const limit of state.limits) {
+  for (const limit of state.limits ?? []) {
     if (limit.remaining < cost) {
       return { ok: false, source: null, reason: "rate_limit_reached", limit };
     }
@@ -297,7 +297,7 @@ export function describeDenial(
 ): string {
   switch (reason) {
     case "rate_limit_reached": {
-      const l = limit ?? state.limits.find((x) => x.remaining <= 0);
+      const l = limit ?? (state.limits ?? []).find((x) => x.remaining <= 0);
       const name = l?.label ?? (l ? WINDOW_NAMES[l.every] : "window");
       const resets = l?.window.end ? ` Resets ${new Date(l.window.end).toISOString()}.` : "";
       return `Usage limit reached for this ${name} (${l?.size ?? 0}).${resets}`;

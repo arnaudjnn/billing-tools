@@ -1,7 +1,8 @@
 // What a plan IS, as data — and the normaliser that turns any accepted shape
 // into one internal form.
 //
-// ZERO IMPORTS, deliberately. `plans.ts` imports `billing.ts` → `stripe`, so
+// NO RUNTIME DEPENDENCIES, deliberately — the one import is `i18n.ts`, itself a
+// zero-import leaf. `plans.ts` imports `billing.ts` → `stripe`, so
 // anything defined there can never be read by a browser bundle or a docs
 // generator. The plan model has to be readable by both (a pricing card and a
 // markdown table are the same derivation), so it lives here on its own, like
