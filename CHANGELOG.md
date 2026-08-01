@@ -1,3 +1,10 @@
+## [0.46.1](https://github.com/arnaudjnn/billing-tools/compare/v0.46.0...v0.46.1) (2026-08-01)
+
+
+### Performance Improvements
+
+* **billing:** stop re-reading what never changes on the checkout path ([6ddaf7e](https://github.com/arnaudjnn/billing-tools/commit/6ddaf7e447cf8544138c8b1f1b636794e7b07377))
+
 # [0.46.0](https://github.com/arnaudjnn/billing-tools/compare/v0.45.0...v0.46.0) (2026-08-01)
 
 
