@@ -1,3 +1,10 @@
+## [0.64.1](https://github.com/arnaudjnn/billing-tools/compare/v0.64.0...v0.64.1) (2026-08-01)
+
+
+### Bug Fixes
+
+* **billing:** two defects only a real Stripe run could find ([b5a4b04](https://github.com/arnaudjnn/billing-tools/commit/b5a4b04ea2aecbe40ce43579c861f1a2f9e1144a))
+
 # [0.64.0](https://github.com/arnaudjnn/billing-tools/compare/v0.63.3...v0.64.0) (2026-08-01)
 
 
