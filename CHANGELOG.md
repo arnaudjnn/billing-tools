@@ -1,3 +1,10 @@
+# [0.63.0](https://github.com/arnaudjnn/billing-tools/compare/v0.62.2...v0.63.0) (2026-08-01)
+
+
+### Features
+
+* **i18n:** localizable config text, English defaults in the library ([fd8ec5a](https://github.com/arnaudjnn/billing-tools/commit/fd8ec5a677a1f7bbf24aabf36257cc4aa64d7414))
+
 ## [0.62.2](https://github.com/arnaudjnn/billing-tools/compare/v0.62.1...v0.62.2) (2026-08-01)
 
 
