@@ -1,3 +1,10 @@
+## [0.49.1](https://github.com/arnaudjnn/billing-tools/compare/v0.49.0...v0.49.1) (2026-08-01)
+
+
+### Bug Fixes
+
+* **ui:** expose field limits without dragging the server entry into the browser ([3e72308](https://github.com/arnaudjnn/billing-tools/commit/3e72308e18e94380a10a49985181440379a38cd3))
+
 # [0.49.0](https://github.com/arnaudjnn/billing-tools/compare/v0.48.0...v0.49.0) (2026-08-01)
 
 
