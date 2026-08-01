@@ -1,3 +1,10 @@
+# [0.62.0](https://github.com/arnaudjnn/billing-tools/compare/v0.61.0...v0.62.0) (2026-08-01)
+
+
+### Features
+
+* **limits:** usage ceilings per hour, day, week and month, and a read side for them ([071cb90](https://github.com/arnaudjnn/billing-tools/commit/071cb90d84071b6f0faa0460dcf5cfdfdad96e84))
+
 # [0.61.0](https://github.com/arnaudjnn/billing-tools/compare/v0.60.0...v0.61.0) (2026-08-01)
 
 
