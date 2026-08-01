@@ -1,6 +1,6 @@
 "use client";
 
-import { AddressElement, Elements } from "@stripe/react-stripe-js";
+import { AddressElement, Elements, PaymentElement } from "@stripe/react-stripe-js";
 import {
   loadStripe,
   type Appearance,
@@ -18,9 +18,23 @@ import * as React from "react";
 // autocomplete as you type. Hand-rolled address forms get this wrong for
 // everywhere except the author's own country.
 //
-// It mounts an Elements group with NO client secret: nothing is being paid or
-// set up here, so there is no intent to confirm. The value is reported to the
-// caller, who decides when to save it.
+// It mounts an Elements group in DEFERRED mode: no client secret, no intent
+// created on Stripe, nothing to confirm. The value is reported to the caller,
+// who decides when to save it.
+//
+// ── About the autocomplete ──────────────────────────────────────────────────
+// Stripe gives the Address Element free address autocomplete (their own Google
+// Maps key) on one documented condition: a Payment Element is rendered in the
+// SAME Elements group. Used alone, the element still works but you must bring
+// your own Google Maps Places key.
+//
+// So when no key is supplied, this mounts a Payment Element off-screen purely
+// to satisfy that condition. Be honest about what that is: it leans on a
+// requirement Stripe words in terms of what you render, and it costs one extra
+// iframe and a payment-method-list request. If Stripe ever checks visibility,
+// autocomplete quietly stops and manual entry keeps working — the failure mode
+// is degradation, not breakage. Pass `googleMapsApiKey` to do it the
+// documented way and skip the hidden element entirely.
 
 /** Same shape as `BillingAddress` on the server; declared here so importing the
  *  form never pulls the server entry into a browser bundle. */
@@ -52,6 +66,8 @@ export function BillingAddressForm({
   /** Prefilled name line. Stripe requires one when `display.name` is shown; it
    *  is hidden by default here because the invoice name is its own field. */
   showName = false,
+  googleMapsApiKey,
+  currency = "eur",
   className,
 }: {
   publishableKey: string;
@@ -64,6 +80,15 @@ export function BillingAddressForm({
   appearance?: Appearance;
   locale?: StripeElementLocale;
   showName?: boolean;
+  /**
+   * Your own Google Maps Places key. Supplying it is the documented way to get
+   * autocomplete standalone, and skips the hidden Payment Element described
+   * above.
+   */
+  googleMapsApiKey?: string;
+  /** Required by Stripe for the deferred Elements group. Only used to satisfy
+   *  that API — nothing is ever charged here. */
+  currency?: string;
   className?: string;
 }) {
   const stripe = React.useMemo(() => stripeFor(publishableKey), [publishableKey]);
@@ -78,7 +103,9 @@ export function BillingAddressForm({
       ({
         mode: "billing" as const,
         display: { name: showName ? ("full" as const) : ("organization" as const) },
-        autocomplete: { mode: "automatic" as const },
+        autocomplete: googleMapsApiKey
+          ? { mode: "google_maps_api" as const, apiKey: googleMapsApiKey }
+          : { mode: "automatic" as const },
         ...(defaultValue
           ? {
               defaultValues: {
@@ -102,7 +129,17 @@ export function BillingAddressForm({
   );
 
   return (
-    <Elements stripe={stripe} options={{ appearance, locale }}>
+    <Elements
+      stripe={stripe}
+      options={{
+        appearance,
+        locale,
+        // Deferred: describes an intent's shape without creating one.
+        mode: "setup",
+        currency,
+        paymentMethodCreation: "manual",
+      }}
+    >
       <div className={className}>
         <AddressElement
           options={options}
@@ -110,6 +147,29 @@ export function BillingAddressForm({
             onChangeRef.current(e.complete ? (e.value.address as AddressValue) : null)
           }
         />
+        {!googleMapsApiKey && (
+          // Off-screen rather than display:none — a zero-size or hidden
+          // container can stop a Stripe iframe mounting at all, and an
+          // unmounted Payment Element wouldn't unlock the autocomplete this is
+          // here for. aria-hidden + inert keep it out of the a11y tree and the
+          // tab order.
+          <div
+            aria-hidden
+            // @ts-expect-error -- `inert` lands in React's types after 19.2
+            inert=""
+            style={{
+              position: "absolute",
+              left: "-9999px",
+              top: 0,
+              width: "360px",
+              height: "360px",
+              overflow: "hidden",
+              pointerEvents: "none",
+            }}
+          >
+            <PaymentElement />
+          </div>
+        )}
       </div>
     </Elements>
   );
