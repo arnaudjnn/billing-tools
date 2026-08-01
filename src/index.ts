@@ -251,3 +251,6 @@ export type {
   CheckoutSessionResult,
   SubscriptionResult,
 } from "./checkout.js";
+export { resolveSession, ANONYMOUS_SESSION } from "./session.js";
+export type { BillingSession, SessionUser } from "./session.js";
+export type { PlanSource } from "./session.js";

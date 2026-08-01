@@ -678,3 +678,14 @@ export function useCheckout(opts: {
     error,
   };
 }
+
+// The session hook. Re-exported here so `@arnaudjnn/billing-tools/ui` is the
+// single client entry point; the server half is `resolveSession()` from the
+// package root.
+export {
+  SessionProvider,
+  useSession,
+  ANONYMOUS_SESSION,
+  type BillingSession,
+  type SessionUser,
+} from "./session.js";
