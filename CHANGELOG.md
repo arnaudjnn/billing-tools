@@ -1,3 +1,10 @@
+# [0.57.0](https://github.com/arnaudjnn/billing-tools/compare/v0.56.0...v0.57.0) (2026-08-01)
+
+
+### Features
+
+* **plans:** plan shapes as config, and included allowance as a window ([fb71aa5](https://github.com/arnaudjnn/billing-tools/commit/fb71aa582b5f4c46e889e2eeeb7b87c2778cb2ae))
+
 # [0.56.0](https://github.com/arnaudjnn/billing-tools/compare/v0.55.0...v0.56.0) (2026-08-01)
 
 
