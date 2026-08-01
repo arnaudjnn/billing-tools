@@ -1,3 +1,10 @@
+## [0.63.2](https://github.com/arnaudjnn/billing-tools/compare/v0.63.1...v0.63.2) (2026-08-01)
+
+
+### Bug Fixes
+
+* **limits:** the calendar-month fallback knows when it ends, so say so ([678c9e5](https://github.com/arnaudjnn/billing-tools/commit/678c9e595ef3f0373af2dc2344e7a6848ddad0cb))
+
 ## [0.63.1](https://github.com/arnaudjnn/billing-tools/compare/v0.63.0...v0.63.1) (2026-08-01)
 
 
