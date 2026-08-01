@@ -1,3 +1,10 @@
+## [0.64.2](https://github.com/arnaudjnn/billing-tools/compare/v0.64.1...v0.64.2) (2026-08-01)
+
+
+### Bug Fixes
+
+* **create-billing:** forward the options the one-call path was dropping ([07196f2](https://github.com/arnaudjnn/billing-tools/commit/07196f2f2ee073ca2428ea821c1dd7f9df82b74c))
+
 ## [0.64.1](https://github.com/arnaudjnn/billing-tools/compare/v0.64.0...v0.64.1) (2026-08-01)
 
 
