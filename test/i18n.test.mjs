@@ -4,11 +4,11 @@ import { test } from "node:test";
 const ok = (label, cond, extra = "") => assert.ok(cond, `${label}${extra ? " — " + extra : ""}`);
 
 test("text localises, and the library's own words default to English", async () => {
-  const P = "/Users/arnaudjeannin/Documents/gtm-engine/billing-tools/dist/pricing.js";
+  const P = new URL("../dist/pricing.js", import.meta.url).href;
   const { derivePlanViews, deriveCompareTable, renderPlansMarkdown, definePlans, defineCompare,
           DEFAULT_MESSAGES } = await import(P);
   const { describeBasketProblem, validateBasket } =
-    await import("/Users/arnaudjeannin/Documents/gtm-engine/billing-tools/dist/index.js");
+    await import(new URL("../dist/index.js", import.meta.url).href);
   let fail=0; const ok=(l,c,e="")=>{console.log(`  ${c?"✓":"✗"} ${l}${e?"  — "+e:""}`);if(!c)fail++;};
 
   // One config, two languages. Plain strings stay single-language (most configs).

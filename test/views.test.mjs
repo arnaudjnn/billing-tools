@@ -5,7 +5,7 @@ const ok = (label, cond, extra = "") => assert.ok(cond, `${label}${extra ? " —
 
 test('plan config derives the pricing surfaces', async () => {
   const { derivePlanViews, renderPlansMarkdown, renderRateCardMarkdown, definePlans } =
-    await import("/Users/arnaudjeannin/Documents/gtm-engine/billing-tools/dist/pricing.js");
+    await import(new URL("../dist/pricing.js", import.meta.url).href);
 
   // scartoffie's real numbers, in the new shape, with card content on the plan.
   const PLANS = definePlans({

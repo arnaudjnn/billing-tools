@@ -5,7 +5,7 @@ const ok = (label, cond, extra = "") => assert.ok(cond, `${label}${extra ? " —
 
 test('the comparison table derives from the same config', async () => {
   const { deriveCompareTable, defineCompare, definePlans } =
-    await import("/Users/arnaudjeannin/Documents/gtm-engine/billing-tools/dist/pricing.js");
+    await import(new URL("../dist/pricing.js", import.meta.url).href);
   let fail = 0; const ok=(l,c,e="")=>{console.log(`  ${c?"✓":"✗"} ${l}${e?"  — "+e:""}`);if(!c)fail++;};
 
   const PLANS = definePlans({
