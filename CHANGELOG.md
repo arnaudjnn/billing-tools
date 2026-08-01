@@ -1,3 +1,10 @@
+## [0.63.1](https://github.com/arnaudjnn/billing-tools/compare/v0.63.0...v0.63.1) (2026-08-01)
+
+
+### Bug Fixes
+
+* **usage:** attribute per-member usage on a pooled plan too ([89c1967](https://github.com/arnaudjnn/billing-tools/commit/89c19679d5df51bca93930879555ccc02f8d38e5))
+
 # [0.63.0](https://github.com/arnaudjnn/billing-tools/compare/v0.62.2...v0.63.0) (2026-08-01)
 
 
