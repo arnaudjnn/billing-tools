@@ -41,7 +41,7 @@ export function registerBillingOnlyTools(
       if ("isError" in auth) return auth;
       if (!stripeConfigured()) return NO_STRIPE;
       const cid = await customerId(auth.orgId);
-      const balance = await getTokenBalance(cid);
+      const balance = await getTokenBalance(cid, config.currency);
       const autoReload = await getAutoReloadSettings(cid);
       return {
         content: [

@@ -90,7 +90,7 @@ export async function enforceTokens(
       content: [{ type: "text", text: "No billing account found. Please contact support." }],
     };
   }
-  const balance = await getTokenBalance(customerId);
+  const balance = await getTokenBalance(customerId, config.currency);
   if (balance < cost) {
     return {
       isError: true,

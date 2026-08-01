@@ -272,6 +272,178 @@ export async function ensurePlans(
   return result;
 }
 
+// ── Moving existing subscribers onto a new price ─────────────────────────────
+//
+// Changing an amount in the config mints a new price and archives the old one,
+// but a Stripe price is immutable and a subscription references one BY ID — so
+// everyone who already subscribed keeps paying the old amount, forever, until
+// something moves them. `ensurePlans` deliberately doesn't: silently repricing
+// live customers is not a side effect a config edit should have.
+//
+// This is that step, made explicit. It is also what a currency change needs:
+// the new prices exist the moment the config says so, but the subscriptions
+// pointing at the old ones have to be walked over.
+
+export interface MigratedSubscription {
+  subscriptionId: string;
+  customerId: string | null;
+  /** The price left behind, and the one adopted. */
+  from: string;
+  to: string;
+  quantity: number;
+  /** Seat type for a seat-typed plan; absent for a flat plan. */
+  seatType?: string;
+}
+
+export interface MigrateSubscriptionsResult {
+  /** What moved — or what WOULD move, when `dryRun`. */
+  migrated: MigratedSubscription[];
+  /**
+   * Subscriptions found on a superseded price that turned out to need no change.
+   *
+   * NOT a count of every up-to-date subscriber: the search starts from the old
+   * prices (which is what keeps it bounded), so a subscription already on the
+   * current price is never visited. Zero here after a successful migration means
+   * "nothing left on an old price", which is the answer that matters.
+   */
+  alreadyCurrent: number;
+  /** Old price ids that were searched. */
+  oldPrices: string[];
+  dryRun: boolean;
+}
+
+/** Live enough to keep billing, so worth migrating. A canceled or
+ *  incomplete_expired subscription will never be invoiced again. */
+const MIGRATABLE_STATUSES = new Set<Stripe.Subscription.Status>([
+  "active",
+  "trialing",
+  "past_due",
+  "unpaid",
+  "paused",
+]);
+
+/**
+ * Move live subscriptions from a plan's superseded prices onto its current ones.
+ *
+ * Run it after changing an amount (or the currency) in the plans config, when
+ * the change is meant to apply to existing customers and not only to new ones.
+ * It is idempotent: a subscription already on the current price is counted and
+ * left alone, so re-running does nothing.
+ *
+ * `dryRun: true` reports exactly what would change without touching Stripe —
+ * worth doing first, since the alternative is re-pricing real subscriptions.
+ *
+ * Proration defaults to `"none"`: the new amount takes effect at the next
+ * renewal and nobody is charged (or credited) mid-cycle for the difference,
+ * which is what a straightforward price change usually means. Pass
+ * `"create_prorations"` or `"always_invoice"` deliberately.
+ *
+ * Only prices this library minted are considered (`metadata.managedBy`), so a
+ * price attached by hand in the Dashboard is never moved out from under you.
+ */
+export async function migrateSubscriptions(opts: {
+  plans: PlansConfig;
+  plan: string;
+  interval: BillingInterval;
+  currency?: string;
+  dryRun?: boolean;
+  prorationBehavior?: Stripe.SubscriptionUpdateParams.ProrationBehavior;
+  /** Stop after this many subscriptions. Omit for all of them. */
+  limit?: number;
+}): Promise<MigrateSubscriptionsResult> {
+  const stripe = getStripe();
+  const dryRun = opts.dryRun ?? false;
+  const proration_behavior = opts.prorationBehavior ?? "none";
+
+  // The current prices, provisioning them if this is the first run after the
+  // config changed — otherwise there would be nothing to migrate ONTO.
+  const ensured = await ensurePlans(opts.plans, {
+    currency: opts.currency,
+    archive: false,
+  });
+  const current = new Map<string, { priceId: string; seatType?: string }>();
+  for (const e of ensured) {
+    if (e.plan === opts.plan && e.interval === opts.interval) {
+      current.set(e.lookupKey, { priceId: e.priceId, seatType: e.seatType });
+    }
+  }
+  if (current.size === 0) {
+    throw new Error(`No current price for plan ${opts.plan} (${opts.interval})`);
+  }
+  const currentIds = new Set([...current.values()].map((c) => c.priceId));
+
+  // Superseded prices: same plan + interval, minted by this library, not the
+  // current one. Archived prices are exactly what we're looking for, so the
+  // listing must NOT filter on `active`.
+  const productIds = new Set(ensured.map((e) => e.productId));
+  const oldPrices: { id: string; seatType?: string }[] = [];
+  for (const product of productIds) {
+    for await (const price of stripe.prices.list({ product, limit: 100 })) {
+      if (price.metadata?.managedBy !== MANAGED_BY) continue;
+      if (price.metadata.plan !== opts.plan) continue;
+      if (price.metadata.interval !== opts.interval) continue;
+      if (currentIds.has(price.id)) continue;
+      oldPrices.push({ id: price.id, seatType: price.metadata.seatType });
+    }
+  }
+
+  const migrated: MigratedSubscription[] = [];
+  let alreadyCurrent = 0;
+  const seen = new Set<string>();
+
+  for (const old of oldPrices) {
+    // Stripe filters subscriptions by price, which is what makes this bounded
+    // rather than a scan of every subscription on the account.
+    for await (const sub of stripe.subscriptions.list({
+      price: old.id,
+      status: "all",
+      limit: 100,
+    })) {
+      if (!MIGRATABLE_STATUSES.has(sub.status)) continue;
+      if (seen.has(sub.id)) continue;
+      if (opts.limit !== undefined && migrated.length >= opts.limit) break;
+
+      // A seat-typed plan has one item per seat type, and only the items on a
+      // superseded price move — the rest of the subscription is left as it is.
+      const items: Stripe.SubscriptionUpdateParams.Item[] = [];
+      const moves: MigratedSubscription[] = [];
+      for (const item of sub.items.data) {
+        const target = current.get(item.price.lookup_key ?? "");
+        const supersededOf = oldPrices.find((p) => p.id === item.price.id);
+        if (!supersededOf) continue;
+        // The lookup key travelled to the NEW price, so an archived price no
+        // longer carries it — resolve the target by seat type instead.
+        const to =
+          target ??
+          [...current.values()].find((c) => c.seatType === supersededOf.seatType) ??
+          [...current.values()][0];
+        if (to.priceId === item.price.id) continue;
+        items.push({ id: item.id, price: to.priceId, quantity: item.quantity ?? 1 });
+        moves.push({
+          subscriptionId: sub.id,
+          customerId: typeof sub.customer === "string" ? sub.customer : (sub.customer?.id ?? null),
+          from: item.price.id,
+          to: to.priceId,
+          quantity: item.quantity ?? 1,
+          seatType: supersededOf.seatType,
+        });
+      }
+
+      seen.add(sub.id);
+      if (items.length === 0) {
+        alreadyCurrent++;
+        continue;
+      }
+      if (!dryRun) {
+        await stripe.subscriptions.update(sub.id, { items, proration_behavior });
+      }
+      migrated.push(...moves);
+    }
+  }
+
+  return { migrated, alreadyCurrent, oldPrices: oldPrices.map((p) => p.id), dryRun };
+}
+
 /** Archive managed prices whose lookup_key is no longer configured (a plan or
  *  interval you removed), and deactivate now-empty managed products. */
 async function archiveOrphans(stripe: Stripe, wanted: Set<string>): Promise<void> {

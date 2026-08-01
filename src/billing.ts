@@ -166,10 +166,54 @@ export async function ensureStripeCustomer(
   return customer.id;
 }
 
-export async function getTokenBalance(stripeCustomerId: string): Promise<number> {
-  const customer = await getStripe().customers.retrieve(stripeCustomerId);
+/**
+ * The customer's token credit, in `currency`.
+ *
+ * `customer.balance` is a SINGLE scalar, denominated in `customer.currency` —
+ * whichever currency first touched the customer, pinned there for good. Stripe
+ * nonetheless tracks a separate running balance per currency: credit a customer
+ * pinned to EUR in USD and the call is accepted, the USD balance gets its own
+ * `ending_balance`, and the scalar does not move.
+ *
+ * So reading the scalar for a customer whose currency isn't the one being
+ * metered reports the WRONG balance, silently: debits land in the metered
+ * currency while the number on screen keeps reflecting the other one. Measured,
+ * not theorised. Passing `currency` (do — it's `config.currency`) reads the
+ * balance for that currency instead, from the latest balance transaction in it.
+ *
+ * Without `currency`, or when it matches the customer's own, the scalar is
+ * correct and is used directly — one API call, as before.
+ */
+export async function getTokenBalance(
+  stripeCustomerId: string,
+  currency?: string,
+): Promise<number> {
+  const stripe = getStripe();
+  const customer = await stripe.customers.retrieve(stripeCustomerId);
   if (customer.deleted) return 0;
-  return -customer.balance; // negative balance = credit
+
+  const want = currency?.toLowerCase();
+  // No currency to reconcile against, or the scalar already denominates in it.
+  if (!want || !customer.currency || customer.currency === want) {
+    return -customer.balance; // negative balance = credit
+  }
+
+  // Mismatch: walk back to the most recent transaction in the wanted currency —
+  // its `ending_balance` IS that currency's balance. Transactions come newest
+  // first, so the first match ends the scan.
+  //
+  // Bounded: a customer whose whole history is in the other currency would
+  // otherwise be walked in full. 500 transactions back is far more than a
+  // currency switch needs, and reporting 0 (no credit in this currency yet) is
+  // the truthful answer beyond it.
+  let scanned = 0;
+  for await (const tx of stripe.customers.listBalanceTransactions(stripeCustomerId, {
+    limit: 100,
+  })) {
+    if (tx.currency === want) return -tx.ending_balance;
+    if (++scanned >= 500) break;
+  }
+  return 0;
 }
 
 export async function deductTokens(
@@ -326,7 +370,7 @@ export async function tryAutoReload(
   const settings = await getAutoReloadSettings(stripeCustomerId);
   if (!settings || !settings.enabled) return;
 
-  const balance = await getTokenBalance(stripeCustomerId);
+  const balance = await getTokenBalance(stripeCustomerId, currency);
   if (balance > settings.threshold) return;
 
   const tokensNeeded = settings.reload_to - balance;

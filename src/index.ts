@@ -63,6 +63,7 @@ export {
   ensurePlans,
   resolvePlanPrices,
   invalidatePlanPrices,
+  migrateSubscriptions,
   planPriceId,
   planForPriceId,
   seatTypeForPriceId,
@@ -77,6 +78,8 @@ export {
   type BillingInterval,
   type EnsuredPrice,
   type PlanPrices,
+  type MigratedSubscription,
+  type MigrateSubscriptionsResult,
 } from "./plans.js";
 
 // Per-execution metering engine (prepaid balance; per-seat packs or a global

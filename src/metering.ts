@@ -74,7 +74,7 @@ export async function meterUsage(
   }
 
   // The shared reserve must cover the debit (it funds every pack + any API top-up).
-  const balance = await getTokenBalance(customerId)
+  const balance = await getTokenBalance(customerId, config.currency)
   if (balance < cost) {
     return {
       ok: false,

@@ -41,6 +41,9 @@ export async function checkBillingSetup(opts: {
   webhookUrl?: string;
   /** Skip Stripe Tax checks if you deliberately don't use automatic_tax. */
   expectTax?: boolean;
+  /** `config.currency`. Pass it to check for customers pinned to another one —
+   *  the half-applied currency change that produces no error anywhere. */
+  currency?: string;
 } = {}): Promise<DoctorResult> {
   const stripe = getStripe();
   const checks: Check[] = [];
@@ -162,6 +165,50 @@ export async function checkBillingSetup(opts: {
             title: "Signing secret",
             detail: "STRIPE_WEBHOOK_SECRET is unset — deliveries will be rejected with 503",
             fix: "Take it from ensureWebhookEndpoint's output, or from `stripe listen` when developing",
+          },
+    );
+  }
+
+  // ── Customers pinned to a different currency ──────────────────────────────
+  //
+  // `customer.currency` is set by whatever first touched the customer (for this
+  // library, the welcome credit) and cannot be changed afterwards. Stripe still
+  // accepts balance transactions in any currency, keeping a separate running
+  // balance per one — so a customer pinned to the old currency keeps reporting
+  // the old balance from `customer.balance` while new debits accumulate in the
+  // configured currency. Nothing errors. That silence is the reason this check
+  // exists: it is the one way to see a currency change half-applied.
+  if (opts.currency) {
+    const want = opts.currency.toLowerCase();
+    const sample: string[] = [];
+    let seen = 0;
+    for await (const customer of stripe.customers.list({ limit: 100 })) {
+      seen++;
+      if (customer.currency && customer.currency !== want) {
+        if (sample.length < 5) sample.push(`${customer.id} (${customer.currency})`);
+      }
+      // A sample is enough to answer "is this environment mixed?" — walking
+      // every customer of a live account is not what a preflight should do.
+      if (seen >= 500) break;
+    }
+    checks.push(
+      sample.length === 0
+        ? {
+            level: "ok",
+            title: "Customer currency",
+            detail: `every customer sampled (${seen}) is pinned to ${want} or unpinned`,
+          }
+        : {
+            level: "warn",
+            title: "Customer currency",
+            detail:
+              `${sample.length === 5 ? "at least 5" : sample.length} of ${seen} customers are pinned to another currency ` +
+              `than the configured ${want}: ${sample.join(", ")}`,
+            fix:
+              "A pinned currency cannot be changed. Their credit balance lives in the OLD currency while new " +
+              "debits go to the new one, so read balances with getTokenBalance(id, config.currency) (the default " +
+              "since 0.52) and migrate live subscriptions with migrateSubscriptions() — or keep those customers " +
+              "on the old currency deliberately",
           },
     );
   }
