@@ -1,3 +1,16 @@
+# [0.49.0](https://github.com/arnaudjnn/billing-tools/compare/v0.48.0...v0.49.0) (2026-08-01)
+
+
+### Bug Fixes
+
+* **billing-profile:** clear Stripe fields with an empty string, not null ([14fbe12](https://github.com/arnaudjnn/billing-tools/commit/14fbe125792835cef5ea17041dd7a3a9b1a016a0))
+
+
+### Features
+
+* **billing-profile:** invoice recipient and company name ([daa1eb9](https://github.com/arnaudjnn/billing-tools/commit/daa1eb910565b44d12499eb33bbe649c07f446e8))
+* **workos:** export getWorkOS and the Pattern B org mirror ([f0f9e30](https://github.com/arnaudjnn/billing-tools/commit/f0f9e30dc8ce62fb43dfe60f0082c02677bc9349))
+
 # [0.48.0](https://github.com/arnaudjnn/billing-tools/compare/v0.47.0...v0.48.0) (2026-08-01)
 
 
