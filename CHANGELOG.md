@@ -1,3 +1,10 @@
+## [0.53.1](https://github.com/arnaudjnn/billing-tools/compare/v0.53.0...v0.53.1) (2026-08-01)
+
+
+### Bug Fixes
+
+* **address:** pass inert as a boolean ([e8da4c5](https://github.com/arnaudjnn/billing-tools/commit/e8da4c54b0dbf9f91f18446b580b8505d3ca1223))
+
 # [0.53.0](https://github.com/arnaudjnn/billing-tools/compare/v0.52.0...v0.53.0) (2026-08-01)
 
 
