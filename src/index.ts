@@ -121,6 +121,23 @@ export {
   type CycleWindow,
 } from "./plans.js";
 
+// The subscription lifecycle: one entry point for up, down and off. Before this,
+// every plan or seat change opened a fresh Checkout Session and created a SECOND
+// subscription, so the customer was billed twice.
+export {
+  changePlan,
+  cancelPlan,
+  planActions,
+  planRank,
+  PlanChangeError,
+  type PlanChangeResult,
+  type PlanChangeKind,
+  type PlanChangeTiming,
+  type PlanChangeErrorCode,
+  type ProrationPolicy,
+  type PlanActions,
+} from "./subscription.js";
+
 // Pricing view models: the plan config turned into what a surface renders. Also
 // available as the leaf entry point `@arnaudjnn/billing-tools/pricing`, which
 // pulls in neither Stripe nor WorkOS — so a client component and a docs
