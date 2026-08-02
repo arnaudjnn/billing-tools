@@ -191,11 +191,11 @@ export async function createCardSetupCheckoutSession(
     // Collect the address, so the session carries one and the element renders its
     // collapsed summary rather than empty fields.
     billing_address_collection: "required",
-    // Offer the cards already on file, and keep the values `unspecified` in the
-    // filter list — see createCreditCheckoutSession for why that one matters.
-    saved_payment_method_options: {
-      allow_redisplay_filters: ["always", "limited", "unspecified"],
-    },
+    // NO `saved_payment_method_options` here, unlike the payment-mode sessions:
+    // Stripe rejects it outright — "`saved_payment_method_options` may not be
+    // specified in setup mode" — and it would have nothing to do anyway. Setup mode
+    // does not prefill or offer existing cards; it exists to collect a new one. A
+    // caller with a card already on file should not be opening this session at all.
     ...(pmc ? { payment_method_configuration: pmc } : {}),
   });
   if (!session.client_secret) throw new Error("Stripe returned no client secret");
