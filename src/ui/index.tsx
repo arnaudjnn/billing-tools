@@ -399,6 +399,25 @@ export type BillingCheckoutSessionProviderProps = {
    * customer can still change it.
    */
   defaultCountry?: string;
+  /**
+   * Prefill the whole billing address, not just the country — the org's own
+   * billing profile, typically.
+   *
+   * Same mechanism and the same reason as `defaultCountry`: it reaches the
+   * SESSION, so tax is computed from the first render. A customer paying for a
+   * team they already have an invoicing address for should not retype it, and
+   * should not be nudged into paying with a different one by an empty form.
+   * Ignored unless `line1` and `country` are both present.
+   */
+  defaultAddress?: {
+    name?: string | null;
+    line1?: string | null;
+    line2?: string | null;
+    city?: string | null;
+    state?: string | null;
+    postal_code?: string | null;
+    country?: string | null;
+  } | null;
   children: React.ReactNode;
 };
 
@@ -411,6 +430,7 @@ export function BillingCheckoutSessionProvider({
   locale,
   taxIdBeta = true,
   defaultCountry,
+  defaultAddress,
   children,
 }: BillingCheckoutSessionProviderProps) {
   const stripe = React.useMemo(
@@ -423,9 +443,27 @@ export function BillingCheckoutSessionProvider({
       options={{
         clientSecret,
         elementsOptions: { appearance },
-        ...(defaultCountry
-          ? { defaultValues: { billingAddress: { address: { country: defaultCountry } } } }
-          : {}),
+        // A full address wins over the bare country; either way the value lands on
+        // the session so the first tax calculation has a location.
+        ...(defaultAddress?.line1 && defaultAddress.country
+          ? {
+              defaultValues: {
+                billingAddress: {
+                  ...(defaultAddress.name ? { name: defaultAddress.name } : {}),
+                  address: {
+                    line1: defaultAddress.line1,
+                    line2: defaultAddress.line2 ?? undefined,
+                    city: defaultAddress.city ?? undefined,
+                    state: defaultAddress.state ?? undefined,
+                    postal_code: defaultAddress.postal_code ?? undefined,
+                    country: defaultAddress.country,
+                  },
+                },
+              },
+            }
+          : defaultCountry
+            ? { defaultValues: { billingAddress: { address: { country: defaultCountry } } } }
+            : {}),
       }}
     >
       {children}
