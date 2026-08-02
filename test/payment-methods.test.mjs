@@ -61,7 +61,7 @@ const off = (params) =>
     .map(([k]) => k)
     .sort();
 
-test("saving a card offers card + both wallets, and nothing else", async () => {
+test("a card-saving form offers card + both wallets, and nothing else", async () => {
   invalidatePaymentMethodConfigs();
   const stripe = fakeStripe();
   __setStripeForTests(stripe);
@@ -72,20 +72,33 @@ test("saving a card offers card + both wallets, and nothing else", async () => {
   // offer it however the account is configured. SEPA is dropped for the same
   // reason this list is explicit rather than inherited.
   assert.deepEqual(on(stripe.created[0]), ["apple_pay", "card", "google_pay"]);
-  assert.equal(stripe.created[0].name, "billing-tools: save a card");
+  assert.equal(stripe.created[0].name, "billing-tools: card and wallets");
 });
 
-test("paying keeps the account's methods, adds the wallets, drops Link", async () => {
+test("paying offers the same three, NOT whatever the Dashboard has on", async () => {
   invalidatePaymentMethodConfigs();
   const stripe = fakeStripe();
   __setStripeForTests(stripe);
 
   await defaultPaymentMethodConfig("payment");
-  // SEPA survives because the account enabled it: a real charge should keep
-  // every method the Dashboard offers. The wallets are added even though the
-  // account has them off, and Link goes.
-  assert.deepEqual(on(stripe.created[0]), ["apple_pay", "card", "google_pay", "sepa_debit"]);
-  assert.deepEqual(off(stripe.created[0]), ["link"]);
+  // SEPA is on in this fake account and still does not appear. Inheriting the
+  // account's list put a row of tabs (Klarna, Amazon Pay, Satispay) in front of
+  // every customer of an app that had always shown one field — a method reaches
+  // a customer because someone chose to sell that way, not because a Dashboard
+  // toggle was left on. Selling via SEPA means passing a configuration.
+  assert.deepEqual(on(stripe.created[0]), ["apple_pay", "card", "google_pay"]);
+  assert.deepEqual(off(stripe.created[0]), []);
+});
+
+test("both kinds share one configuration, so it is provisioned once", async () => {
+  invalidatePaymentMethodConfigs();
+  const stripe = fakeStripe();
+  __setStripeForTests(stripe);
+
+  const a = await defaultPaymentMethodConfig("setup");
+  const b = await defaultPaymentMethodConfig("payment");
+  assert.equal(a, b);
+  assert.equal(stripe.created.length, 1);
 });
 
 test("config.paymentMethods.link opts back into Stripe's behaviour", async () => {
@@ -110,7 +123,7 @@ test("a key that cannot read configurations degrades, it does not throw", async 
 test("an existing configuration is reused, not duplicated", async () => {
   invalidatePaymentMethodConfigs();
   const stripe = fakeStripe({
-    existing: [{ id: "pmc_saved", name: "billing-tools: save a card", active: true }],
+    existing: [{ id: "pmc_saved", name: "billing-tools: card and wallets", active: true }],
   });
   __setStripeForTests(stripe);
 
