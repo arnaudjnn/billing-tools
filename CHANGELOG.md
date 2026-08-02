@@ -1,3 +1,10 @@
+## [0.70.1](https://github.com/arnaudjnn/billing-tools/compare/v0.70.0...v0.70.1) (2026-08-02)
+
+
+### Performance Improvements
+
+* **ui:** mount the checkout on a session PROMISE, and let Stripe draw the wait ([555f293](https://github.com/arnaudjnn/billing-tools/commit/555f29327b0d7a7962a3b782d760c6540967cb00))
+
 # [0.70.0](https://github.com/arnaudjnn/billing-tools/compare/v0.69.0...v0.70.0) (2026-08-02)
 
 
