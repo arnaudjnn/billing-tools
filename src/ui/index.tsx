@@ -177,7 +177,18 @@ export type BillingPaymentFormProps = {
   /** Rendered as the submit button. Receives the live submitting state. */
   children: (state: { submitting: boolean }) => React.ReactNode;
   /** Called after the intent is confirmed without a redirect. */
-  onSuccess?: () => void;
+  /**
+   * Called after a successful confirm, WITH what was confirmed.
+   *
+   * The argument is what lets a caller act on the specific card that was just
+   * saved — setting it as the default, copying its billing address onto the
+   * customer. Without it the app has to guess by listing payment methods and
+   * taking the newest, which is a race the moment two tabs are open.
+   */
+  onSuccess?: (result?: {
+    setupIntent?: { id: string; payment_method?: unknown } | null;
+    paymentIntent?: { id: string; payment_method?: unknown } | null;
+  }) => void;
   /** Called with a human-readable message when Stripe declines or validation fails. */
   onError?: (message: string) => void;
   className?: string;
@@ -225,17 +236,21 @@ export function BillingPaymentForm({
         confirmParams: { return_url: returnUrl },
         redirect: "if_required" as const,
       };
-      const { error } =
+      const result =
         intent === "setup"
           ? await stripe.confirmSetup(confirmArgs)
           : await stripe.confirmPayment(confirmArgs);
-      if (error) {
+      if (result.error) {
         onError?.(
-          error.message ?? (intent === "setup" ? t.cardNotSaved : t.paymentFailed),
+          result.error.message ??
+            (intent === "setup" ? t.cardNotSaved : t.paymentFailed),
         );
         return;
       }
-      onSuccess?.();
+      onSuccess?.({
+        setupIntent: "setupIntent" in result ? (result.setupIntent ?? null) : null,
+        paymentIntent: "paymentIntent" in result ? (result.paymentIntent ?? null) : null,
+      });
     } finally {
       setSubmitting(false);
     }
@@ -243,7 +258,6 @@ export function BillingPaymentForm({
 
   return (
     <form onSubmit={onSubmit} className={className}>
-      {collectAddress && <AddressElement options={{ mode: "billing" }} />}
       {/*
         `tabs` is what makes a card-only form look like a form. The default
         (accordion) always draws a header row for the method — a "Card" label and
@@ -262,6 +276,10 @@ export function BillingPaymentForm({
       <PaymentElement
         options={{ layout: { type: "tabs" }, wallets: { link: "never" } }}
       />
+      {/* Card FIRST, address second. The card is what the customer came to type;
+          the address is the paperwork that follows it. Stripe re-validates on
+          submit either way, so the order is presentation, not logic. */}
+      {collectAddress && <AddressElement options={{ mode: "billing" }} />}
       {collectTaxId && <TaxIdElement options={{}} />}
       {children({ submitting })}
     </form>
@@ -502,7 +520,6 @@ export function BillingCheckoutSessionForm({
 
   return (
     <form onSubmit={onSubmit} className={className}>
-      {collectAddress && <BillingAddressElement />}
       {/* Same reason as AddCardForm: no accordion header when there is one
           method to pick. With several (a wallet, Klarna) the tabs appear, which
           is correct — there is then something to choose. */}
@@ -512,6 +529,9 @@ export function BillingCheckoutSessionForm({
           wallets: { link: link ? "auto" : "never" },
         }}
       />
+      {/* Card first here too, so the two forms read the same way. The address
+          still drives the tax recalculation; it just sits below now. */}
+      {collectAddress && <BillingAddressElement />}
       {collectTaxId && taxIdAvailable && <CheckoutTaxIdElement options={{}} />}
       {children({ submitting })}
     </form>
