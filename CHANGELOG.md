@@ -1,3 +1,10 @@
+## [2.6.1](https://github.com/arnaudjnn/billing-tools/compare/v2.6.0...v2.6.1) (2026-08-02)
+
+
+### Reverts
+
+* Revert "feat(ui): let a caller collapse the address behind its own summary" ([29e35ef](https://github.com/arnaudjnn/billing-tools/commit/29e35ef5c572ad89be7795ee9621636e26fb4362))
+
 # [2.6.0](https://github.com/arnaudjnn/billing-tools/compare/v2.5.1...v2.6.0) (2026-08-02)
 
 
