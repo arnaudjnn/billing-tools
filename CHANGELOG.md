@@ -1,3 +1,16 @@
+# [2.0.0](https://github.com/arnaudjnn/billing-tools/compare/v1.0.0...v2.0.0) (2026-08-02)
+
+
+* feat!: one cycle key, no legacy fallback ([76125f4](https://github.com/arnaudjnn/billing-tools/commit/76125f47ab0eab24c1f81f8d86f709cffd26b09c))
+
+
+### BREAKING CHANGES
+
+* `legacyCycleKey` is no longer exported, and
+`extraAllowance(adapter, orgId, memberId, cycle)` takes four arguments.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
 # [1.0.0](https://github.com/arnaudjnn/billing-tools/compare/v0.71.0...v1.0.0) (2026-08-02)
 
 
