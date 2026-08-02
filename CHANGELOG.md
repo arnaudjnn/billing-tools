@@ -1,3 +1,25 @@
+# [1.0.0](https://github.com/arnaudjnn/billing-tools/compare/v0.71.0...v1.0.0) (2026-08-02)
+
+
+* feat!: the billing unit is a credit, not a token ([0840ece](https://github.com/arnaudjnn/billing-tools/commit/0840ecee10f82bdc52c4d1c29700410117181f03))
+
+
+### BREAKING CHANGES
+
+* no aliases, in either direction. The TS API, the plan config,
+the MCP/REST tool names and the JSON response fields all move at once. A
+consumer updates its call sites and its plan config; an agent updates the two
+tool names. Keeping both spellings alive was the alternative, and a taxonomy
+with two spellings is the thing this commit exists to remove.
+
+The one deliberate survivor is a READ: `session.metadata.credits ||
+session.metadata.tokens` in the checkout handlers. A Checkout Session opened
+before the deploy still carries the old key, and reading only the new one
+would grant 0 credits on a purchase the customer had already paid for. It can
+go once no pre-rename session is in flight.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
 # [0.71.0](https://github.com/arnaudjnn/billing-tools/compare/v0.70.2...v0.71.0) (2026-08-02)
 
 
