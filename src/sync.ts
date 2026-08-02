@@ -213,9 +213,7 @@ export function createStripeEventHandler(opts: {
       if (session.mode !== "payment") return;
       const customerId =
         typeof session.customer === "string" ? session.customer : session.customer?.id;
-      // `tokens` is the pre-rename metadata key — see the same fallback in
-      // routes/webhook.ts. Sessions opened before the deploy still carry it.
-      const credits = parseInt(session.metadata?.credits || session.metadata?.tokens || "0", 10);
+      const credits = parseInt(session.metadata?.credits || "0", 10);
       if (!customerId || credits <= 0) return;
       await grantCredits(
         customerId,

@@ -71,10 +71,7 @@ export function createStripeWebhookHandler(opts: WebhookOptions = {}) {
       const session = event.data.object as Stripe.Checkout.Session;
       {
         const customerId = customerIdOf(session.customer as string | { id: string });
-        // `tokens` is the pre-rename metadata key. A Checkout Session opened
-        // before the deploy still carries it, and reading only `credits` would
-        // silently grant 0 on a purchase the customer already paid for.
-        const credits = parseInt(session.metadata?.credits || session.metadata?.tokens || "0", 10);
+        const credits = parseInt(session.metadata?.credits || "0", 10);
         if (customerId && credits > 0) {
           // Idempotency key on the session id: a re-delivered webhook credits once.
           await grantCredits(
