@@ -228,7 +228,7 @@ export async function checkBillingSetup(opts: {
               `than the configured ${want}: ${sample.join(", ")}`,
             fix:
               "A pinned currency cannot be changed. Their credit balance lives in the OLD currency while new " +
-              "debits go to the new one, so read balances with getTokenBalance(id, config.currency) (the default " +
+              "debits go to the new one, so read balances with getCreditBalance(id, config.currency) (the default " +
               "since 0.52) and migrate live subscriptions with migrateSubscriptions() — or keep those customers " +
               "on the old currency deliberately",
           },
@@ -274,7 +274,7 @@ export async function checkBillingSetup(opts: {
   // ── Top-ups sold untaxed by an account that taxes everything else ─────────
   //
   // Both charges the library can raise without a form behind them — the
-  // `buy_tokens` Checkout and the auto-reload invoice — were untaxed, so a
+  // `buy_credits` Checkout and the auto-reload invoice — were untaxed, so a
   // seller charging 22% on its seats charged 0% on a top-up bought through the
   // same account. Detected by comparing what the recent invoices actually did.
   {
@@ -285,7 +285,7 @@ export async function checkBillingSetup(opts: {
       if (hasTax) taxed++;
       const isTopUp =
         inv.metadata?.auto_reload === "true" ||
-        inv.lines.data.some((l) => /token/i.test(l.description ?? ""));
+        inv.lines.data.some((l) => /credit/i.test(l.description ?? ""));
       if (isTopUp && !hasTax && untaxedTopUps.length < 5) untaxedTopUps.push(inv.id ?? "(unknown)");
       if (taxed > 0 && untaxedTopUps.length >= 5) break;
     }
@@ -294,10 +294,10 @@ export async function checkBillingSetup(opts: {
         level: "error",
         title: "Top-ups invoiced without tax",
         detail:
-          `this account charges tax on other invoices, but ${untaxedTopUps.length} token/auto-reload ` +
+          `this account charges tax on other invoices, but ${untaxedTopUps.length} credit/auto-reload ` +
           `invoice(s) carry none: ${untaxedTopUps.join(", ")}`,
         fix:
-          "Pass `topUp.taxRates` to registerBillingTools for buy_tokens, and `config.tax.rates` for the " +
+          "Pass `topUp.taxRates` to registerBillingTools for buy_credits, and `config.tax.rates` for the " +
           "auto-reload invoice — neither has an address form to derive a rate from on its own",
       });
     }
@@ -345,9 +345,9 @@ export function checkPlansConfig(
         level: "error",
         title: `Plan "${m.key}" credits its own invoice`,
         detail:
-          `it is invoiced (${m.sells.kind}) AND credits tokens (grant: ${m.grant.kind}). A Stripe credit ` +
+          `it is invoiced (${m.sells.kind}) AND GRANTS credits (grant: ${m.grant.kind}). A Stripe credit ` +
           "balance auto-applies to the next invoice, so this discounts the plan's own renewal — measured " +
-          "at ~48% off a seat whose pack was one month's tokens",
+          "at ~48% off a seat whose pack was one month's credits",
         fix:
           "Set `grant: { kind: \"none\" }` and express the included allowance as a `cap` (per_seat or pool), " +
           "which is counted rather than credited. Keep `grant` only for a plan that literally sells credit",
@@ -356,12 +356,12 @@ export function checkPlansConfig(
     // Rate limits: the two ways a plausible-looking declaration silently refuses
     // everything, and the one way a set of them contradicts itself.
     for (const l of m.limits.rate) {
-      if (l.tokens <= 0) {
+      if (l.credits <= 0) {
         checks.push({
           level: "error",
           title: `Plan "${m.key}" has a zero ${l.every} limit`,
-          detail: `a rate limit of ${l.tokens} refuses every call in that window`,
-          fix: "Set `tokens` above 0, or drop the limit",
+          detail: `a rate limit of ${l.credits} refuses every call in that window`,
+          fix: "Set `credits` above 0, or drop the limit",
         });
       }
       if ((l.scope ?? "org") === "org" && l.seatType) {
@@ -392,13 +392,13 @@ export function checkPlansConfig(
       for (let i = 1; i < sorted.length; i++) {
         const narrow = sorted[i - 1];
         const wide = sorted[i];
-        if (wide.tokens <= narrow.tokens) {
+        if (wide.credits <= narrow.credits) {
           checks.push({
             level: "warn",
             title: `Plan "${m.key}" has an unreachable ${wide.every} limit`,
             detail:
-              `the ${wide.every} limit (${wide.tokens}) is no larger than the ${narrow.every} one ` +
-              `(${narrow.tokens}) on the same callers, so the ${narrow.every} window always refuses first`,
+              `the ${wide.every} limit (${wide.credits}) is no larger than the ${narrow.every} one ` +
+              `(${narrow.credits}) on the same callers, so the ${narrow.every} window always refuses first`,
             fix: `Raise the ${wide.every} limit above the ${narrow.every} one, or drop one of them`,
           });
         }
@@ -417,8 +417,8 @@ export function checkPlansConfig(
         title: `Plan "${m.key}" overflows to a wallet it cannot fill`,
         detail:
           m.cap.kind === "wallet"
-            ? "the wallet is its only gate, but the plan offers no way to buy tokens"
-            : 'its cap falls through to the wallet (`onExhausted: "wallet"`), but the plan offers no way to buy tokens',
+            ? "the wallet is its only gate, but the plan offers no way to buy credits"
+            : 'its cap falls through to the wallet (`onExhausted: "wallet"`), but the plan offers no way to buy credits',
         fix: 'Add `replenish: { purchase: {} }` (and/or `autoReload`), or set `onExhausted: "block"`',
       });
     }
@@ -439,16 +439,16 @@ export function checkPlansConfig(
       checks.push({
         level: "warn",
         title: `Plan "${m.key}" has an empty pool`,
-        detail: "cap is a pool but no `tokens` were set, so every metered call is refused",
-        fix: "Set `cap.tokens` to the package size",
+        detail: "cap is a pool but no `credits` were set, so every metered call is refused",
+        fix: "Set `cap.credits` to the package size",
       });
     }
-    if (m.grant.kind === "purchased_seats" && m.seatTypes.every((s) => s.includedTokens === 0)) {
+    if (m.grant.kind === "purchased_seats" && m.seatTypes.every((s) => s.includedCredits === 0)) {
       checks.push({
         level: "warn",
         title: `Plan "${m.key}" grants nothing`,
-        detail: "it grants per purchased seat, but every seat type includes 0 tokens",
-        fix: "Set `includedTokens` per seat type, or say `grant: { kind: \"none\" }` and use a `cap`",
+        detail: "it grants per purchased seat, but every seat type includes 0 credits",
+        fix: "Set `includedCredits` per seat type, or say `grant: { kind: \"none\" }` and use a `cap`",
       });
     }
     for (const s of m.seatTypes.filter((s) => s.shared && s.max === null)) {

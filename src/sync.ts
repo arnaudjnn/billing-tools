@@ -1,6 +1,6 @@
 import type Stripe from "stripe";
 import { pollStripeEvents, pollWorkOSEvents } from "./events.js";
-import { creditTokens, getStripe } from "./billing.js";
+import { grantCredits, getStripe } from "./billing.js";
 import {
   grantFor,
   planForPriceId,
@@ -17,7 +17,7 @@ const CURSOR_TABLE = "billing_sync_cursors";
 // app. Run runOnce() on an interval (loop) or from cron.
 //
 //   - Stripe subscription events → org plan/status (adapter.setSubscription)
-//     and per-cycle token grants on invoice.paid (creditTokens, per seat).
+//     and per-cycle credit grants on invoice.paid (grantCredits, per seat).
 //   - WorkOS org/user events → the Postgres mirror rows (name/columns via the
 //     mirror's `columns` map, full metadata, and row deletion).
 
@@ -96,7 +96,7 @@ function queryCursorStore(query: MirrorQuery): CursorStore {
 
 // The split that decides what is delivered how.
 //
-// MONEY GOES ON THE WEBHOOK. Anything that credits tokens or reacts to a failed
+// MONEY GOES ON THE WEBHOOK. Anything that grants credits or reacts to a failed
 // charge is delivered by Stripe, because that is what Stripe recommends and
 // because a payment that lands late is a customer who paid and didn't get what
 // they bought. `ensureWebhookEndpoint` registers exactly this list.
@@ -207,18 +207,20 @@ export function createStripeEventHandler(opts: {
 
     // Same credit the webhook route performs, reached by polling instead. Only
     // one-time top-ups (`mode: "payment"`); a subscription checkout grants its
-    // tokens through invoice.paid below.
+    // credits through invoice.paid below.
     if (event.type === "checkout.session.completed") {
       const session = event.data.object as Stripe.Checkout.Session;
       if (session.mode !== "payment") return;
       const customerId =
         typeof session.customer === "string" ? session.customer : session.customer?.id;
-      const tokens = parseInt(session.metadata?.tokens || "0", 10);
-      if (!customerId || tokens <= 0) return;
-      await creditTokens(
+      // `tokens` is the pre-rename metadata key — see the same fallback in
+      // routes/webhook.ts. Sessions opened before the deploy still carry it.
+      const credits = parseInt(session.metadata?.credits || session.metadata?.tokens || "0", 10);
+      if (!customerId || credits <= 0) return;
+      await grantCredits(
         customerId,
-        tokens,
-        `Purchase: ${tokens} tokens via Checkout`,
+        credits,
+        `Purchase: ${credits} credits via Checkout`,
         currency,
         `credit:checkout:${session.id}`,
       );
@@ -248,7 +250,7 @@ export function createStripeEventHandler(opts: {
       //
       // That distinction is the point. A Stripe credit balance auto-applies to
       // the customer's next invoice and cannot be opted out of, so crediting a
-      // plan's own included tokens discounts its own renewal: 1000 tokens on a
+      // plan's own included credits discounts its own renewal: 1000 credits on a
       // €21.04 seat produced an invoice with `starting_balance: -1000` and
       // `amount_due: 1104`. Included allowance is a counted window (see
       // allowance.ts); this credits only what the plan genuinely sells as credit.
@@ -262,17 +264,17 @@ export function createStripeEventHandler(opts: {
       const memberCount = model?.grant.kind === "per_member"
         ? await opts.adapter.memberCount(orgId)
         : purchasedSeats;
-      const tokens = grantFor(model, { seatCounts: counts, memberCount });
+      const credits = grantFor(model, { seatCounts: counts, memberCount });
       const seats = purchasedSeats || memberCount;
       const seatSummary = `${seats} seat${seats === 1 ? "" : "s"}`;
 
-      if (tokens > 0) {
+      if (credits > 0) {
         // Idempotency key on the invoice id: an overlapping/replayed poll grants
-        // the per-cycle tokens exactly once.
-        await creditTokens(
+        // the per-cycle credits exactly once.
+        await grantCredits(
           invoice.customer,
-          tokens,
-          `Included tokens: ${plan} (${seatSummary})`,
+          credits,
+          `Included credits: ${plan} (${seatSummary})`,
           currency,
           `credit:invoice:${invoice.id}`,
         );

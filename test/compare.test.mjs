@@ -9,16 +9,16 @@ test('the comparison table derives from the same config', async () => {
   let fail = 0; const ok=(l,c,e="")=>{console.log(`  ${c?"✓":"✗"} ${l}${e?"  — "+e:""}`);if(!c)fail++;};
 
   const PLANS = definePlans({
-    hobby: { sells:{kind:"nothing"}, cap:{kind:"pool",tokens:1000}, limits:{members:1}, sale:"free",
+    hobby: { sells:{kind:"nothing"}, cap:{kind:"pool",credits:1000}, limits:{members:1}, sale:"free",
              display:{name:"Hobby",order:1} },
     pro: { sells:{kind:"seats",minSeats:2,maxSeats:100,seatTypes:{
-             standard:{price:{monthly:2104,yearly:21600},includedTokens:1000,min:1,display:{label:"Posto Standard"}},
-             premium:{price:{monthly:10523,yearly:108000},includedTokens:5000,display:{label:"Posto Premium"}},
-             api:{price:{monthly:52615,yearly:540000},includedTokens:25000,shared:true,max:1,display:{label:"API"}}}},
+             standard:{price:{monthly:2104,yearly:21600},includedCredits:1000,min:1,display:{label:"Posto Standard"}},
+             premium:{price:{monthly:10523,yearly:108000},includedCredits:5000,display:{label:"Posto Premium"}},
+             api:{price:{monthly:52615,yearly:540000},includedCredits:25000,shared:true,max:1,display:{label:"API"}}}},
            grant:{kind:"none"}, cap:{kind:"per_seat"}, limits:{members:100}, sale:"self_serve",
            display:{name:"Pro",order:2,featured:true} },
     enterprise: { sells:{kind:"flat",price:{monthly:0,yearly:500000},intervals:["yearly"]}, grant:{kind:"none"},
-                  cap:{kind:"pool",tokens:1000000}, limits:{members:null}, sale:"quote",
+                  cap:{kind:"pool",credits:1000000}, limits:{members:null}, sale:"quote",
                   display:{name:"Enterprise",order:3} },
   });
 

@@ -448,7 +448,7 @@ Returns \`{ "error": "authorization_pending" }\` until the code is entered, then
   }
 ## Use the access token
 
-All MCP (\`${baseUrl}${p.mcp}\`) and REST (\`${baseUrl}${p.rest}/{tool_name}\`) endpoints accept the same key. Free tools work immediately; paid tools require a token balance.
+All MCP (\`${baseUrl}${p.mcp}\`) and REST (\`${baseUrl}${p.rest}/{tool_name}\`) endpoints accept the same key. Free tools work immediately; paid tools require a credit balance.
 
 ## Revocation
 

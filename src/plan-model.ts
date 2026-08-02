@@ -10,12 +10,12 @@
 //
 // ── Why five axes instead of one ────────────────────────────────────────────
 //
-// A plan used to be `{ seats, tokensPerSeat, price, seatTypes?, allowanceMode? }`
+// A plan used to be `{ seats, creditsPerSeat, price, seatTypes?, allowanceMode? }`
 // and that shape can only really express one product: per-seat, with a per-seat
 // pack. Everything else was squeezed into `allowanceMode`, which despite its
 // name does exactly ONE thing — skip the per-seat cap. There was no org-level
 // allowance anywhere, so "we don't care about seats, here is a package of N tool
-// requests" was unrepresentable, and a plan-level `tokensPerSeat` on such a plan
+// requests" was unrepresentable, and a plan-level `creditsPerSeat` on such a plan
 // was simply never read.
 //
 // What varies between products turns out to be five independent things:
@@ -36,14 +36,14 @@
 // This is the distinction the old model was missing, and it is a money bug, not
 // a modelling preference. `grant` credits the Stripe customer balance. A Stripe
 // credit balance AUTO-APPLIES to the customer's next invoice and cannot be
-// opted out of — measured: granting 1000 tokens to a customer on a €21.04 seat
+// opted out of — measured: granting 1000 credits to a customer on a €21.04 seat
 // produced an invoice with `starting_balance: -1000` and `amount_due: 1104`. So
 // crediting a plan's "included" allowance discounts its own renewal by half, and
 // an annual pool credited as money would invoice year two at zero.
 //
 // An included allowance is therefore a `cap`: a window that usage is COUNTED
 // against, with no money moving. Credit stays what it is actually for —
-// PURCHASED tokens (a top-up), which the customer really can spend.
+// PURCHASED credits (a top-up), which the customer really can spend.
 
 import {
   formatMessage,
@@ -57,7 +57,7 @@ import {
 
 export type BillingInterval = "monthly" | "yearly";
 
-/** Minor units (cents). 1 token = 1 minor unit, throughout this library. */
+/** Minor units (cents). 1 credit = 1 minor unit, throughout this library. */
 export type Money = number;
 
 export interface IntervalPrice {
@@ -119,8 +119,8 @@ export interface PlanDisplay {
 export interface SeatTypeSpec {
   /** Per-seat recurring price. 0 = free (no Stripe price is minted). */
   price: IntervalPrice;
-  /** Tokens this seat contributes to the cycle's entitlement. Default 0. */
-  includedTokens?: number;
+  /** Credits this seat contributes to the cycle's entitlement. Default 0. */
+  includedCredits?: number;
   /** Max seats of this type. null/absent = unlimited. */
   max?: number | null;
   /** Minimum purchasable, and where a stepper starts. Default 0. */
@@ -169,12 +169,12 @@ export type Grant =
    * everything except a plan that literally sells prepaid credit.
    */
   | { kind: "none" }
-  /** Σ seatTypes[t].includedTokens × PURCHASED quantity. */
+  /** Σ seatTypes[t].includedCredits × PURCHASED quantity. */
   | { kind: "purchased_seats" }
-  /** tokens × active member count. */
-  | { kind: "per_member"; tokens: Money }
-  /** A fixed number of tokens per cycle. For a plan whose product IS credit. */
-  | { kind: "fixed"; tokens: Money };
+  /** credits × active member count. */
+  | { kind: "per_member"; credits: Money }
+  /** A fixed number of credits per cycle. For a plan whose product IS credit. */
+  | { kind: "fixed"; credits: Money };
 
 // ── Axis 3: what is INCLUDED (a counted window; no money moves) ──────────────
 
@@ -215,13 +215,13 @@ export type Cap =
   /** Each caller is capped to its seat type's pack for the window. */
   | { kind: "per_seat"; window?: CapWindow; onExhausted?: Exhausted }
   /**
-   * ONE org-wide window: all usage in the cycle counts against `tokens`,
+   * ONE org-wide window: all usage in the cycle counts against `credits`,
    * whoever spends it. "We don't care about seats."
    */
   | {
       kind: "pool";
       /** The package size, set in config. */
-      tokens?: Money;
+      credits?: Money;
       /**
        * Unused allowance survives into the next cycle.
        *
@@ -245,7 +245,7 @@ export type Cap =
 // two are on.
 
 export interface Replenish {
-  /** Self-serve token purchase. */
+  /** Self-serve credit purchase. */
   purchase?: { packs?: readonly Money[] };
   /**
    * Threshold-triggered card charge. These are the DEFAULTS the plan offers;
@@ -291,11 +291,11 @@ export type Every = "hour" | "day" | "week" | "month" | "cycle";
 export interface RateLimit {
   every: Every;
   /**
-   * The ceiling, in the unit the ledger counts: token cost. With a rate card of
-   * 1 token per action that IS a request count, which is how these read on a
+   * The ceiling, in the unit the ledger counts: credit cost. With a rate card of
+   * 1 credit per action that IS a request count, which is how these read on a
    * usage screen ("300 requests per week").
    */
-  tokens: Money;
+  credits: Money;
   /**
    * Whose usage counts against it. `org` sums the whole workspace; `caller`
    * gives each member (and the shared API seat) a window of their own. Default
@@ -326,7 +326,7 @@ export interface PlanSpec {
   /**
    * Default `none`, for every `sells` — including seats.
    *
-   * Crediting an invoiced plan's own included tokens discounts its own renewal
+   * Crediting an invoiced plan's own included credits discounts its own renewal
    * (a Stripe credit balance auto-applies to the next invoice; measured at ~48%
    * off a seat). An included allowance belongs in `cap`, which is counted rather
    * than credited, so a plan that says nothing gets the safe answer instead of
@@ -361,8 +361,8 @@ export interface PlanSpec {
 export interface SeatTypeDef {
   /** Per-seat recurring price (cents). 0 = free (no Stripe price). */
   price: IntervalPrice;
-  /** Included tokens granted per seat of THIS type, per billing cycle. */
-  includedTokens: number;
+  /** Included credits granted per seat of THIS type, per billing cycle. */
+  includedCredits: number;
   /** Optional cap on seats of this type (null/undefined = unlimited). */
   seats?: number | null;
   /** Optional display label. */
@@ -373,12 +373,12 @@ export interface PlanDef {
   /** Max members per workspace. null = unlimited. */
   seats: number | null;
   /**
-   * Included tokens granted per seat, per billing cycle (flat model).
+   * Included credits granted per seat, per billing cycle (flat model).
    * @deprecated Never reached the cap logic — it only ever sized a GRANT. Use
-   * `grant: { kind: "per_member", tokens }`, or `cap: { kind: "pool" }` if what
+   * `grant: { kind: "per_member", credits }`, or `cap: { kind: "pool" }` if what
    * you meant was an included allowance.
    */
-  tokensPerSeat: number;
+  creditsPerSeat: number;
   /** Recurring price in minor units. 0 = free (no Stripe price). */
   price: IntervalPrice;
   /** Per-seat-type prices + packs. */
@@ -389,7 +389,7 @@ export interface PlanDef {
    *
    * `"global"` never created an org-level pool — it only skipped the per-seat
    * cap, leaving the wallet as the sole gate. For an actual pool, say
-   * `cap: { kind: "pool", tokens: N }`.
+   * `cap: { kind: "pool", credits: N }`.
    */
   allowanceMode?: "per_seat" | "global";
 }
@@ -417,7 +417,7 @@ export function definePlans<T extends Record<string, PlanDef | PlanSpec>>(plans:
 export interface NormalSeatType {
   key: string;
   price: IntervalPrice;
-  includedTokens: number;
+  includedCredits: number;
   min: number;
   max: number | null;
   shared: boolean;
@@ -455,7 +455,7 @@ function normalizeSeatTypes(
     return {
       key,
       price: s.price,
-      includedTokens: s.includedTokens ?? 0,
+      includedCredits: s.includedCredits ?? 0,
       min: spec.min ?? 0,
       // `seats` was the legacy name for a per-type cap.
       max: spec.max ?? legacy.seats ?? null,
@@ -512,7 +512,7 @@ export function normalizePlan(key: string, spec: PlanDef | PlanSpec): PlanModel 
   const grant: Grant = spec.seatTypes
     ? { kind: "purchased_seats" }
     : hasPrice(spec.price)
-      ? { kind: "per_member", tokens: spec.tokensPerSeat }
+      ? { kind: "per_member", credits: spec.creditsPerSeat }
       : { kind: "none" };
   return {
     key,
@@ -691,7 +691,7 @@ export function describeBasketProblem(
 
 // ── Allowance sizing ────────────────────────────────────────────────────────
 
-/** Tokens to CREDIT for a paid cycle. Zero for `grant: none`, which is now the
+/** Credits to GRANT for a paid cycle. Zero for `grant: none`, which is now the
  *  default for anything whose allowance is an entitlement. */
 export function grantFor(
   model: PlanModel | null,
@@ -702,15 +702,15 @@ export function grantFor(
     case "none":
       return 0;
     case "fixed":
-      return model.grant.tokens;
+      return model.grant.credits;
     case "per_member":
       // The old flat path floored the count at 1 — a subscription with no
       // recorded members still granted one seat's worth.
-      return model.grant.tokens * Math.max(1, ctx.memberCount ?? 0);
+      return model.grant.credits * Math.max(1, ctx.memberCount ?? 0);
     case "purchased_seats": {
       const counts = ctx.seatCounts ?? {};
       let sum = 0;
-      for (const s of model.seatTypes) sum += s.includedTokens * (counts[s.key] ?? 0);
+      for (const s of model.seatTypes) sum += s.includedCredits * (counts[s.key] ?? 0);
       return sum;
     }
   }
@@ -720,15 +720,15 @@ export function grantFor(
  *  Falls back to the grant size when a plan both pools and credits. */
 export function poolSizeOf(model: PlanModel | null): number | null {
   if (!model || model.cap.kind !== "pool") return null;
-  if (model.cap.tokens != null) return model.cap.tokens;
-  return model.grant.kind === "fixed" ? model.grant.tokens : 0;
+  if (model.cap.credits != null) return model.cap.credits;
+  return model.grant.kind === "fixed" ? model.grant.credits : 0;
 }
 
 /** The pack a caller is entitled to for the cycle, or null when uncapped. */
 export function packSizeOf(model: PlanModel | null, seatType: string | undefined): number | null {
   if (!model || model.cap.kind !== "per_seat" || !seatType) return null;
   const type = model.seatTypes.find((s) => s.key === seatType);
-  return type ? type.includedTokens : null;
+  return type ? type.includedCredits : null;
 }
 
 /**

@@ -21,7 +21,7 @@
 
 ---
 
-**Billing Tools** packages the "get money in" plumbing you'd otherwise rebuild in every SaaS: API-key auth on top of **WorkOS**, token/credit + subscription billing on top of **Stripe**, and (because the next wave of customers is autonomous) first-class **agent** rails: [`auth.md`](https://workos.com/auth-md) self-registration and [`MPP`](https://mpp.dev/) machine payments. Wire it once; serve humans through a browser and agents through headless HTTP with the same engine. Storage is pluggable behind one small adapter (use the built-in WorkOS store, or mirror into your own Postgres).
+**Billing Tools** packages the "get money in" plumbing you'd otherwise rebuild in every SaaS: API-key auth on top of **WorkOS**, credit + subscription billing on top of **Stripe**, and (because the next wave of customers is autonomous) first-class **agent** rails: [`auth.md`](https://workos.com/auth-md) self-registration and [`MPP`](https://mpp.dev/) machine payments. Wire it once; serve humans through a browser and agents through headless HTTP with the same engine. Storage is pluggable behind one small adapter (use the built-in WorkOS store, or mirror into your own Postgres).
 
 ## Table of contents
 
@@ -46,10 +46,10 @@ But you don't go to war naked. Ship a tool into the wild with no auth and no way
 
 **Billing Tools is the armor.** Bring a Stripe + WorkOS stack and you inherit, out of the box, the exact monetization model the frontier labs run on. The same shape as **Anthropic, OpenAI, and xAI (Grok)**:
 
-- 💰 **A price per token:** every tool call costs tokens, metered and deducted automatically.
+- 💰 **A price per credit:** every tool call costs credits, metered and deducted automatically.
 - 🏢 **Workspaces:** the billable account, with one Stripe customer + balance each.
 - 👥 **Users per workspace:** seats, invitations, and roles.
-- 🪙 **Tokens per user:** per-seat grants, seat limits, and auto-reload.
+- 🪙 **Credits per user:** per-seat grants, seat limits, and auto-reload.
 
 So you do the one thing only you can do (**build great tools**) and monetize them the same afternoon. The get-paid layer is already handled, battle-tested, and agent-ready. 🛡️
 
@@ -63,10 +63,10 @@ So you do the one thing only you can do (**build great tools**) and monetize the
 - 🎫 **Optional OAuth-JWT hook:** bring your own MCP OAuth proxy via a single adapter method.
 
 ### 💳 Billing & payments
-- 🪙 **Usage-metered token wallet:** held in the native Stripe customer credit balance (1 token = 1¢), with idempotent credit/debit.
+- 🪙 **Usage-metered credit wallet:** held in the native Stripe customer credit balance (1 credit = 1¢), with idempotent credit/debit.
 - 🛒 **Checkout top-ups:** Stripe Checkout that auto-offers cards **+ Apple&nbsp;Pay / Google&nbsp;Pay / Link**.
 - 📦 **Declarative subscription plans:** describe plans in code; products/prices are **auto-provisioned in Stripe** via `lookup_key` (immutable-price safe, orphan-cleaning). Zero dashboard clicks.
-- 🎟️ **Per-seat / per-cycle token grants + seat limits:** included tokens scale with active members.
+- 🎟️ **Per-seat / per-cycle credit grants + seat limits:** included credits scale with active members.
 - 🔁 **Auto-reload:** off-session saved-card recharge when the balance drops below a threshold.
 - 🧾 **Invoices + 🏛️ Customer Portal:** list invoices, and a one-call Stripe Billing Portal URL for self-serve upgrade/downgrade/cancel + card updates.
 - 🔒 **Idempotency on every money move:** welcome bonus, checkout credit, and per-cycle grants each carry a stable key, so retries/replays never double-charge.
@@ -74,7 +74,7 @@ So you do the one thing only you can do (**build great tools**) and monetize the
 ### 🤖 Built for AI agents
 - 📄 **auth.md:** the [agent onboarding standard](https://workos.com/auth-md), served for you (`/auth.md` narrative + discovery metadata).
 - 🏧 **MPP machine payments:** Stripe's [Machine Payments Protocol](https://mpp.dev/): a HTTP **402 + `WWW-Authenticate: Payment`** challenge for pay-per-request (SPT card or crypto/USDC), the payment sibling of auth.md's 401.
-- 🧰 **MCP server tools:** `get_api_key`, `get_token_balance`, `buy_tokens`, `list_plans`, `get_billing_portal`, and more, drop straight into Claude, Cursor, or any MCP client.
+- 🧰 **MCP server tools:** `get_api_key`, `get_credit_balance`, `buy_credits`, `list_plans`, `get_billing_portal`, and more, drop straight into Claude, Cursor, or any MCP client.
 - 🧭 **Discovery hints:** every 401/402 advertises `resource_metadata`, so an agent can bootstrap unattended.
 
 ### 🧩 Three surfaces, one engine
@@ -160,7 +160,7 @@ Prefer fine-grained control? Every factory is exported individually (`registerBi
 curl https://your-app.com/api/v0
 
 # Use a key (Bearer sk_…)
-curl -X POST https://your-app.com/api/v0/get_token_balance \
+curl -X POST https://your-app.com/api/v0/get_credit_balance \
   -H "Authorization: Bearer sk_…"
 ```
 
@@ -265,7 +265,7 @@ registerBillingCommands(program, { configDir: "~/.acme", envPrefix: "ACME", defa
 |---|---|---|
 | `baseUrl` | required | Checkout success/cancel + portal return URLs |
 | `currency` | `"usd"` | Stripe currency |
-| `freeTokens` | `100` | Welcome credit on first customer creation |
+| `freeCredits` | `100` | Welcome credit on first customer creation |
 | `internalDomains` | `[]` | Orgs with these **verified** WorkOS domains are unmetered (see `internalDomainsFromEnv`) |
 
 ## Roadmap

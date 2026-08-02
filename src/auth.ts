@@ -2,8 +2,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { BillingAdapter, ResolvedConfig, ToolErrorResult } from "./types.js";
 import {
   getBillingCustomerId,
-  getTokenBalance,
-  deductTokens,
+  getCreditBalance,
+  deductCredits,
   autoReloadFor,
   stripeConfigured,
 } from "./billing.js";
@@ -149,9 +149,9 @@ export async function isInternalOrg(
 }
 
 // Metering gate for paid tools. Free (cost 0), Stripe-unset, and internal orgs
-// are skipped. Otherwise deduct from the org's token balance and fire
+// are skipped. Otherwise deduct from the org's credit balance and fire
 // auto-reload in the background.
-export async function enforceTokens(
+export async function enforceCredits(
   adapter: BillingAdapter,
   config: ResolvedConfig,
   orgId: string,
@@ -169,19 +169,19 @@ export async function enforceTokens(
       content: [{ type: "text", text: "No billing account found. Please contact support." }],
     };
   }
-  const balance = await getTokenBalance(customerId, config.currency);
+  const balance = await getCreditBalance(customerId, config.currency);
   if (balance < cost) {
     return {
       isError: true,
       content: [
         {
           type: "text",
-          text: `Insufficient tokens. This tool costs ${cost} tokens but you only have ${balance}. Use buy_tokens to purchase more.`,
+          text: `Insufficient credits. This tool costs ${cost} credits but you only have ${balance}. Use buy_credits to purchase more.`,
         },
       ],
     };
   }
-  await deductTokens(customerId, toolName, cost, config.currency);
+  await deductCredits(customerId, toolName, cost, config.currency);
   autoReloadFor(customerId, config).catch(() => {});
   return null;
 }

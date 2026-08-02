@@ -11,12 +11,12 @@ const find = (r, title) => r.checks.find((c) => c.title.includes(title));
 
 test("a plan that both invoices and credits is an error", () => {
   // The measured defect: a Stripe credit balance auto-applies to the next
-  // invoice, so crediting a plan's own included tokens discounts its renewal.
+  // invoice, so crediting a plan's own included credits discounts its renewal.
   const r = checkPlansConfig(
     {
       pro: {
         sells: { kind: "flat", price: { monthly: 5000, yearly: 50000 } },
-        grant: { kind: "fixed", tokens: 1000 },
+        grant: { kind: "fixed", credits: 1000 },
         sale: "self_serve",
       },
     },
@@ -34,7 +34,7 @@ test("self-serve plans with no checkout are flagged", () => {
   const plans = {
     pro: {
       sells: { kind: "flat", price: { monthly: 5000, yearly: 50000 } },
-      cap: { kind: "pool", tokens: 100000 },
+      cap: { kind: "pool", credits: 100000 },
       sale: "self_serve",
     },
   };
@@ -54,7 +54,7 @@ test("a quote-only catalogue is not flagged as unbuyable", () => {
   const r = checkPlansConfig({
     enterprise: {
       sells: { kind: "flat", price: { monthly: 0, yearly: 500000 }, intervals: ["yearly"] },
-      cap: { kind: "pool", tokens: 1000000 },
+      cap: { kind: "pool", credits: 1000000 },
       sale: "quote",
     },
   });
@@ -64,13 +64,13 @@ test("a quote-only catalogue is not flagged as unbuyable", () => {
 test("a healthy config reports healthy", () => {
   const r = checkPlansConfig(
     {
-      hobby: { sells: { kind: "nothing" }, cap: { kind: "pool", tokens: 1000 }, sale: "free" },
+      hobby: { sells: { kind: "nothing" }, cap: { kind: "pool", credits: 1000 }, sale: "free" },
       pro: {
         sells: {
           kind: "seats",
           seatTypes: {
-            standard: { price: { monthly: 1800, yearly: 18000 }, includedTokens: 1000 },
-            api: { price: { monthly: 5000, yearly: 50000 }, includedTokens: 25000, shared: true, max: 1 },
+            standard: { price: { monthly: 1800, yearly: 18000 }, includedCredits: 1000 },
+            api: { price: { monthly: 5000, yearly: 50000 }, includedCredits: 25000, shared: true, max: 1 },
           },
         },
         cap: { kind: "per_seat" },

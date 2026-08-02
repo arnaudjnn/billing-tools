@@ -1,4 +1,4 @@
-import { autoReloadFor, deductTokens, getBillingCustomerId, stripeConfigured } from "./billing.js";
+import { autoReloadFor, deductCredits, getBillingCustomerId, stripeConfigured } from "./billing.js";
 import { isInternalOrg } from "./auth.js";
 import { describeDenial, fundingFor, resolveAllowance } from "./allowance.js";
 import { getSeatType } from "./seats.js";
@@ -21,7 +21,7 @@ export interface MeterCaller {
 export interface MeterInput {
   orgId: string;
   action: string;
-  /** Token cost for this execution (rate card × units), resolved by the consumer. */
+  /** Credit cost for this execution (rate card × units), resolved by the consumer. */
   cost: number;
   plans: PlanCatalog;
   /** The org's current plan key (consumer resolves + caches it). */
@@ -66,7 +66,7 @@ export type MeterResult =
 // at a uniform cost regardless of surface. The org's prepaid Stripe balance is
 // the shared reserve; in `per_seat` plans each caller's per-cycle pack caps how
 // much of it they may spend (usage summed from Stripe balance-transaction
-// metadata — no separate ledger), while `global` plans (e.g. an Enterprise token
+// metadata — no separate ledger), while `global` plans (e.g. an Enterprise credit
 // commitment) impose no per-seat cap. The debit is tagged with the caller so
 // usage is attributable. Free (cost 0), Stripe-unset, and internal orgs pass
 // through untouched. Persistence is entirely Stripe + the adapter — no new DB.
@@ -135,7 +135,7 @@ export async function meterUsage(
   })
 
   if (funding.source === "wallet") {
-    await deductTokens(
+    await deductCredits(
       customerId,
       action,
       cost,
@@ -159,7 +159,7 @@ export async function meterUsage(
 export interface MeterConfig<R extends Record<string, number> = Record<string, number>> {
   /** Plan catalog (shapes, packs, pools, limits). */
   plans: PlanCatalog
-  /** action → token cost (per unit). Consumer-authored product data. Omit to
+  /** action → credit cost (per unit). Consumer-authored product data. Omit to
    *  always pass an explicit `cost` at the call site. */
   rateCard?: R
   /** Resolve the org's current plan key. Source varies per app (subscription
@@ -207,7 +207,7 @@ export interface MeterCallOpts {
   caller?: { kind: "user" | "api"; id?: string }
   /** Executions this call represents (cost = rateCard[action] × units). Default 1. */
   units?: number
-  /** Explicit token cost, bypassing the rate card (e.g. a dynamically-priced op). */
+  /** Explicit credit cost, bypassing the rate card (e.g. a dynamically-priced op). */
   cost?: number
 }
 

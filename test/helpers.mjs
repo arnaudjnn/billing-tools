@@ -54,7 +54,7 @@ export function fakeAdapter({ orgId = "org_1", metadata = {}, subscription = nul
 
 /** A minimal ResolvedConfig. */
 export const testConfig = {
-  freeTokens: 100,
+  freeCredits: 100,
   currency: "eur",
   baseUrl: "https://example.test",
   internalDomains: [],

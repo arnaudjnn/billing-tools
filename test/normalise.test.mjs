@@ -11,24 +11,24 @@ test("legacy configs normalise to today's exact behaviour", async () => {
   const { normalizePlans, grantFor, poolSizeOf, packSizeOf, exhaustedPolicy, selfServePlans, validateBasket, defaultBasket } = await import(L);
 
   const SCARTOFFIE = {
-    hobby: { seats: 1, tokensPerSeat: 1000, price: { monthly: 0, yearly: 0 }, allowanceMode: "per_seat",
-      seatTypes: { standard: { label: "Standard", price: { monthly: 0, yearly: 0 }, includedTokens: 1000, seats: 1 } } },
-    pro: { seats: 100, tokensPerSeat: 1000, price: { monthly: 2900, yearly: 28800 }, allowanceMode: "per_seat",
+    hobby: { seats: 1, creditsPerSeat: 1000, price: { monthly: 0, yearly: 0 }, allowanceMode: "per_seat",
+      seatTypes: { standard: { label: "Standard", price: { monthly: 0, yearly: 0 }, includedCredits: 1000, seats: 1 } } },
+    pro: { seats: 100, creditsPerSeat: 1000, price: { monthly: 2900, yearly: 28800 }, allowanceMode: "per_seat",
       seatTypes: {
-        standard: { label: "Standard", price: { monthly: 2104, yearly: 21600 }, includedTokens: 1000 },
-        premium: { label: "Premium", price: { monthly: 10523, yearly: 108000 }, includedTokens: 5000 },
-        api: { label: "API", price: { monthly: 52615, yearly: 540000 }, includedTokens: 25000, seats: 1 } } },
-    enterprise: { seats: null, tokensPerSeat: 10000, price: { monthly: 5000, yearly: 50000 }, allowanceMode: "global",
-      seatTypes: { standard: { label: "Standard", price: { monthly: 2104, yearly: 21600 }, includedTokens: 0 } } },
+        standard: { label: "Standard", price: { monthly: 2104, yearly: 21600 }, includedCredits: 1000 },
+        premium: { label: "Premium", price: { monthly: 10523, yearly: 108000 }, includedCredits: 5000 },
+        api: { label: "API", price: { monthly: 52615, yearly: 540000 }, includedCredits: 25000, seats: 1 } } },
+    enterprise: { seats: null, creditsPerSeat: 10000, price: { monthly: 5000, yearly: 50000 }, allowanceMode: "global",
+      seatTypes: { standard: { label: "Standard", price: { monthly: 2104, yearly: 21600 }, includedCredits: 0 } } },
   };
   const GTM = {
-    hobby: { seats: 1, tokensPerSeat: 1000, price: { monthly: 1000, yearly: 10000 }, allowanceMode: "per_seat",
-      seatTypes: { standard: { price: { monthly: 2500, yearly: 24000 }, includedTokens: 1000, label: "Standard" } } },
-    pro: { seats: 10, tokensPerSeat: 5000, price: { monthly: 5000, yearly: 50000 }, allowanceMode: "per_seat",
+    hobby: { seats: 1, creditsPerSeat: 1000, price: { monthly: 1000, yearly: 10000 }, allowanceMode: "per_seat",
+      seatTypes: { standard: { price: { monthly: 2500, yearly: 24000 }, includedCredits: 1000, label: "Standard" } } },
+    pro: { seats: 10, creditsPerSeat: 5000, price: { monthly: 5000, yearly: 50000 }, allowanceMode: "per_seat",
       seatTypes: {
-        standard: { price: { monthly: 2500, yearly: 24000 }, includedTokens: 1000, label: "Standard" },
-        premium: { price: { monthly: 12500, yearly: 120000 }, includedTokens: 5000, label: "Premium" },
-        api: { price: { monthly: 62500, yearly: 600000 }, includedTokens: 25000, seats: 1, label: "API" } } },
+        standard: { price: { monthly: 2500, yearly: 24000 }, includedCredits: 1000, label: "Standard" },
+        premium: { price: { monthly: 12500, yearly: 120000 }, includedCredits: 5000, label: "Premium" },
+        api: { price: { monthly: 62500, yearly: 600000 }, includedCredits: 25000, seats: 1, label: "API" } } },
   };
 
 
@@ -48,11 +48,11 @@ test("legacy configs normalise to today's exact behaviour", async () => {
     ok("label carried to display", models.every((m) => m.seatTypes.every((s) =>
        (s.display?.label ?? null) === (PLANS[m.key].seatTypes?.[s.key]?.label ?? null))));
 
-    // Grants must equal what sync.ts computed before: Σ includedTokens × purchased qty.
+    // Grants must equal what sync.ts computed before: Σ includedCredits × purchased qty.
     for (const m of models.filter((m) => m.sells.kind === "seats")) {
       const counts = Object.fromEntries(m.seatTypes.map((s, i) => [s.key, i + 1]));
       const legacySum = Object.entries(counts).reduce(
-        (sum, [k, q]) => sum + (PLANS[m.key].seatTypes[k].includedTokens ?? 0) * q, 0);
+        (sum, [k, q]) => sum + (PLANS[m.key].seatTypes[k].includedCredits ?? 0) * q, 0);
       ok(`grant unchanged for ${m.key}`, grantFor(m, { seatCounts: counts }) === legacySum,
          `${grantFor(m, { seatCounts: counts })} === ${legacySum}`);
     }

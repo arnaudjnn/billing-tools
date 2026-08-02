@@ -99,7 +99,7 @@ export interface BillingAdapter {
 
 export interface BillingConfig {
   /** Welcome credit granted on first Stripe customer creation. Default 100. */
-  freeTokens?: number;
+  freeCredits?: number;
   /** Stripe currency, e.g. "usd" | "eur". Default "usd". */
   currency?: string;
   /** Base URL for Checkout success/cancel + billing-portal return. */
@@ -158,7 +158,7 @@ export type ResolvedConfig = Required<Omit<BillingConfig, "tax" | "paymentMethod
 
 export function resolveConfig(c: BillingConfig): ResolvedConfig {
   return {
-    freeTokens: c.freeTokens ?? 100,
+    freeCredits: c.freeCredits ?? 100,
     currency: c.currency ?? "usd",
     baseUrl: c.baseUrl,
     internalDomains: c.internalDomains ?? [],
@@ -172,7 +172,7 @@ export function resolveConfig(c: BillingConfig): ResolvedConfig {
  *  deployment root domain (whatever your host exposes — pass it if you want the
  *  deployment's own domain treated as internal) plus a comma-separated env var
  *  (default `INTERNAL_ORG_DOMAINS`). Orgs with a verified WorkOS domain matching
- *  any entry get unmetered access (see enforceTokens → isInternalOrg). Result is
+ *  any entry get unmetered access (see enforceCredits → isInternalOrg). Result is
  *  lowercased + de-duplicated. Host-agnostic: the caller supplies the root
  *  domain (or nothing); the env var is generic. */
 export function internalDomainsFromEnv(

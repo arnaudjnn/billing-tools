@@ -16,11 +16,11 @@ import { createDispatcher } from "../dist/dispatch.js";
 import { BILLING_TOOL_NAMES, registerBillingTools } from "../dist/tools/register.js";
 
 const PLANS = {
-  hobby: { sells: { kind: "nothing" }, cap: { kind: "pool", tokens: 1000 }, sale: "free" },
+  hobby: { sells: { kind: "nothing" }, cap: { kind: "pool", credits: 1000 }, sale: "free" },
   pro: {
     sells: {
       kind: "seats",
-      seatTypes: { standard: { price: { monthly: 1800, yearly: 18000 }, includedTokens: 1000 } },
+      seatTypes: { standard: { price: { monthly: 1800, yearly: 18000 }, includedCredits: 1000 } },
     },
     cap: { kind: "per_seat" },
     sale: "self_serve",
@@ -80,8 +80,8 @@ test("every capability the billing UI has is also a tool", () => {
     "set_default_payment_method",
     "remove_payment_method",
     // Still there.
-    "get_token_balance",
-    "buy_tokens",
+    "get_credit_balance",
+    "buy_credits",
     "set_auto_reload",
     "list_invoices",
     "get_billing_portal",

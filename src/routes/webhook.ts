@@ -1,7 +1,7 @@
 import type Stripe from "stripe";
-import { getStripe, creditTokens } from "../billing.js";
+import { getStripe, grantCredits } from "../billing.js";
 
-// Stripe webhook handler. Credits tokens on one-time top-up completion.
+// Stripe webhook handler. Grants credits on one-time top-up completion.
 // Subscription events are intentionally NOT handled here — subscription/plan
 // logic (if any) lives in the host app. Requires the raw request body, so the
 // route must be excluded from any body-parsing/session middleware.
@@ -71,13 +71,16 @@ export function createStripeWebhookHandler(opts: WebhookOptions = {}) {
       const session = event.data.object as Stripe.Checkout.Session;
       {
         const customerId = customerIdOf(session.customer as string | { id: string });
-        const tokens = parseInt(session.metadata?.tokens || "0", 10);
-        if (customerId && tokens > 0) {
+        // `tokens` is the pre-rename metadata key. A Checkout Session opened
+        // before the deploy still carries it, and reading only `credits` would
+        // silently grant 0 on a purchase the customer already paid for.
+        const credits = parseInt(session.metadata?.credits || session.metadata?.tokens || "0", 10);
+        if (customerId && credits > 0) {
           // Idempotency key on the session id: a re-delivered webhook credits once.
-          await creditTokens(
+          await grantCredits(
             customerId,
-            tokens,
-            `Purchase: ${tokens} tokens via Checkout`,
+            credits,
+            `Purchase: ${credits} credits via Checkout`,
             currency,
             `credit:checkout:${session.id}`,
           );

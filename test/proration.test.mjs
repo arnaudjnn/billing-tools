@@ -25,15 +25,15 @@ import { __setPlanPricesForTests } from "../dist/plans.js";
 import { previewPlanChange } from "../dist/subscription.js";
 
 const PLANS = {
-  hobby: { sells: { kind: "nothing" }, cap: { kind: "pool", tokens: 1000 }, sale: "free" },
+  hobby: { sells: { kind: "nothing" }, cap: { kind: "pool", credits: 1000 }, sale: "free" },
   pro: {
     sells: { kind: "flat", price: { monthly: 1800, yearly: 18000 } },
-    cap: { kind: "pool", tokens: 1000 },
+    cap: { kind: "pool", credits: 1000 },
     sale: "self_serve",
   },
   premium: {
     sells: { kind: "flat", price: { monthly: 9000, yearly: 90000 } },
-    cap: { kind: "pool", tokens: 5000 },
+    cap: { kind: "pool", credits: 5000 },
     sale: "self_serve",
   },
 };

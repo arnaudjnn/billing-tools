@@ -2,7 +2,7 @@ import Stripe from "stripe";
 import { defaultPaymentMethodConfig } from "./payment-method-config.js";
 import type { BillingAdapter, BillingConfig, ResolvedConfig } from "./types.js";
 
-// Token model: 1 token = 1 cent. Held in the Stripe customer credit balance,
+// Credit model: 1 credit = 1 cent. Held in the Stripe customer credit balance,
 // where a negative balance = available credit. All functions keyed on a
 // stripeCustomerId are pure Stripe math (identical across host apps); the
 // customer-id pointer itself is stored by the host via the adapter.
@@ -165,15 +165,15 @@ export async function ensureStripeCustomer(
       ? { preferred_locales: [config.defaultLocale] }
       : {}),
   });
-  if (config.freeTokens > 0) {
+  if (config.freeCredits > 0) {
     // Idempotency key so a race on first-use (two concurrent callers) can't
     // grant the welcome bonus twice for the same org.
     await stripe.customers.createBalanceTransaction(
       customer.id,
       {
-        amount: -config.freeTokens,
+        amount: -config.freeCredits,
         currency: config.currency,
-        description: `Welcome bonus: ${config.freeTokens} free tokens`,
+        description: `Welcome bonus: ${config.freeCredits} free credits`,
       },
       { idempotencyKey: `welcome:${orgId}` },
     );
@@ -183,7 +183,7 @@ export async function ensureStripeCustomer(
 }
 
 /**
- * The customer's token credit, in `currency`.
+ * The customer's credit balance, in `currency`.
  *
  * `customer.balance` is a SINGLE scalar, denominated in `customer.currency` —
  * whichever currency first touched the customer, pinned there for good. Stripe
@@ -200,7 +200,7 @@ export async function ensureStripeCustomer(
  * Without `currency`, or when it matches the customer's own, the scalar is
  * correct and is used directly — one API call, as before.
  */
-export async function getTokenBalance(
+export async function getCreditBalance(
   stripeCustomerId: string,
   currency?: string,
 ): Promise<number> {
@@ -232,7 +232,7 @@ export async function getTokenBalance(
   return 0;
 }
 
-export async function deductTokens(
+export async function deductCredits(
   stripeCustomerId: string,
   toolName: string,
   cost: number,
@@ -244,7 +244,7 @@ export async function deductTokens(
   await getStripe().customers.createBalanceTransaction(stripeCustomerId, {
     amount: cost, // positive = debit
     currency,
-    description: `Tool call: ${toolName} (${cost} tokens)`,
+    description: `Tool call: ${toolName} (${cost} credits)`,
     metadata: {
       action: toolName,
       ...(caller?.kind ? { caller_kind: caller.kind } : {}),
@@ -253,7 +253,7 @@ export async function deductTokens(
   });
 }
 
-// Sum debited tokens on a customer since `since` (unix seconds — the cycle
+// Sum debited credits on a customer since `since` (unix seconds — the cycle
 // start), optionally filtered to a caller via balance-transaction metadata.
 // This is the Stripe-native usage ledger: debits are positive amounts, credits
 // (grants / top-ups) are negative and excluded. The list is newest-first, so we
@@ -279,7 +279,7 @@ export async function usageSince(
   return total;
 }
 
-export async function creditTokens(
+export async function grantCredits(
   stripeCustomerId: string,
   amount: number,
   description: string,
@@ -314,13 +314,13 @@ export interface TopUpCheckoutOptions {
   taxRates?: string[];
   /** Use Stripe Tax instead. Ignored when `taxRates` is given — Stripe rejects both. */
   automaticTax?: boolean;
-  /** Defaults to `${baseUrl}/billing/success?tokens=…`. */
+  /** Defaults to `${baseUrl}/billing/success?credits=…`. */
   successUrl?: string;
   /** Defaults to `${baseUrl}/billing/cancel`. */
   cancelUrl?: string;
 }
 
-export async function createTokenCheckoutSession(
+export async function createCreditCheckoutSession(
   stripeCustomerId: string,
   orgId: string,
   amountMajor: number,
@@ -328,7 +328,7 @@ export async function createTokenCheckoutSession(
   opts: TopUpCheckoutOptions = {},
 ): Promise<string> {
   const amountMinor = Math.round(amountMajor * 100);
-  const tokens = amountMinor; // 1 token = 1 minor unit
+  const credits = amountMinor; // 1 credit = 1 minor unit
   const taxRates = opts.taxRates?.length ? opts.taxRates : null;
   // Every method the account has enabled, plus the wallets, minus Link — the same
   // default the subscription checkout and the add-card form get. Undefined when a
@@ -346,8 +346,8 @@ export async function createTokenCheckoutSession(
         price_data: {
           currency: config.currency,
           product_data: {
-            name: `${tokens} tokens`,
-            description: `${amountMajor} = ${tokens} tokens`,
+            name: `${credits} credits`,
+            description: `${amountMajor} = ${credits} credits`,
           },
           unit_amount: amountMinor,
         },
@@ -361,10 +361,10 @@ export async function createTokenCheckoutSession(
     invoice_creation: { enabled: true },
     payment_intent_data: {
       setup_future_usage: "off_session",
-      metadata: { org_id: orgId, tokens: String(tokens) },
+      metadata: { org_id: orgId, credits: String(credits) },
     },
-    metadata: { org_id: orgId, tokens: String(tokens) },
-    success_url: opts.successUrl ?? `${config.baseUrl}/billing/success?tokens=${tokens}`,
+    metadata: { org_id: orgId, credits: String(credits) },
+    success_url: opts.successUrl ?? `${config.baseUrl}/billing/success?credits=${credits}`,
     cancel_url: opts.cancelUrl ?? `${config.baseUrl}/billing/cancel`,
   });
   return session.url!;
@@ -455,11 +455,11 @@ export async function tryAutoReload(
   const settings = await getAutoReloadSettings(stripeCustomerId);
   if (!settings || !settings.enabled) return;
 
-  const balance = await getTokenBalance(stripeCustomerId, currency);
+  const balance = await getCreditBalance(stripeCustomerId, currency);
   if (balance > settings.threshold) return;
 
-  const tokensNeeded = settings.reload_to - balance;
-  if (tokensNeeded <= 0) return;
+  const creditsNeeded = settings.reload_to - balance;
+  if (creditsNeeded <= 0) return;
 
   const stripe = getStripe();
   const pms = await stripe.paymentMethods.list({
@@ -470,7 +470,7 @@ export async function tryAutoReload(
   if (pms.data.length === 0) return;
 
   // Stable across concurrent triggers: same customer, same target, same hour.
-  // Not the exact balance — two racing callers can read balances a token apart
+  // Not the exact balance — two racing callers can read balances a credit apart
   // and would then key differently, which is precisely the double charge.
   const slot = new Date().toISOString().slice(0, 13);
   const key = `autoreload:${stripeCustomerId}:${settings.reload_to}:${slot}`;
@@ -481,8 +481,8 @@ export async function tryAutoReload(
       {
         customer: stripeCustomerId,
         currency,
-        amount: tokensNeeded,
-        description: `Auto-reload: ${tokensNeeded} tokens`,
+        amount: creditsNeeded,
+        description: `Auto-reload: ${creditsNeeded} credits`,
         ...(taxRates ? { tax_rates: taxRates } : {}),
       },
       { idempotencyKey: `${key}:item` },
@@ -498,12 +498,12 @@ export async function tryAutoReload(
         // Explicit, and load-bearing: for a customer who HAS a subscription,
         // Stripe otherwise leaves the pending item off this invoice and sweeps
         // it onto the next subscription invoice instead. Measured — the reload
-        // invoice came back paid, numbered, and totalling zero, while the tokens
+        // invoice came back paid, numbered, and totalling zero, while the credits
         // appeared on the renewal a month later.
         pending_invoice_items_behavior: "include",
-        description: `Auto-reload: ${tokensNeeded} tokens`,
+        description: `Auto-reload: ${creditsNeeded} credits`,
         ...(!taxRates && opts.automaticTax ? { automatic_tax: { enabled: true } } : {}),
-        metadata: { auto_reload: "true", tokens: String(tokensNeeded) },
+        metadata: { auto_reload: "true", credits: String(creditsNeeded) },
       },
       { idempotencyKey: `${key}:invoice` },
     );
@@ -513,10 +513,10 @@ export async function tryAutoReload(
     if (paid.status === "paid") {
       // Same key: a retry that finds the invoice already paid must not credit
       // a second time.
-      await creditTokens(
+      await grantCredits(
         stripeCustomerId,
-        tokensNeeded,
-        `Auto-reload: ${tokensNeeded} tokens`,
+        creditsNeeded,
+        `Auto-reload: ${creditsNeeded} credits`,
         currency,
         `credit:${key}`,
       );

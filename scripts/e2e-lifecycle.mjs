@@ -106,7 +106,7 @@ async function main() {
   );
 
   section("The invoice-offset defect: an included allowance must NOT be credited");
-  // Granting 1000 tokens as credit turned a €21.04 seat invoice into €11.04 due.
+  // Granting 1000 credits as credit turned a €21.04 seat invoice into €11.04 due.
   // The library now expresses included usage as a counted cap, so nothing is
   // credited and the renewal is charged in full. Asserted below at renewal.
   const balanceBefore = (await stripe.customers.retrieve(customer.id)).balance;
@@ -218,7 +218,7 @@ async function main() {
             customer: customer.id,
             currency: CURRENCY,
             amount: 950,
-            description: "Auto-reload: 950 tokens",
+            description: "Auto-reload: 950 credits",
             tax_rates: [vat.id],
           },
           { idempotencyKey: `${itemKey}:item` },
@@ -239,11 +239,11 @@ async function main() {
       collection_method: "charge_automatically",
       default_payment_method: card.id,
       auto_advance: false,
-      description: "Auto-reload: 950 tokens",
+      description: "Auto-reload: 950 credits",
       // Without this, a customer WITH a subscription gets an empty invoice and
-      // the tokens are swept onto their next subscription invoice instead.
+      // the credits are swept onto their next subscription invoice instead.
       pending_invoice_items_behavior: "include",
-      metadata: { auto_reload: "true", tokens: "950" },
+      metadata: { auto_reload: "true", credits: "950" },
     },
     { idempotencyKey: `${itemKey}:invoice` },
   );

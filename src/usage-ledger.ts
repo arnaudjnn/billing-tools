@@ -2,7 +2,7 @@ import { getStripe, usageSince } from "./billing.js";
 
 // Counting usage, separately from moving money.
 //
-// These were one thing until now: `deductTokens` wrote a Stripe balance
+// These were one thing until now: `deductCredits` wrote a Stripe balance
 // transaction, and `usageSince` read those transactions back as the usage
 // ledger. That works exactly as long as every metered call costs money.
 //
@@ -11,11 +11,11 @@ import { getStripe, usageSince } from "./billing.js";
 // already paid for it in the subscription) — and a balance transaction cannot do
 // one without the other. Crediting the allowance instead is worse: a Stripe
 // credit balance auto-applies to the next invoice, so a plan's own included
-// tokens discount its own renewal (measured: 1000 tokens turned a €21.04 seat
+// credits discount its own renewal (measured: 1000 credits turned a €21.04 seat
 // invoice into €11.04 due).
 //
-// So: money stays in `deductTokens`, counting moves here. The rule at the call
-// site is `record` always, `deductTokens` only when the wallet is what funded it.
+// So: money stays in `deductCredits`, counting moves here. The rule at the call
+// site is `record` always, `deductCredits` only when the wallet is what funded it.
 
 /** Which allowance paid for a call. */
 export type FundingSource =
@@ -58,7 +58,7 @@ export interface UsageLedger {
 /**
  * The ledger this library has always had: the debits themselves.
  *
- * `record` is a no-op — `deductTokens` already wrote the row — and `total` is
+ * `record` is a no-op — `deductCredits` already wrote the row — and `total` is
  * `usageSince`. Correct and free for any plan where every call is wallet-funded,
  * which is every plan that existed before included windows, so it stays the
  * default. It cannot see pool- or pack-funded usage, because that usage moves no
@@ -88,7 +88,7 @@ export const USAGE_METER_EVENT = "billing_tools_usage";
  * path of every metered execution.
  *
  * The trade: summaries lag aggregation by a few seconds, so a hard cap can
- * overshoot slightly. Irrelevant against a pool of a million tokens; it is why
+ * overshoot slightly. Irrelevant against a pool of a million credits; it is why
  * seat packs, which are small, can keep using the exact balance path.
  *
  * `ensureMeters` provisions the meter, in the same spirit as `ensurePlans`.
@@ -154,7 +154,7 @@ async function meterIdFor(eventName: string): Promise<string | null> {
  * Create the usage meter if it doesn't exist. Idempotent, like `ensurePlans`.
  *
  * Only needed by a config with an included window; a wallet-only product never
- * calls it. Aggregates `sum` over the reported `value`, which is the token cost.
+ * calls it. Aggregates `sum` over the reported `value`, which is the credit cost.
  */
 export async function ensureMeters(
   opts: { eventName?: string; displayName?: string } = {},

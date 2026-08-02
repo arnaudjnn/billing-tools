@@ -79,12 +79,12 @@ export {
 // ensurePlans `opts.currency ?? "usd"`). Consumers use these as-is or override
 // (a euro-denominated consumer sets currency "eur" and its own amounts).
 // Amounts are cents; `yearly` is the annual total per seat. The `api` seat is
-// the shared agent/API pool (≈ 5× a premium seat). `includedTokens` are example
+// the shared agent/API pool (≈ 5× a premium seat). `includedCredits` are example
 // packs — tune per product.
 export const DEFAULT_SEAT_TYPES: Record<string, SeatTypeDef> = {
-  standard: { label: "Standard", price: { monthly: 2500, yearly: 24000 }, includedTokens: 1000 }, // $25/mo · $20/mo annually
-  premium: { label: "Premium", price: { monthly: 12500, yearly: 120000 }, includedTokens: 5000 }, // $125/mo · $100/mo annually
-  api: { label: "API", price: { monthly: 62500, yearly: 600000 }, includedTokens: 25000, seats: 1 }, // ≈ 5× premium, one per workspace
+  standard: { label: "Standard", price: { monthly: 2500, yearly: 24000 }, includedCredits: 1000 }, // $25/mo · $20/mo annually
+  premium: { label: "Premium", price: { monthly: 12500, yearly: 120000 }, includedCredits: 5000 }, // $125/mo · $100/mo annually
+  api: { label: "API", price: { monthly: 62500, yearly: 600000 }, includedCredits: 25000, seats: 1 }, // ≈ 5× premium, one per workspace
 };
 
 const STRIPE_INTERVAL: Record<BillingInterval, "month" | "year"> = {
@@ -659,13 +659,13 @@ export function planSale(plans: PlanCatalog, plan: string): Sale | null {
 }
 
 /**
- * Tokens to CREDIT for `seatCount` members on a plan, per cycle.
+ * Credits to GRANT for `seatCount` members on a plan, per cycle.
  *
  * Now expressed over `grant`, so a plan whose allowance is an ENTITLEMENT
  * (`grant: none`, the default for everything but a credit-selling plan) returns
  * 0 — crediting it would discount that plan's own invoice.
  */
-export function includedTokens(
+export function includedCredits(
   plans: PlanCatalog,
   plan: string,
   seatCount: number,
@@ -673,10 +673,10 @@ export function includedTokens(
   return grantFor(planModel(plans, plan), { memberCount: seatCount });
 }
 
-/** Tokens to CREDIT given purchased counts per seat type. Falls back to the
+/** Credits to GRANT given purchased counts per seat type. Falls back to the
  *  member-count form for plans without seat types, so callers can use it
  *  uniformly. */
-export function includedTokensByType(
+export function includedCreditsByType(
   plans: PlanCatalog,
   plan: string | null,
   counts: Record<string, number>,

@@ -33,14 +33,14 @@ export interface CreateBillingOptions {
   adapter: BillingAdapter;
   /** Billing config; resolved once internally. */
   config: BillingConfig;
-  /** Per-tool token costs (echoed by get_token_balance + the REST tool list). */
+  /** Per-tool credit costs (echoed by get_credit_balance + the REST tool list). */
   toolCosts?: Record<string, number>;
   /** WWW-Authenticate realm on 401s. */
   realm?: string;
   /** Declarative plans → auto-provisioned Stripe products/prices + list_plans. */
   plans?: PlanCatalog;
   defaultPlan?: string;
-  /** Tax and return URLs for `buy_tokens`. Supply `taxRates` on any account that
+  /** Tax and return URLs for `buy_credits`. Supply `taxRates` on any account that
    *  charges tax on its subscriptions — a top-up has no address form of its own,
    *  so without this it invoices at 0%. */
   topUp?: RegisterBillingToolsOptions["topUp"];
@@ -85,7 +85,7 @@ export interface CreateBillingOptions {
    *  for seat packs. Plan resolution defaults to the org's `plan` metadata key
    *  (override via `resolvePlan`). Omit to leave metering off. */
   meter?: {
-    /** action → token cost (per unit). Consumer-authored product data. */
+    /** action → credit cost (per unit). Consumer-authored product data. */
     rateCard?: Record<string, number>;
     /** Resolve the org's current plan key. Default: the org's `plan` metadata
      *  (via adapter.getOrgMetadata). Override to read a subscription, etc. */

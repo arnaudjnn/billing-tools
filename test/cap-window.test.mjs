@@ -17,7 +17,7 @@ const NOW = Date.parse("2026-08-02T12:00:00.000Z");
 
 const plan = (cap) =>
   normalizePlan("pro", {
-    sells: { kind: "seats", seatTypes: { standard: { price: { monthly: 2104, yearly: 21600 }, includedTokens: 1000 } } },
+    sells: { kind: "seats", seatTypes: { standard: { price: { monthly: 2104, yearly: 21600 }, includedCredits: 1000 } } },
     cap,
     sale: "self_serve",
   });
@@ -42,13 +42,13 @@ test('window: "month" pins it to the calendar month, annual subscription or not'
 });
 
 test("a pool can be monthly too, and rollover contradicts it", () => {
-  const w = cycleWindowFor(plan({ kind: "pool", tokens: 1000, window: "month" }), PERIOD, NOW);
+  const w = cycleWindowFor(plan({ kind: "pool", credits: 1000, window: "month" }), PERIOD, NOW);
   assert.equal(w.key, "2026-08");
 
   const errs = checkPlansConfig({
     p: {
       sells: { kind: "flat", price: { monthly: 100, yearly: 1000 } },
-      cap: { kind: "pool", tokens: 1000, rollover: true, window: "month" },
+      cap: { kind: "pool", credits: 1000, rollover: true, window: "month" },
       sale: "self_serve",
     },
   }).checks.filter((c) => c.level === "error");
@@ -64,7 +64,7 @@ test("overflowing to a wallet nobody can fill is flagged", () => {
     warn({ e: { sells: { kind: "seats", seatTypes: { s: { price: { monthly: 2104, yearly: 21600 } } } }, cap: { kind: "wallet" }, sale: "quote" } }).length,
     1,
   );
-  // Same plan, with a way to buy tokens: silent.
+  // Same plan, with a way to buy credits: silent.
   assert.equal(
     warn({
       e: {

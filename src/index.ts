@@ -22,7 +22,7 @@ export {
   enforceAccess,
   enforceAdmin,
   type Principal,
-  enforceTokens,
+  enforceCredits,
 } from "./auth.js";
 
 // The two SDK clients. Both are memoised singletons that read the env lazily,
@@ -47,11 +47,11 @@ export {
   ensureStripeCustomer,
   getBillingCustomerId,
   getOrgSubscription,
-  getTokenBalance,
-  deductTokens,
-  creditTokens,
+  getCreditBalance,
+  deductCredits,
+  grantCredits,
   usageSince,
-  createTokenCheckoutSession,
+  createCreditCheckoutSession,
   createBillingPortalSession,
   getAutoReloadSettings,
   setAutoReloadSettings,
@@ -102,8 +102,8 @@ export {
   cycleWindowFor,
   rateWindowFor,
   rateLimitsOf,
-  includedTokens,
-  includedTokensByType,
+  includedCredits,
+  includedCreditsByType,
   lookupKeyFor,
   DEFAULT_SEAT_TYPES,
   type PlanDef,
@@ -207,7 +207,7 @@ export {
 
 // Included allowance as a counted WINDOW (a pool, or a per-seat pack) rather than
 // as credit — a Stripe credit balance auto-applies to the next invoice, so
-// crediting a plan's own included tokens discounts its own renewal.
+// crediting a plan's own included credits discounts its own renewal.
 export {
   resolveAllowance,
   fundingFor,
@@ -296,7 +296,7 @@ export {
 // Event-polling sync (zero-webhook: poll Stripe + WorkOS Events APIs)
 export { pollStripeEvents, pollWorkOSEvents, type PollResult } from "./events.js";
 
-// Turn-key billing sync engine (owns the poll→dispatch→plan/token/mirror loop)
+// Turn-key billing sync engine (owns the poll→dispatch→plan/credit/mirror loop)
 export {
   createBillingSync,
   createSyncRoute,

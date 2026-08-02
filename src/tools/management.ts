@@ -49,7 +49,7 @@ export function registerManagementTools(
 
   server.tool(
     "get_usage",
-    `Get your workspace's token usage for the current cycle (summed from the Stripe
+    `Get your workspace's credit usage for the current cycle (summed from the Stripe
 balance-transaction ledger). Optionally filter by caller (user/api) or look back a
 number of days instead of the calendar month.`,
     {
@@ -164,7 +164,7 @@ draw the default seat.`,
   server.tool(
     "assign_seat_type",
     `Assign a workspace member to a seat type (e.g. standard, premium). The member's
-usage then draws that seat's per-cycle token pack. Pass an empty seat_type to clear
+usage then draws that seat's per-cycle credit pack. Pass an empty seat_type to clear
 the assignment (back to the default seat).`,
     {
       member_id: z.string().describe("The member's user id"),
@@ -186,7 +186,7 @@ the assignment (back to the default seat).`,
 
   server.tool(
     "list_top_up_requests",
-    `List the workspace's token top-up requests (pending and handled) — the extra
+    `List the workspace's credit top-up requests (pending and handled) — the extra
 allowance members have asked the owner to grant this cycle.`,
     {},
     async () => {
@@ -198,11 +198,11 @@ allowance members have asked the owner to grant this cycle.`,
 
   server.tool(
     "request_top_up",
-    `Request extra tokens for a member's seat this cycle (the owner approves with
+    `Request extra credits for a member's seat this cycle (the owner approves with
 approve_top_up). Use when a user seat has hit its per-cycle pack.`,
     {
       member_id: z.string().describe("The member the extra allowance is for"),
-      amount: z.number().int().min(1).describe("Extra tokens requested (e.g. 25% of the seat pack)"),
+      amount: z.number().int().min(1).describe("Extra credits requested (e.g. 25% of the seat pack)"),
       cycle: z
         .string()
         .optional()
@@ -235,7 +235,7 @@ approve_top_up). Use when a user seat has hit its per-cycle pack.`,
 
   server.tool(
     "approve_top_up",
-    `Approve a pending top-up request → grants the requested extra tokens to that
+    `Approve a pending top-up request → grants the requested extra credits to that
 member for the cycle (added on top of their seat pack by the meter).`,
     { request_id: z.string().describe("The request id from list_top_up_requests") },
     async ({ request_id }) => {
@@ -260,14 +260,14 @@ request it, as a percentage of their own seat pack (default 25%). Admin action.`
         .optional()
         .default(25)
         .describe("Percentage of the member's seat pack to add (25 = +25%)"),
-      tokens: z
+      credits: z
         .number()
         .int()
         .min(1)
         .optional()
-        .describe("Absolute tokens instead of a percentage"),
+        .describe("Absolute credits instead of a percentage"),
     },
-    async ({ member_id, percent, tokens }) => {
+    async ({ member_id, percent, credits }) => {
       // Guarded like approve_top_up, and more so: this hands out allowance with
       // no request behind it, so leaving it open while approval is checked would
       // let a member simply grant themselves what they would have had to ask for.
@@ -284,8 +284,8 @@ request it, as a percentage of their own seat pack (default 25%). Admin action.`
         plans: opts.plans,
         plan,
         memberId: member_id,
-        // An explicit token figure wins; otherwise the percentage (default 25).
-        ...(tokens != null ? { amount: tokens } : { percent }),
+        // An explicit credit figure wins; otherwise the percentage (default 25).
+        ...(credits != null ? { amount: credits } : { percent }),
       });
 
       if (!res.ok) {

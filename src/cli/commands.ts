@@ -76,14 +76,14 @@ export function registerBillingCommands(program: Command, opts: CliOptions) {
 
   program
     .command("balance")
-    .description("Get current token balance and tool costs")
-    .action(async () => print(await callTool(requireConfig(), "get_token_balance")));
+    .description("Get current credit balance and tool costs")
+    .action(async () => print(await callTool(requireConfig(), "get_credit_balance")));
 
   program
     .command("buy <amount>")
-    .description("Buy tokens (returns a Stripe Checkout URL)")
+    .description("Buy credits (returns a Stripe Checkout URL)")
     .action(async (amount: string) =>
-      print(await callTool(requireConfig(), "buy_tokens", { amount: parseInt(amount, 10) })),
+      print(await callTool(requireConfig(), "buy_credits", { amount: parseInt(amount, 10) })),
     );
 
   program
@@ -109,7 +109,7 @@ export function registerBillingCommands(program: Command, opts: CliOptions) {
   // ── Usage & seats ─────────────────────────────────────────────────────────
   program
     .command("usage")
-    .description("Get workspace token usage for the current cycle")
+    .description("Get workspace credit usage for the current cycle")
     .option("--caller-kind <kind>", "Filter by caller kind: user | api")
     .option("--caller-id <id>", "Filter by caller id (member or API-key id)")
     .option("--since-days <n>", "Look back N days instead of the calendar month", (v) => parseInt(v, 10))
@@ -138,17 +138,17 @@ export function registerBillingCommands(program: Command, opts: CliOptions) {
       ),
     );
 
-  // ── Token top-up requests ─────────────────────────────────────────────────
+  // ── Credit top-up requests ─────────────────────────────────────────────────
   const topup = program
     .command("topup")
-    .description("Token top-up requests (a seat over its cap → owner approval)");
+    .description("Credit top-up requests (a seat over its cap → owner approval)");
   topup
     .command("list")
     .description("List top-up requests (pending and handled)")
     .action(async () => print(await callTool(requireConfig(), "list_top_up_requests")));
   topup
     .command("request <member_id> <amount>")
-    .description("Request extra tokens for a member's seat this cycle")
+    .description("Request extra credits for a member's seat this cycle")
     .option("--cycle <cycle>", "Cycle key the grant applies to (default: the current billing cycle)")
     .action(async (memberId: string, amount: string, o: { cycle?: string }) => {
       const args: Record<string, unknown> = { member_id: memberId, amount: parseInt(amount, 10) };
@@ -158,16 +158,16 @@ export function registerBillingCommands(program: Command, opts: CliOptions) {
   topup
     .command("grant <member_id> [percent]")
     .description("Grant a member extra allowance now, without waiting for a request (default +25%)")
-    .option("--tokens <n>", "Absolute tokens instead of a percentage", (v) => parseInt(v, 10))
-    .action(async (memberId: string, percent: string | undefined, o: { tokens?: number }) => {
+    .option("--credits <n>", "Absolute credits instead of a percentage", (v) => parseInt(v, 10))
+    .action(async (memberId: string, percent: string | undefined, o: { credits?: number }) => {
       const args: Record<string, unknown> = { member_id: memberId };
-      if (o.tokens) args.tokens = o.tokens;
+      if (o.credits) args.credits = o.credits;
       else if (percent) args.percent = parseInt(percent, 10);
       print(await callTool(requireConfig(), "grant_top_up", args));
     });
   topup
     .command("approve <request_id>")
-    .description("Approve a pending top-up request (grants the extra tokens)")
+    .description("Approve a pending top-up request (grants the extra credits)")
     .action(async (id: string) => print(await callTool(requireConfig(), "approve_top_up", { request_id: id })));
   topup
     .command("deny <request_id>")
@@ -242,7 +242,7 @@ function registerPlanCommands(program: Command, requireConfig: () => ApiClientCo
     .description("Automatic top-up when the balance runs low");
   autoReload
     .command("set <threshold> <reload_to>")
-    .description("Recharge to <reload_to> tokens whenever the balance falls to <threshold>")
+    .description("Recharge to <reload_to> credits whenever the balance falls to <threshold>")
     .action(async (threshold: string, reloadTo: string) =>
       print(
         await callTool(requireConfig(), "set_auto_reload", {

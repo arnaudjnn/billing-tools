@@ -54,7 +54,7 @@ export function installInputLogging(server: McpServer) {
 export interface RegisterBillingToolsOptions {
   adapter: BillingAdapter;
   config: BillingConfig;
-  /** Per-tool token costs (for get_token_balance to echo). Usually from tools.json. */
+  /** Per-tool credit costs (for get_credit_balance to echo). Usually from tools.json. */
   toolCosts?: Record<string, number>;
   /** Install the redacted [tool-input] logging wrapper. Default true. */
   installLogging?: boolean;
@@ -74,12 +74,12 @@ export interface RegisterBillingToolsOptions {
    *  `cancel_plan`, `get_plan`). Needs `plans`; pass `false` to leave plan
    *  changes to the app's own UI. */
   subscriptionTools?: boolean | Omit<SubscriptionToolOptions, "plans">;
-  /** Tax and return URLs for `buy_tokens`. Supply `taxRates` on any account that
+  /** Tax and return URLs for `buy_credits`. Supply `taxRates` on any account that
    *  charges tax on its subscriptions: without it a top-up invoices at 0%. */
   topUp?: TopUpToolOptions;
 }
 
-// Register the billing-tools surface (auth/key management + token billing) on
+// Register the billing-tools surface (auth/key management + credit billing) on
 // an MCP server. Host apps call this, then register their own product tools.
 export function registerBillingTools(server: McpServer, opts: RegisterBillingToolsOptions) {
   const config = resolveConfig(opts.config);
@@ -110,7 +110,7 @@ function registerPlanTools(
 ) {
   server.tool(
     "list_plans",
-    "List the available subscription plans (seats, included tokens, and monthly/yearly prices). Prices are provisioned in Stripe automatically.",
+    "List the available subscription plans (seats, included credits, and monthly/yearly prices). Prices are provisioned in Stripe automatically.",
     {},
     async () => {
       const ensured = await ensurePlans(plans, { currency });
@@ -119,7 +119,7 @@ function registerPlanTools(
           (e) => e.plan === plan && e.interval === interval && e.seatType === seatType,
         ) ?? null;
       // Reported from the normalised model, so a seat-typed or pooled plan is
-      // described as it actually is. This used to read `price`/`tokensPerSeat`
+      // described as it actually is. This used to read `price`/`creditsPerSeat`
       // off the raw config, which a seat-typed plan doesn't use at all — so an
       // agent was told a plan cost the placeholder plan-level amount, and given
       // no way to see its seat types, its packs or whether it can be bought.
@@ -131,14 +131,14 @@ function registerPlanTools(
         members: m.limits.members,
         intervals: m.intervals,
         included: poolSizeOf(m) !== null
-          ? { scope: "pool" as const, tokens: poolSizeOf(m) }
-          : { scope: "per_seat" as const, tokens: null },
+          ? { scope: "pool" as const, credits: poolSizeOf(m) }
+          : { scope: "per_seat" as const, credits: null },
         seat_types: m.seatTypes.map((s) => ({
           key: s.key,
           label: s.display?.label ?? s.key,
           shared: s.shared,
           max: s.max,
-          included_tokens: s.includedTokens,
+          included_credits: s.includedCredits,
           prices: {
             monthly: { amount: s.price.monthly, currency, price_id: priceOf(m.key, "monthly", s.key)?.priceId ?? null },
             yearly: { amount: s.price.yearly, currency, price_id: priceOf(m.key, "yearly", s.key)?.priceId ?? null },
@@ -160,8 +160,8 @@ export const BILLING_TOOL_NAMES = [
   "get_api_key",
   "list_api_keys",
   "revoke_api_key",
-  "get_token_balance",
-  "buy_tokens",
+  "get_credit_balance",
+  "buy_credits",
   "set_auto_reload",
   "get_billing_portal",
   "list_invoices",

@@ -1,6 +1,6 @@
 ---
 name: billing-tools
-description: Add drop-in auth and billing to a Stripe + WorkOS app with the @arnaudjnn/billing-tools library (Next.js, Hono, Bun, Deno, any Node host). Use this skill whenever the user wants to monetize an app, MCP server, or API, charge per token or per credit, add subscriptions or API-key auth, let AI agents self-register with auth.md and pay per request with Stripe MPP machine payments, or wire a token wallet, Stripe Checkout, auto-reload, a Customer Portal, invoices, seat limits, or per-seat token grants, and expose it all as MCP tools, a REST API, or a CLI. Covers the pluggable WorkOS-org adapter (WorkOS-only or WorkOS plus a DB mirror), declarative plans auto-provisioned in Stripe, and a zero-webhook event-polling sync. Triggers on "add billing", "monetize my agent or tools or API", "Stripe and WorkOS", "charge per token", "agent auth.md", "machine payments", or "MPP", even when the library is not named.
+description: Add drop-in auth and billing to a Stripe + WorkOS app with the @arnaudjnn/billing-tools library (Next.js, Hono, Bun, Deno, any Node host). Use this skill whenever the user wants to monetize an app, MCP server, or API, charge per credit, add subscriptions or API-key auth, let AI agents self-register with auth.md and pay per request with Stripe MPP machine payments, or wire a credit wallet, Stripe Checkout, auto-reload, a Customer Portal, invoices, seat limits, or per-seat credit grants, and expose it all as MCP tools, a REST API, or a CLI. Covers the pluggable WorkOS-org adapter (WorkOS-only or WorkOS plus a DB mirror), declarative plans auto-provisioned in Stripe, and a zero-webhook event-polling sync. Triggers on "add billing", "monetize my agent or tools or API", "Stripe and WorkOS", "charge per credit or per token", "agent auth.md", "machine payments", or "MPP", even when the library is not named.
 license: MIT
 metadata:
   homepage: https://github.com/arnaudjnn/billing-tools
@@ -8,11 +8,11 @@ metadata:
 
 # Billing Tools
 
-`@arnaudjnn/billing-tools` is the get-paid engine for Stripe + WorkOS apps, for humans **and** AI agents. It packages API-key auth (WorkOS), token/credit + subscription billing (Stripe), agent self-registration ([auth.md](https://workos.com/auth-md)), and machine payments ([MPP](https://mpp.dev/)) behind one storage-pluggable engine, exposed as MCP tools, a REST API, and a CLI. Use it instead of rebuilding billing plumbing in every app.
+`@arnaudjnn/billing-tools` is the get-paid engine for Stripe + WorkOS apps, for humans **and** AI agents. It packages API-key auth (WorkOS), credit + subscription billing (Stripe), agent self-registration ([auth.md](https://workos.com/auth-md)), and machine payments ([MPP](https://mpp.dev/)) behind one storage-pluggable engine, exposed as MCP tools, a REST API, and a CLI. Use it instead of rebuilding billing plumbing in every app.
 
 ## When to use this skill
 
-Reach for it when the user wants to charge for an app / MCP server / API, add per-token or per-credit metering, sell subscriptions, add API-key auth, let agents register and pay without a human, or stand up a token wallet + Checkout + invoices on a Stripe + WorkOS stack.
+Reach for it when the user wants to charge for an app / MCP server / API, add per-credit metering, sell subscriptions, add API-key auth, let agents register and pay without a human, or stand up a credit wallet + Checkout + invoices on a Stripe + WorkOS stack.
 
 ## Prerequisites
 
@@ -88,7 +88,7 @@ The 402 challenge ships ready; live settlement is injected via a `settle` functi
 
 ## Tools exposed
 
-`get_api_key`, `list_api_keys`, `revoke_api_key`, `get_token_balance`, `buy_tokens`, `set_auto_reload`, `get_billing_portal`, `list_invoices`, `view_invoice`, `download_invoice`, `get_usage`, `get_usage_limits`, `list_plans`.
+`get_api_key`, `list_api_keys`, `revoke_api_key`, `get_credit_balance`, `buy_credits`, `set_auto_reload`, `get_billing_portal`, `list_invoices`, `view_invoice`, `download_invoice`, `get_usage`, `get_usage_limits`, `list_plans`.
 
 ## Reference
 

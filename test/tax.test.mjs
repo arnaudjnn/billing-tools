@@ -1,4 +1,4 @@
-// Charges the library raises with no form behind them: a `buy_tokens` Checkout
+// Charges the library raises with no form behind them: a `buy_credits` Checkout
 // and the auto-reload invoice. Both were untaxed while every seat invoice on the
 // same account charged 22% IVA — a compliance defect, not a rounding one.
 //
@@ -10,7 +10,7 @@ process.env.STRIPE_SECRET_KEY ??= "sk_test_fake";
 import assert from "node:assert/strict";
 import { test } from "vitest";
 
-import { __setStripeForTests, createTokenCheckoutSession, autoReloadFor } from "../dist/billing.js";
+import { __setStripeForTests, createCreditCheckoutSession, autoReloadFor } from "../dist/billing.js";
 
 function fakeStripe() {
   const calls = [];
@@ -68,7 +68,7 @@ function fakeStripe() {
 }
 
 const config = {
-  freeTokens: 100,
+  freeCredits: 100,
   currency: "eur",
   baseUrl: "https://app.test",
   internalDomains: [],
@@ -79,7 +79,7 @@ test("a top-up checkout carries the tax rates it is given", async () => {
   const stripe = fakeStripe();
   __setStripeForTests(stripe);
 
-  await createTokenCheckoutSession("cus_1", "org_1", 50, config, { taxRates: ["txr_iva22"] });
+  await createCreditCheckoutSession("cus_1", "org_1", 50, config, { taxRates: ["txr_iva22"] });
 
   const { params } = stripe.of("session")[0];
   assert.deepEqual(params.line_items[0].tax_rates, ["txr_iva22"]);
@@ -91,7 +91,7 @@ test("manual rates and automatic tax are never sent together", async () => {
   const stripe = fakeStripe();
   __setStripeForTests(stripe);
 
-  await createTokenCheckoutSession("cus_1", "org_1", 50, config, {
+  await createCreditCheckoutSession("cus_1", "org_1", 50, config, {
     taxRates: ["txr_iva22"],
     automaticTax: true,
   });
@@ -105,7 +105,7 @@ test("the return URLs are overridable", async () => {
   const stripe = fakeStripe();
   __setStripeForTests(stripe);
 
-  await createTokenCheckoutSession("cus_1", "org_1", 50, config, {
+  await createCreditCheckoutSession("cus_1", "org_1", 50, config, {
     successUrl: "https://app.test/spazio/fatturazione?ok=1",
     cancelUrl: "https://app.test/spazio/fatturazione",
   });
@@ -138,7 +138,7 @@ test("auto-reload applies the deployment's tax settings", async () => {
 
 test("the auto-reload invoice INCLUDES the pending item", async () => {
   // Measured against Stripe: without this, a customer who has a subscription
-  // gets an invoice that is paid, numbered and totals zero, while the tokens
+  // gets an invoice that is paid, numbered and totals zero, while the credits
   // are swept onto their next subscription invoice a month later.
   const stripe = fakeStripe();
   __setStripeForTests(stripe);

@@ -233,7 +233,7 @@ export class WorkOSOrgAdapter implements BillingAdapter {
 
   // ── Subscription state + seats (org metadata; used by the billing-sync) ────
 
-  /** Active-member count for the org (per-seat token grants + seat limits).
+  /** Active-member count for the org (per-seat credit grants + seat limits).
    *  Auto-paginates so orgs with >100 members aren't undercounted. */
   async memberCount(orgId: string): Promise<number> {
     const paginatable = await this.workos.userManagement.listOrganizationMemberships({

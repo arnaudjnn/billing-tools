@@ -5,10 +5,10 @@ import { enforceAccess } from "../auth.js";
 import {
   ensureStripeCustomer,
   getBillingCustomerId,
-  getTokenBalance,
+  getCreditBalance,
   getAutoReloadSettings,
   setAutoReloadSettings,
-  createTokenCheckoutSession,
+  createCreditCheckoutSession,
   createBillingPortalSession,
   listInvoices,
   getInvoice,
@@ -51,22 +51,22 @@ export function registerBillingOnlyTools(
   };
 
   server.tool(
-    "get_token_balance",
-    `Returns your current token balance, per-tool costs, and auto-reload settings.`,
+    "get_credit_balance",
+    `Returns your current credit balance, per-tool costs, and auto-reload settings.`,
     {},
     async () => {
       const auth = await enforceAccess(adapter);
       if ("isError" in auth) return auth;
       if (!stripeConfigured()) return NO_STRIPE;
       const cid = await customerId(auth.orgId);
-      const balance = await getTokenBalance(cid, config.currency);
+      const balance = await getCreditBalance(cid, config.currency);
       const autoReload = await getAutoReloadSettings(cid);
       return {
         content: [
           {
             type: "text" as const,
             text: JSON.stringify(
-              { token_balance: balance, tool_costs: toolCosts, auto_reload: autoReload || { enabled: false } },
+              { credit_balance: balance, tool_costs: toolCosts, auto_reload: autoReload || { enabled: false } },
               null,
               2,
             ),
@@ -77,24 +77,24 @@ export function registerBillingOnlyTools(
   );
 
   server.tool(
-    "buy_tokens",
-    `Purchase tokens via Stripe Checkout. Returns a payment URL.
-1 unit of currency = 100 tokens. Minimum 5, maximum 200,000. Your card is saved for auto-reload.`,
+    "buy_credits",
+    `Purchase credits via Stripe Checkout. Returns a payment URL.
+1 unit of currency = 100 credits. Minimum 5, maximum 200,000. Your card is saved for auto-reload.`,
     {
-      amount: z.number().min(5).max(200000).describe("Amount in your currency to purchase (e.g. 10 = 1000 tokens)"),
+      amount: z.number().min(5).max(200000).describe("Amount in your currency to purchase (e.g. 10 = 1000 credits)"),
     },
     async ({ amount }) => {
       const auth = await enforceAccess(adapter);
       if ("isError" in auth) return auth;
       if (!stripeConfigured()) return NO_STRIPE;
       const cid = await customerId(auth.orgId);
-      const url = await createTokenCheckoutSession(cid, auth.orgId, amount, config, {
+      const url = await createCreditCheckoutSession(cid, auth.orgId, amount, config, {
         taxRates: topUp.taxRates ? await topUp.taxRates(auth.orgId) : undefined,
         automaticTax: topUp.automaticTax,
         successUrl: topUp.successUrl,
         cancelUrl: topUp.cancelUrl,
       });
-      const tokens = Math.round(amount * 100);
+      const credits = Math.round(amount * 100);
       return {
         content: [
           {
@@ -104,8 +104,8 @@ export function registerBillingOnlyTools(
                 status: "checkout_created",
                 checkout_url: url,
                 amount,
-                tokens,
-                message: `Open this URL to purchase ${tokens} tokens.`,
+                credits,
+                message: `Open this URL to purchase ${credits} credits.`,
               },
               null,
               2,
@@ -118,9 +118,9 @@ export function registerBillingOnlyTools(
 
   server.tool(
     "set_auto_reload",
-    `Configure automatic token reload. When your balance drops to or below the threshold
+    `Configure automatic credit reload. When your balance drops to or below the threshold
 after a tool call, your saved card is charged to bring the balance back to reload_to.
-Requires a saved card (use buy_tokens first).`,
+Requires a saved card (use buy_credits first).`,
     {
       enabled: z.boolean().describe("Enable or disable auto-reload"),
       threshold: z.number().min(0).describe("Balance threshold that triggers reload"),
@@ -147,7 +147,7 @@ Requires a saved card (use buy_tokens first).`,
                 status: "ok",
                 auto_reload: { enabled, threshold, reload_to },
                 message: enabled
-                  ? `Auto-reload enabled: at <=${threshold} tokens, recharge to ${reload_to}.`
+                  ? `Auto-reload enabled: at <=${threshold} credits, recharge to ${reload_to}.`
                   : "Auto-reload disabled.",
               },
               null,

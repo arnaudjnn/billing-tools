@@ -1,7 +1,7 @@
 import type { BillingAdapter } from "./types.js";
 
 // Per-member seat-type assignments, stored in the org's metadata via the adapter
-// (no new database). A member's seat type decides which per-cycle token pack their
+// (no new database). A member's seat type decides which per-cycle credit pack their
 // usage draws (see createMeter). Absent an assignment, the meter falls back to the
 // default user seat. Org-scoped writes — a consumer that wants a per-user admin
 // gate checks adapter.isAdmin(orgId, userId) before calling.

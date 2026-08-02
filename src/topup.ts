@@ -3,7 +3,7 @@ import { cycleWindowFor, packSizeOf, planModel, type PlanCatalog } from "./plan-
 import { getSeatType } from "./seats.js";
 
 // Top-up requests, stored entirely in the org's metadata via the adapter (no new
-// database): a user-seat over its cap requests extra tokens → an owner approves →
+// database): a user-seat over its cap requests extra credits → an owner approves →
 // a per-member EXTRA ALLOWANCE for the current cycle that the meter adds on top of
 // the seat pack. Actions are ORG-SCOPED (the caller already holds an org key /
 // authenticated session); a consumer that wants a per-user admin gate on approval
@@ -11,13 +11,13 @@ import { getSeatType } from "./seats.js";
 // shared reserve is just `setAutoReloadSettings` (the set_auto_reload tool).
 
 const REQUESTS_KEY = "topUpRequests"; // org metadata → JSON TopUpRequest[]
-const GRANTS_KEY = "topUpGrants"; // org metadata → JSON { [memberId]: { [cycle]: tokens } }
+const GRANTS_KEY = "topUpGrants"; // org metadata → JSON { [memberId]: { [cycle]: credits } }
 const MAX_STORED_REQUESTS = 50;
 
 export interface TopUpRequest {
   id: string;
   memberId: string; // requester (WorkOS user id)
-  amount: number; // tokens requested (e.g. +25% of the seat pack)
+  amount: number; // credits requested (e.g. +25% of the seat pack)
   cycle: string; // cycle key the grant applies to (consumer-defined, e.g. "2026-07")
   status: "pending" | "approved" | "denied";
   createdAt: string;
@@ -42,7 +42,7 @@ async function writeJson(adapter: BillingAdapter, orgId: string, key: string, va
   await adapter.setOrgMetadata?.(orgId, { [key]: JSON.stringify(value) });
 }
 
-/** A user requests extra tokens for the current cycle (owner must approve). */
+/** A user requests extra credits for the current cycle (owner must approve). */
 export async function requestTopUp(
   adapter: BillingAdapter,
   orgId: string,
@@ -160,12 +160,12 @@ export async function grantExtraAllowance(
      * Extra as a PERCENTAGE of the member's own seat pack (25 = +25%).
      *
      * The natural unit for this decision: "a quarter more than their seat" means
-     * the same thing on a 1 000-token seat and a 5 000-token one, where a fixed
+     * the same thing on a 1 000-credit seat and a 5 000-credit one, where a fixed
      * +250 is a rounding error on one and a third of the other. The pack is
      * resolved here from the member's seat type, so no caller has to know it.
      */
     percent?: number;
-    /** An absolute number of tokens instead. Exactly one of the two. */
+    /** An absolute number of credits instead. Exactly one of the two. */
     amount?: number;
     grantedBy?: string;
     id?: string;
@@ -175,7 +175,7 @@ export async function grantExtraAllowance(
   ok: boolean;
   /** The member's grand total for the cycle, after this grant. */
   total?: number;
-  /** What this call actually added, in tokens. */
+  /** What this call actually added, in credits. */
   granted?: number;
   /** The pack the percentage was taken from. */
   packSize?: number;

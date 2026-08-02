@@ -16,10 +16,10 @@ import { test } from "vitest";
 import { createBilling } from "../dist/create-billing.js";
 
 const PLANS = {
-  hobby: { sells: { kind: "nothing" }, cap: { kind: "pool", tokens: 1000 }, sale: "free" },
+  hobby: { sells: { kind: "nothing" }, cap: { kind: "pool", credits: 1000 }, sale: "free" },
   pro: {
     sells: { kind: "flat", price: { monthly: 1800, yearly: 18000 } },
-    cap: { kind: "pool", tokens: 5000 },
+    cap: { kind: "pool", credits: 5000 },
     sale: "self_serve",
   },
 };
@@ -80,7 +80,7 @@ test("it exposes the handlers an app mounts", () => {
   assert.ok(billing.mcp && typeof billing.mcp === "object");
 });
 
-test("topUp is accepted and reaches buy_tokens", async () => {
+test("topUp is accepted and reaches buy_credits", async () => {
   // The regression: it was accepted here and never forwarded, so an app that
   // configured its VAT correctly still sold untaxed top-ups.
   let askedFor = null;
@@ -111,7 +111,7 @@ test("topUp is accepted and reaches buy_tokens", async () => {
 
   const { runWithAuth } = await import("../dist/auth.js");
   await runWithAuth("Bearer sk_good", () =>
-    billing.dispatcher.dispatchTool("buy_tokens", { amount: 50 }),
+    billing.dispatcher.dispatchTool("buy_credits", { amount: 50 }),
   );
 
   assert.equal(askedFor, "org_1", "the resolver is asked for this org");

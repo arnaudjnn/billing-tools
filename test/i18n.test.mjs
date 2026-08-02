@@ -13,19 +13,19 @@ test("text localises, and the library's own words default to English", async () 
 
   // One config, two languages. Plain strings stay single-language (most configs).
   const PLANS = definePlans({
-    free: { sells:{kind:"nothing"}, cap:{kind:"pool",tokens:1000}, limits:{members:1}, sale:"free",
+    free: { sells:{kind:"nothing"}, cap:{kind:"pool",credits:1000}, limits:{members:1}, sale:"free",
             display:{ name:"Hobby", order:1,
                       tagline:{ en:"Get started", it:"Scoprite il servizio" },
                       features:{ en:["Full-text search","1 000 requests a month"],
                                  it:["Ricerca full-text","1 000 richieste al mese"] },
                       cta:{ label:{ en:"Start free", it:"Iniziate gratis" } } } },
     pro: { sells:{kind:"seats",minSeats:2,seatTypes:{
-             standard:{price:{monthly:2104,yearly:21600},includedTokens:1000,min:1,
+             standard:{price:{monthly:2104,yearly:21600},includedCredits:1000,min:1,
                        display:{ label:{en:"Standard seat",it:"Posto Standard"}, usage:{en:"All features",it:"Tutte le funzioni"} }}}},
            grant:{kind:"none"}, cap:{kind:"per_seat"}, limits:{members:100}, sale:"self_serve",
            display:{ name:"Pro", order:2, badge:{en:"Most popular",it:"Consigliato"} } },
     ent: { sells:{kind:"flat",price:{monthly:0,yearly:500000},intervals:["yearly"]}, grant:{kind:"none"},
-           cap:{kind:"pool",tokens:1000000}, limits:{members:null}, sale:"quote",
+           cap:{kind:"pool",credits:1000000}, limits:{members:null}, sale:"quote",
            display:{ name:"Enterprise", order:3 } },
   });
 

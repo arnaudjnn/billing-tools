@@ -17,7 +17,7 @@ const PLANS = {
   pro: {
     sells: {
       kind: "seats",
-      seatTypes: { standard: { price: { monthly: 1800, yearly: 18000 }, includedTokens: 1000 } },
+      seatTypes: { standard: { price: { monthly: 1800, yearly: 18000 }, includedCredits: 1000 } },
     },
     cap: { kind: "per_seat" },
     sale: "self_serve",

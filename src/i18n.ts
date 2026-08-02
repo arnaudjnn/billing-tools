@@ -155,7 +155,7 @@ export const DEFAULT_MESSAGES: Messages = {
   columnYearly: "Yearly",
   columnSeatTypes: "Seat types",
   columnTool: "Tool",
-  columnCost: "Cost (tokens)",
+  columnCost: "Cost (credits)",
   otherGroup: "Other",
   seatMinimum: "At least {min} seats are required (got {got})",
   seatMaximum: "At most {max} seats (got {got})",
@@ -166,10 +166,10 @@ export const DEFAULT_MESSAGES: Messages = {
   unknownSeatType: 'Unknown seat type "{seatType}"',
   intervalUnavailable: "This plan is not sold {interval}",
   poolExhausted:
-    "Plan allowance used up for this cycle ({size} tokens). Contact us to extend the package.",
+    "Plan allowance used up for this cycle ({size} credits). Contact us to extend the package.",
   seatAllowanceReached:
-    "Seat token allowance reached for this cycle. Ask an owner for a top-up, or buy tokens.",
-  insufficientBalance: "Insufficient tokens (balance {balance}). Buy tokens to continue.",
+    "Seat credit allowance reached for this cycle. Ask an owner for a top-up, or buy credits.",
+  insufficientBalance: "Insufficient credits (balance {balance}). Buy credits to continue.",
   paymentDetailsInvalid: "Invalid payment details",
   cardNotSaved: "Card not saved",
   paymentFailed: "Payment failed",

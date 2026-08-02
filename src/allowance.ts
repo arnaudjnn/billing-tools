@@ -1,4 +1,4 @@
-import { getBillingCustomerId, getTokenBalance } from "./billing.js";
+import { getBillingCustomerId, getCreditBalance } from "./billing.js";
 import { formatMessage, resolveMessages, type PartialMessages } from "./i18n.js";
 import {
   cycleWindowFor,
@@ -160,15 +160,15 @@ export async function resolveAllowance(
         every: limit.every,
         scope,
         label: limit.label ?? null,
-        size: limit.tokens,
+        size: limit.credits,
         used,
-        remaining: Math.max(0, limit.tokens - used),
+        remaining: Math.max(0, limit.credits - used),
         window,
       }));
   });
 
   const [wallet, poolUsed, packUsed, extra, limits] = await Promise.all([
-    input.skipWallet ? Promise.resolve(0) : getTokenBalance(customerId, config.currency),
+    input.skipWallet ? Promise.resolve(0) : getCreditBalance(customerId, config.currency),
     poolSize == null
       ? Promise.resolve(0)
       : ledger.total({ orgId: input.orgId, customerId, start: cycle.start, end: cycle.end ?? undefined }),
@@ -333,10 +333,10 @@ export function describeDenial(
       return `Usage limit reached for this ${name} (${l?.size ?? 0}).${resets}`;
     }
     case "pool_exhausted":
-      return `Plan allowance used up for this cycle (${state.pool?.size ?? 0} tokens). Contact us to extend the package.`;
+      return `Plan allowance used up for this cycle (${state.pool?.size ?? 0} credits). Contact us to extend the package.`;
     case "seat_allowance_reached":
-      return "Seat token allowance reached for this cycle. Ask an owner for a top-up, or buy tokens.";
+      return "Seat credit allowance reached for this cycle. Ask an owner for a top-up, or buy credits.";
     case "insufficient_balance":
-      return `Insufficient tokens (balance ${state.wallet}). Buy tokens to continue.`;
+      return `Insufficient credits (balance ${state.wallet}). Buy credits to continue.`;
   }
 }

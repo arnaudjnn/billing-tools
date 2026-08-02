@@ -34,7 +34,7 @@ import {
 // What this file exists to prevent, from the app it was extracted from:
 //   • an annual saving advertised at 17% next to a checkout charging 14% — two
 //     derivations from two different bases, so `annualSavingBasis` now says which
-//   • "50 searches a day" against a config of 1000 tokens a cycle
+//   • "50 searches a day" against a config of 1000 credits a cycle
 //   • "up to 10 members" against a limit of 100
 //   • a plan with an org-level allowance that had NO rendering path at all, so
 //     its price and package size were invisible on every surface
@@ -110,7 +110,7 @@ export interface SeatRowView {
   perMonth: Record<BillingInterval, MoneyView>;
   /** What is actually charged for that interval. */
   total: Record<BillingInterval, MoneyView>;
-  includedTokens: number;
+  includedCredits: number;
 }
 
 export interface PlanPriceView {
@@ -168,7 +168,7 @@ export interface PlanView {
   annualSavingBasis: "flat" | "basket" | null;
   members: { max: number | null };
   /** Included usage per cycle for the default basket, and where it pools. */
-  included: { tokens: number; scope: "per_seat" | "pool" | "none" };
+  included: { credits: number; scope: "per_seat" | "pool" | "none" };
   /** Intervals the plan is actually SOLD on — `["yearly"]` for an annual-only
    *  commitment. Not derivable from the rendered price: a quoted plan shows no
    *  price at all yet still has a billing cycle. */
@@ -294,7 +294,7 @@ export function derivePlanViews(
           yearly: money(Math.round(s.price.yearly / 12)),
         },
         total: { monthly: money(s.price.monthly), yearly: money(s.price.yearly) },
-        includedTokens: s.includedTokens,
+        includedCredits: s.includedCredits,
       }));
 
       const kind = priceKindOf(model);
@@ -337,7 +337,7 @@ export function derivePlanViews(
       const pool = poolSizeOf(model);
       const basket = defaultBasket(model);
       const includedPerSeat = model.seatTypes.reduce(
-        (sum, s) => sum + s.includedTokens * (basket[s.key] ?? 0),
+        (sum, s) => sum + s.includedCredits * (basket[s.key] ?? 0),
         0,
       );
 
@@ -381,10 +381,10 @@ export function derivePlanViews(
         members: { max: model.limits.members },
         included:
           pool !== null
-            ? { tokens: pool, scope: "pool" }
+            ? { credits: pool, scope: "pool" }
             : includedPerSeat > 0
-              ? { tokens: includedPerSeat, scope: "per_seat" }
-              : { tokens: 0, scope: "none" },
+              ? { credits: includedPerSeat, scope: "per_seat" }
+              : { credits: 0, scope: "none" },
         intervals: model.intervals,
         sale: model.sale,
         interval,
@@ -444,7 +444,7 @@ export function renderPlansMarkdown(
       case "members":
         return v.members.max === null ? m.unlimited : String(v.members.max);
       case "included":
-        return v.included.tokens ? v.included.tokens.toLocaleString("en-US") : "—";
+        return v.included.credits ? v.included.credits.toLocaleString("en-US") : "—";
       case "monthly":
       case "yearly": {
         if (v.sale === "quote") return m.contactUs;
@@ -532,7 +532,7 @@ export function renderRateCardMarkdown(
 //  2. A row can be DERIVED from the plan model (`from`), so the rows that restate
 //     a configured number cannot contradict it. That drift was live: the matrix
 //     advertised "50 searches a day" and "up to 10 members" against a config of
-//     1000 tokens a cycle and a limit of 100.
+//     1000 credits a cycle and a limit of 100.
 //
 // Three ways to write a row, because most rows are the boring case:
 //
@@ -548,7 +548,7 @@ export type CompareValue = boolean | number | Localized;
 export type CompareSource =
   /** `limits.members` — a count, or the unlimited label. */
   | "members"
-  /** `included.tokens` per cycle. */
+  /** `included.credits` per cycle. */
   | "included"
   /** The plan's headline price for the selected interval. */
   | "price"
@@ -664,8 +664,8 @@ export function deriveCompareTable(
             text: view.members.max === null ? m.unlimited : number(view.members.max),
           };
         case "included":
-          return view.included.tokens > 0
-            ? { kind: "text", text: number(view.included.tokens) }
+          return view.included.credits > 0
+            ? { kind: "text", text: number(view.included.credits) }
             : { kind: "no" };
         case "price":
           return view.price.headline

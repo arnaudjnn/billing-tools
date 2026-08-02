@@ -16,7 +16,7 @@ import type { BillingAdapter, ResolvedConfig } from "../types.js";
 // The subscription lifecycle, as tools.
 //
 // This is the gap the QA pass found: changing plan was reachable from the app's
-// own UI and from nowhere else. An agent could read the plans, buy tokens and
+// own UI and from nowhere else. An agent could read the plans, buy credits and
 // meter usage, but could not move between plans, cancel, or even ask what a move
 // would cost — the one thing a customer most wants to know before committing.
 //

@@ -11,7 +11,7 @@ import { getWorkOS } from "./workos.js";
 // newest event WITHOUT processing history (so you don't replay months of events
 // or double-grant). Persist the returned cursor after each poll; because we
 // stop at the cursor, events are processed exactly once (handlers that mutate,
-// e.g. token grants, are safe as long as the cursor is saved after handling).
+// e.g. credit grants, are safe as long as the cursor is saved after handling).
 
 export interface PollResult {
   cursor: string | null;
