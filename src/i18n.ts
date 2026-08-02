@@ -93,8 +93,6 @@ function candidates(locale: string | undefined, fallback: string): string[] {
 // ── The library's own words ─────────────────────────────────────────────────
 
 export interface Messages {
-  /** Past the card on file, to type a different one. */
-  useAnotherCard: string;
   /** A limit that isn't one — a members column, a usage row. */
   unlimited: string;
   /** Billing intervals, for a derived "billing cycle" row. */
@@ -144,8 +142,6 @@ export interface Messages {
  * rather than becoming a missing string.
  */
 export const DEFAULT_MESSAGES: Messages = {
-  /** Past the card on file, to type a different one. */
-  useAnotherCard: "Use another card",
   unlimited: "Unlimited",
   monthly: "Monthly",
   yearly: "Yearly",

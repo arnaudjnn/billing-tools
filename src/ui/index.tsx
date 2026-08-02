@@ -551,12 +551,17 @@ export type BillingCheckoutSessionFormProps = {
    */
   link?: boolean;
   /** Rendered as the submit button. Receives the live submitting state. */
-  children: (state: {
-    submitting: boolean;
-    /** The card on file being charged, when one is. Null while collecting a new
-     *  one — a caller can label its button "Pay with •••• 4242" from this. */
-    savedCard: { id: string; card: { brand: string; last4: string } } | null;
-  }) => React.ReactNode;
+  /**
+   * Charge a payment method the customer already has, by id.
+   *
+   * The Payment Element and the address field are then NOT rendered — there is
+   * nothing to type — and the caller shows whatever it likes instead (it listed the
+   * card, so it has the brand and the last four). `validateElements` is skipped for
+   * the same reason: validating a form that does not exist would fail a purchase
+   * with nothing wrong with it.
+   */
+  paymentMethod?: string;
+  children: (state: { submitting: boolean }) => React.ReactNode;
   /** Called once the session is confirmed without a redirect. */
   onSuccess?: () => void;
   /** Called with a human-readable message when Stripe declines or validation fails. */
@@ -579,6 +584,7 @@ export function BillingCheckoutSessionForm({
   collectAddress = true,
   collectTaxId = true,
   link = false,
+  paymentMethod,
   children,
   onSuccess,
   onError,
@@ -596,18 +602,18 @@ export function BillingCheckoutSessionForm({
   const taxIdAvailable =
     result.type === "success" && typeof result.checkout.createTaxIdElement === "function";
 
-  // The cards the customer already has, when the SESSION was created asking for
-  // them (`saved_payment_method_options.allow_redisplay_filters`).
+  // Charging a card the app ALREADY KNOWS ABOUT, rather than asking Stripe which
+  // cards exist.
   //
-  // In elements mode the Payment Element does NOT render these — it only collects
-  // NEW details. Measured: a customer with a saved card was shown an empty card
-  // form and asked to type it again, however the session was configured. Saved
-  // methods live on the checkout object and are the integration's to render, which
-  // is what this does: offer the first one, with the form as the way past it.
-  const t = resolveMessages(undefined);
-  const saved = result.type === "success" ? (result.checkout.savedPaymentMethods ?? []) : [];
-  const [useNewCard, setUseNewCard] = React.useState(false);
-  const savedCard = !useNewCard ? saved[0] : undefined;
+  // `checkout.savedPaymentMethods` was the first attempt and it came back null
+  // however the session was configured — `payment_method_save`, then
+  // `allow_redisplay_filters` widened to include the `unspecified` that a card saved
+  // through a SetupIntent actually carries, all verified present on the session
+  // object with a customer attached. It was also the wrong shape: an app that lists
+  // payment methods server-side already has the id, the brand and the last four, and
+  // does not need Stripe to hand them back. So the caller passes the id and renders
+  // its own row.
+  const payWith = paymentMethod ?? null;
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -617,7 +623,7 @@ export function BillingCheckoutSessionForm({
       // Only when there ARE elements: with a saved card selected the Payment
       // Element is not mounted, and validating a form that does not exist fails a
       // purchase that has nothing wrong with it.
-      if (!savedCard) {
+      if (!payWith) {
         const validated = await result.checkout.validateElements();
         if (validated.type === "error") {
           onError?.(validated.error.message ?? "Payment details are incomplete");
@@ -627,7 +633,7 @@ export function BillingCheckoutSessionForm({
       const confirmed = await result.checkout.confirm({
         redirect: "if_required",
         // Charging the saved card instead of the (unmounted) Payment Element.
-        ...(savedCard ? { paymentMethod: savedCard.id } : {}),
+        ...(payWith ? { paymentMethod: payWith } : {}),
       });
       if (confirmed.type === "error") {
         onError?.(confirmed.error.message ?? "Payment failed");
@@ -641,20 +647,7 @@ export function BillingCheckoutSessionForm({
 
   return (
     <form onSubmit={onSubmit} className={className}>
-      {savedCard ? (
-        // The card on file, as a row rather than a form: nothing here needs typing,
-        // so rendering the Payment Element to say "the card ending 4242" would be a
-        // form that asks nothing. `t.useAnotherCard` is the way past it, because a
-        // customer who wants to pay with a different card must not be trapped.
-        <div className="bt-saved-card" data-bt="saved-card">
-          <span data-bt="saved-card-label">
-            {savedCard.card.brand.toUpperCase()} •••• {savedCard.card.last4}
-          </span>
-          <button type="button" data-bt="use-another-card" onClick={() => setUseNewCard(true)}>
-            {t.useAnotherCard}
-          </button>
-        </div>
-      ) : (
+      {payWith ? null : (
         <>
           {/* Same reason as AddCardForm: no accordion header when there is one
               method to pick. With several (a wallet, Klarna) the tabs appear, which
@@ -671,7 +664,7 @@ export function BillingCheckoutSessionForm({
           {collectTaxId && taxIdAvailable && <CheckoutTaxIdElement options={{}} />}
         </>
       )}
-      {children({ submitting, savedCard: savedCard ?? null })}
+      {children({ submitting })}
     </form>
   );
 }
