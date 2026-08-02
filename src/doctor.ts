@@ -404,6 +404,37 @@ export function checkPlansConfig(
         }
       }
     }
+    // "Pay as you go" has to be fundable. A plan that falls through to the wallet
+    // when its window runs out — or has no window at all — refuses every call past
+    // that point unless the customer can put money in, so the claim and the
+    // capability have to travel together.
+    const overflows =
+      m.cap.kind === "wallet" ||
+      ((m.cap.kind === "per_seat" || m.cap.kind === "pool") && m.cap.onExhausted === "wallet");
+    if (overflows && !m.replenish.purchase && !m.replenish.autoReload) {
+      checks.push({
+        level: "warn",
+        title: `Plan "${m.key}" overflows to a wallet it cannot fill`,
+        detail:
+          m.cap.kind === "wallet"
+            ? "the wallet is its only gate, but the plan offers no way to buy tokens"
+            : 'its cap falls through to the wallet (`onExhausted: "wallet"`), but the plan offers no way to buy tokens',
+        fix: 'Add `replenish: { purchase: {} }` (and/or `autoReload`), or set `onExhausted: "block"`',
+      });
+    }
+    // Two windows, one allowance: `rollover` widens the window to the
+    // subscription's start, `window: "month"` narrows it to the calendar month.
+    // Declaring both asks for a window that both ignores and follows the period.
+    if (m.cap.kind === "pool" && m.cap.rollover && m.cap.window === "month") {
+      checks.push({
+        level: "error",
+        title: `Plan "${m.key}" declares two different windows`,
+        detail:
+          'cap.rollover widens the window to the subscription start while cap.window: "month" pins it ' +
+          "to the calendar month — the month wins, so the rollover silently does nothing",
+        fix: "Drop one: rollover for a package that accumulates, month for an allowance quoted per month",
+      });
+    }
     if (m.cap.kind === "pool" && poolSizeOf(m) === 0) {
       checks.push({
         level: "warn",

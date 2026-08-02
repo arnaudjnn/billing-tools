@@ -189,6 +189,22 @@ export type Exhausted =
   /** Fall through to the prepaid wallet, so a top-up funds the overage. */
   | "wallet";
 
+/**
+ * The window a `cap` is measured over.
+ *
+ * `cycle` (the default, and the historical behaviour) is the SUBSCRIPTION period:
+ * a plan billed annually gets one window a year. That is right for a committed
+ * package — a year's worth, bought up front — and wrong for anything a customer
+ * is told they get "per month", because an annual subscriber would receive twelve
+ * months' allowance on day one and nothing after it ran out.
+ *
+ * `month` measures the same allowance over the calendar month whatever the
+ * billing interval, which is what "1 000 per seat per month, billed annually"
+ * actually means. It is the only way to say that: the pack size cannot express it,
+ * since the size is a number and the period is the window.
+ */
+export type CapWindow = "cycle" | "month";
+
 export type Cap =
   /**
    * No entitlement window: the prepaid wallet is the only gate. This is exactly
@@ -196,8 +212,8 @@ export type Cap =
    * normalises to here and NOT to a pool.
    */
   | { kind: "wallet" }
-  /** Each caller is capped to its seat type's pack for the cycle. */
-  | { kind: "per_seat"; onExhausted?: Exhausted }
+  /** Each caller is capped to its seat type's pack for the window. */
+  | { kind: "per_seat"; window?: CapWindow; onExhausted?: Exhausted }
   /**
    * ONE org-wide window: all usage in the cycle counts against `tokens`,
    * whoever spends it. "We don't care about seats."
@@ -217,6 +233,8 @@ export type Cap =
       /** Optional per-caller ceiling inside the pool, so one member cannot burn
        *  an annual package. Same filtered read, so it costs nothing extra. */
       perCallerMax?: Money;
+      /** Mutually exclusive with `rollover`, which widens the window instead. */
+      window?: CapWindow;
       onExhausted?: Exhausted;
     };
 
@@ -842,8 +860,17 @@ export function cycleWindowFor(
   const start = ms(period?.start);
   const end = ms(period?.end);
   const rollover = model?.cap.kind === "pool" && model.cap.rollover === true;
+  // A cap declared per MONTH ignores the subscription period and takes the
+  // calendar-month branch below. It is handled HERE rather than at the read sites
+  // because this function is the one definition of the cycle: the meter, the usage
+  // screens and `grantExtraAllowance` all key on what it returns, and a window
+  // that disagreed with the key is exactly the defect that made approved top-ups
+  // grant nothing (see AGENTS.md, "Cycles — one definition").
+  const monthly =
+    (model?.cap.kind === "per_seat" || model?.cap.kind === "pool") &&
+    model.cap.window === "month";
 
-  if (start && (rollover || start <= now)) {
+  if (start && !monthly && (rollover || start <= now)) {
     const from = start;
     const until = rollover ? null : end;
     return { start: from, end: until, key: new Date(from).toISOString().slice(0, 10) };
