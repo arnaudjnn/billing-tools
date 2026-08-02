@@ -1,3 +1,10 @@
+# [0.66.0](https://github.com/arnaudjnn/billing-tools/compare/v0.65.0...v0.66.0) (2026-08-02)
+
+
+### Features
+
+* **payments:** provision the payment-method configuration, so Link can be turned off ([06d3d5f](https://github.com/arnaudjnn/billing-tools/commit/06d3d5fe4ea63089be88c9f14ddd4f00dccfb41b))
+
 # [0.65.0](https://github.com/arnaudjnn/billing-tools/compare/v0.64.3...v0.65.0) (2026-08-02)
 
 
