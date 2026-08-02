@@ -1,3 +1,10 @@
+# [0.71.0](https://github.com/arnaudjnn/billing-tools/compare/v0.70.2...v0.71.0) (2026-08-02)
+
+
+### Features
+
+* **plans:** a cap can be measured per MONTH on an annually-billed plan ([154ccbb](https://github.com/arnaudjnn/billing-tools/commit/154ccbbb51aab368ef387735b7a12a9425553706))
+
 ## [0.70.2](https://github.com/arnaudjnn/billing-tools/compare/v0.70.1...v0.70.2) (2026-08-02)
 
 
