@@ -1,3 +1,10 @@
+## [2.7.1](https://github.com/arnaudjnn/billing-tools/compare/v2.7.0...v2.7.1) (2026-08-02)
+
+
+### Bug Fixes
+
+* **payment-methods:** setup mode rejects saved_payment_method_options ([41a26e8](https://github.com/arnaudjnn/billing-tools/commit/41a26e8844e90fe2db2cb322791fd4aa750245b0))
+
 # [2.7.0](https://github.com/arnaudjnn/billing-tools/compare/v2.6.1...v2.7.0) (2026-08-02)
 
 
