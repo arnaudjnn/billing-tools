@@ -340,6 +340,26 @@ export interface TopUpCheckoutOptions {
   uiMode?: "hosted" | "embedded";
   /** Defaults to `${baseUrl}/billing/cancel`. */
   cancelUrl?: string;
+  /**
+   * Whether the embedded form ASKS before keeping the card.
+   *
+   * `ask` (the default) renders Stripe's "save my payment details" checkbox and
+   * lets the answer decide. `always` drops the checkbox and keeps the card
+   * regardless — for an account where a saved card is the point of the purchase
+   * rather than a favour to the buyer: auto-reload has nothing to charge without
+   * one, and a customer who declines silently disables it.
+   *
+   * Consent is not skipped by `always`. The session already carries
+   * `setup_future_usage: "off_session"`, which is what makes Stripe render the
+   * mandate line ("by providing your card you allow … to charge it for future
+   * payments") under the fields. The checkbox is a second, narrower question on
+   * top of that text — removing it leaves the disclosure in place.
+   *
+   * `ask` stays the default deliberately: which cards a customer ends up with is
+   * exactly the kind of behaviour a minor release must not change under an
+   * existing consumer.
+   */
+  savePaymentMethod?: "ask" | "always";
 }
 
 /** What a credit purchase costs, before anyone is charged. */
@@ -456,7 +476,16 @@ export async function createCreditCheckoutSession(
             allow_redisplay_filters: ["always", "limited", "unspecified"],
             // And keep offering to save a NEW card, so a first purchase leaves
             // something behind for auto-reload.
-            payment_method_save: "enabled",
+            //
+            // Omitted entirely under `savePaymentMethod: "always"`: present, it
+            // hands the decision to the checkbox, and Checkout then honours an
+            // unticked box OVER the session's own `setup_future_usage` — which is
+            // how a purchase can leave nothing behind for auto-reload to charge.
+            // Absent, `setup_future_usage: "off_session"` below is what applies,
+            // and the mandate text it renders is the disclosure.
+            ...(opts.savePaymentMethod === "always"
+              ? {}
+              : { payment_method_save: "enabled" as const }),
           },
         }
       : {}),

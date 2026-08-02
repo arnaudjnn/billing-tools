@@ -168,3 +168,33 @@ test("auto-reload never falls back to a bare charge", async () => {
   assert.equal(stripe.of("invoice").length, 1);
   assert.equal(stripe.of("pay").length, 1);
 });
+
+test("an embedded top-up asks before keeping the card, unless told always", async () => {
+  // The checkbox is not merely cosmetic: present, Checkout honours an UNTICKED box
+  // over the session's own `setup_future_usage`, so the purchase can leave nothing
+  // behind — and auto-reload has nothing to charge. `always` drops the checkbox and
+  // lets `setup_future_usage` (and the mandate text it renders) stand.
+  const stripe = fakeStripe();
+  __setStripeForTests(stripe);
+
+  await createCreditCheckoutSession("cus_1", "org_1", 50, config, { uiMode: "embedded" });
+  const asked = stripe.of("session")[0].params;
+  assert.equal(asked.saved_payment_method_options.payment_method_save, "enabled");
+  assert.equal(asked.payment_intent_data.setup_future_usage, "off_session");
+
+  const stripe2 = fakeStripe();
+  __setStripeForTests(stripe2);
+  await createCreditCheckoutSession("cus_1", "org_1", 50, config, {
+    uiMode: "embedded",
+    savePaymentMethod: "always",
+  });
+  const always = stripe2.of("session")[0].params;
+  assert.equal(always.saved_payment_method_options.payment_method_save, undefined);
+  assert.equal(always.payment_intent_data.setup_future_usage, "off_session");
+  // Existing cards must still be offered — that is a different option entirely.
+  assert.deepEqual(always.saved_payment_method_options.allow_redisplay_filters, [
+    "always",
+    "limited",
+    "unspecified",
+  ]);
+});
