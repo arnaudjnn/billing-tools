@@ -91,6 +91,18 @@ export async function listPaymentMethods(
 export async function createCardSetupIntent(
   adapter: BillingAdapter,
   orgId: string,
+  opts: {
+    /**
+     * A payment-method configuration id (see `ensurePaymentMethodConfig`).
+     *
+     * The ONLY way to keep Link out of this form. `payment_method_types: ["card"]`
+     * removes Link as a payment METHOD but not its inline signup ("Save my info
+     * for faster checkout"), which the Payment Element draws from the account's
+     * Link setting. Mutually exclusive with `payment_method_types`, so passing
+     * this replaces it.
+     */
+    paymentMethodConfiguration?: string;
+  } = {},
 ): Promise<{ clientSecret: string; customerId: string }> {
   const customerId = await customerFor(adapter, orgId);
   if (!customerId) throw new Error("No billing customer for this organization");
@@ -98,7 +110,12 @@ export async function createCardSetupIntent(
   const intent = await getStripe().setupIntents.create({
     customer: customerId,
     usage: "off_session",
-    payment_method_types: ["card"],
+    ...(opts.paymentMethodConfiguration
+      ? {
+          payment_method_configuration: opts.paymentMethodConfiguration,
+          automatic_payment_methods: { enabled: true },
+        }
+      : { payment_method_types: ["card"] }),
   });
   if (!intent.client_secret) throw new Error("Stripe returned no client secret");
   return { clientSecret: intent.client_secret, customerId };

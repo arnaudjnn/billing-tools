@@ -145,6 +145,12 @@ export async function createCheckoutSession(opts: {
    * account's dashboard settings.
    */
   paymentMethods?: string[] | "automatic";
+  /**
+   * A payment-method configuration id (see `ensurePaymentMethodConfig`). Replaces
+   * `payment_method_types` (Stripe rejects both) and is the only way to remove
+   * Link, whose inline signup ignores the method list.
+   */
+  paymentMethodConfiguration?: string;
   metadata?: Record<string, string>;
   /**
    * Hand back the session already open for this exact basket instead of opening
@@ -262,6 +268,7 @@ async function openCheckoutSession(opts: {
   taxRates?: string[];
   taxIdCollection?: boolean;
   paymentMethods?: string[] | "automatic";
+  paymentMethodConfiguration?: string;
   metadata?: Record<string, string>;
 }): Promise<CheckoutSessionResult> {
   const stripe = getStripe();
@@ -313,9 +320,13 @@ async function openCheckoutSession(opts: {
     // tax in most places but not everywhere, and an invoice wants the real thing.
     billing_address_collection: "required",
     return_url: opts.returnUrl,
-    ...(opts.paymentMethods === "automatic"
-      ? {}
-      : { payment_method_types: (opts.paymentMethods ?? ["card"]) as Stripe.Checkout.SessionCreateParams.PaymentMethodType[] }),
+    // A configuration wins: it is the only lever that removes Link, and Stripe
+    // rejects a session that carries both it and an explicit method list.
+    ...(opts.paymentMethodConfiguration
+      ? { payment_method_configuration: opts.paymentMethodConfiguration }
+      : opts.paymentMethods === "automatic"
+        ? {}
+        : { payment_method_types: (opts.paymentMethods ?? ["card"]) as Stripe.Checkout.SessionCreateParams.PaymentMethodType[] }),
     // Metadata on BOTH: the session is the checkout attempt, the subscription is
     // what outlives it, and reconciliation reads the subscription.
     metadata: opts.metadata,
