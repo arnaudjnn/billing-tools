@@ -1,3 +1,10 @@
+# [0.69.0](https://github.com/arnaudjnn/billing-tools/compare/v0.68.0...v0.69.0) (2026-08-02)
+
+
+### Features
+
+* **ui:** prefill the whole billing address at checkout, not just the country ([60d52ef](https://github.com/arnaudjnn/billing-tools/commit/60d52efc84d1ebb1694e28bce000c1bb3c60a66d))
+
 # [0.68.0](https://github.com/arnaudjnn/billing-tools/compare/v0.67.0...v0.68.0) (2026-08-02)
 
 
