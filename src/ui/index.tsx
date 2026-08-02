@@ -368,9 +368,19 @@ export type CheckoutTotals = {
 export type BillingCheckoutSessionProviderProps = {
   /** Stripe publishable key (pk_…). Safe in the browser by design. */
   publishableKey: string;
-  /** `clientSecret` from `createCheckoutSession`. Cannot be changed once set —
-   *  to price a new basket, create a new session and remount (key on it). */
-  clientSecret: string;
+  /**
+   * `clientSecret` from `createCheckoutSession`, or a PROMISE of one. Cannot be
+   * changed once set — to price a new basket, create a new session and remount
+   * (key on the basket).
+   *
+   * Pass the promise. Stripe awaits it internally, which means the provider
+   * mounts at hydration and starts loading Stripe.js and rendering its skeleton
+   * while the session is still being created, instead of the app holding a
+   * spinner until it resolves and only then beginning. Two waits in sequence
+   * become one in parallel, and it is the difference between a payment form
+   * appearing in ~1.5s and in ~0.5s.
+   */
+  clientSecret: string | Promise<string>;
   /** Stripe Elements appearance, so the form inherits the host app's theme. */
   appearance?: Appearance;
   /**
@@ -442,7 +452,11 @@ export function BillingCheckoutSessionProvider({
       stripe={stripe}
       options={{
         clientSecret,
-        elementsOptions: { appearance },
+        // `always`: Stripe draws its own skeleton, in OUR appearance, from the
+        // moment the element mounts until it is interactive. The default (`auto`)
+        // leaves a blank box for that window, which reads as a broken form when
+        // the window is a slow first paint of a cross-origin iframe.
+        elementsOptions: { appearance, loader: "always" },
         // A full address wins over the bare country; either way the value lands on
         // the session so the first tax calculation has a location.
         ...(defaultAddress?.line1 && defaultAddress.country
