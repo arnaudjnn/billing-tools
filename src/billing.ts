@@ -440,9 +440,18 @@ export async function createCreditCheckoutSession(
       ? {
           ui_mode: "custom" as "custom",
           return_url: opts.successUrl ?? `${config.baseUrl}/billing/success?credits=${credits}`,
-          // The saved card is offered rather than re-collected: a customer who has
-          // one should not type it again to buy credits.
-          saved_payment_method_options: { payment_method_save: "enabled" },
+          saved_payment_method_options: {
+            // Offer the cards the customer already has. `payment_method_save`
+            // alone does NOT do this — measured: with only that set, a customer
+            // with a saved card was still shown blank card fields. It controls the
+            // "save for future use" CHECKBOX; surfacing existing methods is
+            // `allow_redisplay_filters`, matched against each method's own
+            // `allow_redisplay` (cards saved off-session are `always`).
+            allow_redisplay_filters: ["always"],
+            // And keep offering to save a NEW card, so a first purchase leaves
+            // something behind for auto-reload.
+            payment_method_save: "enabled",
+          },
         }
       : {}),
     ...(pmc ? { payment_method_configuration: pmc } : {}),
