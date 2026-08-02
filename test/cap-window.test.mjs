@@ -165,3 +165,41 @@ test('covers: "users" with no way to buy credits is flagged', () => {
   assert.equal(found.length, 1);
   assert.match(found[0].detail, /every API key and agent/);
 });
+
+// ── callerKind on a rate limit ───────────────────────────────────────────────
+//
+// The pace a person sustains and the pace a script does are different problems,
+// so they are different limits. Separating them used to require a dedicated
+// `shared` seat TYPE to hang `seatType` off — and a plan that funds API usage from
+// the wallet has no such seat, so both limits landed on every caller and the
+// tighter one made the other unreachable.
+
+import { rateLimitsOf } from "../dist/index.js";
+
+const paced = normalizePlan("pro", {
+  sells: { kind: "seats", seatTypes: { standard: { price: { monthly: 2104, yearly: 21600 } } } },
+  cap: { kind: "per_seat", covers: "users" },
+  replenish: { purchase: {} },
+  limits: {
+    rate: [
+      { every: "week", credits: 500, scope: "caller", callerKind: "user" },
+      { every: "hour", credits: 600, scope: "caller", callerKind: "api" },
+    ],
+  },
+  sale: "self_serve",
+});
+
+test("a limit declared for one caller kind applies only to that kind", () => {
+  const forUser = rateLimitsOf(paced, { kind: "user", id: "u1", seatType: "standard" });
+  const forApi = rateLimitsOf(paced, { kind: "api" });
+  assert.deepEqual(forUser.map((l) => l.every), ["week"]);
+  assert.deepEqual(forApi.map((l) => l.every), ["hour"]);
+});
+
+test("the doctor no longer calls the wider one unreachable", () => {
+  // 500/week and 600/hour contradict each other ONLY if they can hit the same
+  // caller. Declared per kind they never meet, so comparing them was the false
+  // positive that made this config look broken.
+  const found = checkPlansConfig({ pro: paced }).checks.filter((c) => /unreachable/.test(c.title));
+  assert.deepEqual(found, []);
+});

@@ -322,6 +322,17 @@ export interface RateLimit {
   scope?: "org" | "caller";
   /** Restrict to callers of one seat type. Only meaningful with `scope: caller`. */
   seatType?: string;
+  /**
+   * Restrict to people (`user`) or to machines (`api`).
+   *
+   * The pace a person can sustain and the pace a script can are different
+   * problems, so they are usually different limits — "500 a week each" for members
+   * and "600 an hour" for agents. Before this, the only way to separate them was a
+   * dedicated `shared` seat TYPE to hang `seatType` off; a plan that funds API
+   * usage from the wallet has no such seat, and both limits then landed on every
+   * caller, where the tighter one made the other unreachable.
+   */
+  callerKind?: "user" | "api";
   /** Label for a usage screen. Defaults to the window name. */
   label?: string;
 }
@@ -879,13 +890,17 @@ export function rateWindowFor(
  */
 export function rateLimitsOf(
   model: PlanModel | null,
-  caller?: { seatType?: string } | null,
+  caller?: { seatType?: string; kind?: "user" | "api" } | null,
 ): readonly RateLimit[] {
   if (!model) return [];
   return model.limits.rate.filter((l) => {
     const scope = l.scope ?? "org";
     if (scope === "caller" && !caller) return false;
     if (l.seatType && caller?.seatType !== l.seatType) return false;
+    // A limit for machines does not apply to a person, and vice versa. An
+    // org-scoped limit with no `callerKind` still applies to everyone.
+    if (l.callerKind && caller?.kind && l.callerKind !== caller.kind) return false;
+    if (l.callerKind && !caller?.kind) return false;
     return true;
   });
 }

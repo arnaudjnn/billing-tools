@@ -148,7 +148,10 @@ export async function resolveAllowance(
             ? input.caller?.kind === "api"
               ? { callerKind: "api" }
               : { callerKind: "user", callerId: input.caller?.id }
-            : undefined,
+            : // An org-wide limit declared for one KIND of caller still sums the
+              // whole workspace, but only that kind's usage — "600 an hour across
+              // every agent" is not the same window as one agent's.
+              (limit.callerKind ? { callerKind: limit.callerKind } : undefined),
       })
       .then((used) => ({
         every: limit.every,

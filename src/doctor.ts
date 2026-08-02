@@ -384,7 +384,7 @@ export function checkPlansConfig(
     const lengths: Record<string, number> = { hour: 1, day: 2, week: 3, month: 4, cycle: 5 };
     const groups = new Map<string, typeof m.limits.rate[number][]>();
     for (const l of m.limits.rate) {
-      const key = `${l.scope ?? "org"}:${l.seatType ?? ""}`;
+      const key = `${l.scope ?? "org"}:${l.seatType ?? ""}:${l.callerKind ?? ""}`;
       groups.set(key, [...(groups.get(key) ?? []), l]);
     }
     for (const group of groups.values()) {
