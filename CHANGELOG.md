@@ -1,3 +1,10 @@
+# [2.2.0](https://github.com/arnaudjnn/billing-tools/compare/v2.1.0...v2.2.0) (2026-08-02)
+
+
+### Features
+
+* **plans:** a rate limit can name the kind of caller it governs ([ef536bb](https://github.com/arnaudjnn/billing-tools/commit/ef536bb490155572e77ae20b430e5e1bb0ae1611))
+
 # [2.1.0](https://github.com/arnaudjnn/billing-tools/compare/v2.0.0...v2.1.0) (2026-08-02)
 
 
