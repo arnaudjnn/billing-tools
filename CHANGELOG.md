@@ -1,3 +1,10 @@
+## [0.66.1](https://github.com/arnaudjnn/billing-tools/compare/v0.66.0...v0.66.1) (2026-08-02)
+
+
+### Bug Fixes
+
+* **ui:** card-only forms render as a form, not as a one-item accordion ([cec6e8c](https://github.com/arnaudjnn/billing-tools/commit/cec6e8cae9bd53683d97399240c1db0ad51a6b57))
+
 # [0.66.0](https://github.com/arnaudjnn/billing-tools/compare/v0.65.0...v0.66.0) (2026-08-02)
 
 
