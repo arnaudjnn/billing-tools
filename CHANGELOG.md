@@ -1,3 +1,10 @@
+# [2.5.0](https://github.com/arnaudjnn/billing-tools/compare/v2.4.2...v2.5.0) (2026-08-02)
+
+
+### Features
+
+* **ui:** a checkout session offers the card already on file ([ea4e11a](https://github.com/arnaudjnn/billing-tools/commit/ea4e11a37224cc900159de06df3cecc86998dd05))
+
 ## [2.4.2](https://github.com/arnaudjnn/billing-tools/compare/v2.4.1...v2.4.2) (2026-08-02)
 
 
