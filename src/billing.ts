@@ -209,9 +209,15 @@ export async function getCreditBalance(
   if (customer.deleted) return 0;
 
   const want = currency?.toLowerCase();
+  // Negation is the whole conversion (a negative Stripe balance IS credit), and
+  // `-0` is a real JS value that survives it: an untouched wallet returned -0,
+  // which `Intl.NumberFormat` renders as "-0,00 €" on the first balance a customer
+  // ever sees. `|| 0` normalises it without touching any other value.
+  const credit = (n: number) => -n || 0;
+
   // No currency to reconcile against, or the scalar already denominates in it.
   if (!want || !customer.currency || customer.currency === want) {
-    return -customer.balance; // negative balance = credit
+    return credit(customer.balance);
   }
 
   // Mismatch: walk back to the most recent transaction in the wanted currency —
@@ -226,7 +232,7 @@ export async function getCreditBalance(
   for await (const tx of stripe.customers.listBalanceTransactions(stripeCustomerId, {
     limit: 100,
   })) {
-    if (tx.currency === want) return -tx.ending_balance;
+    if (tx.currency === want) return credit(tx.ending_balance);
     if (++scanned >= 500) break;
   }
   return 0;
