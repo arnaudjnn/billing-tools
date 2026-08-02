@@ -6,6 +6,9 @@ name: Test
 # The suite is offline by design: no Stripe key, no WorkOS key, no network. The
 # paths that genuinely need Stripe live in the test-clock script, which is run
 # deliberately against the test account rather than on every push.
+#
+# `npm test` builds first and then runs Vitest over test/**: the tests import
+# from dist/, so they exercise the artifact that actually gets published.
 
 on:
   push:

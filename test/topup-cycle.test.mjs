@@ -7,7 +7,7 @@
 // succeeded and the member stayed blocked.
 
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "vitest";
 
 import { currentCycle, legacyCycleKey } from "../dist/allowance.js";
 import { approveTopUp, extraAllowance, requestTopUp } from "../dist/topup.js";

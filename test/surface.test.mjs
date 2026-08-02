@@ -10,7 +10,7 @@
 process.env.STRIPE_SECRET_KEY ??= "sk_test_fake";
 
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "vitest";
 
 import { createDispatcher } from "../dist/dispatch.js";
 import { BILLING_TOOL_NAMES, registerBillingTools } from "../dist/tools/register.js";

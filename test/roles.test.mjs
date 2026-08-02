@@ -9,7 +9,7 @@
 // names a user gets checked.
 
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "vitest";
 
 import { enforceAdmin, runWithAuth, runWithPrincipal } from "../dist/auth.js";
 

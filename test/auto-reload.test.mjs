@@ -13,7 +13,7 @@
 process.env.STRIPE_SECRET_KEY ??= "sk_test_fake";
 
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "vitest";
 
 /** Records every Stripe call and the idempotency key it carried. */
 function fakeStripe({ balance = 0, cards = ["pm_1"] } = {}) {

@@ -79,7 +79,8 @@
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist",
     "prepublishOnly": "npm run build",
-    "test": "npm run build && node --test \"test/*.test.mjs\""
+    "test": "npm run build && vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@stripe/react-stripe-js": "^6",
@@ -121,6 +122,7 @@
     "react": "^19.2.8",
     "semantic-release": "^24.2.0",
     "typescript": "^5",
+    "vitest": "^4.1.10",
     "zod": "^3.25.76"
   },
   "main": "./dist/index.js"
