@@ -20,7 +20,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Version pinned HERE, not via a `packageManager` field in package.json:
+      # release.yml publishes with npm (OIDC needs npm >= 11.5.1), and a
+      # packageManager: pnpm entry can make a corepack-managed npm refuse to
+      # run. Keeping the pin in this workflow cannot touch the release path.
       - uses: pnpm/action-setup@v4
+        with:
+          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: 22
