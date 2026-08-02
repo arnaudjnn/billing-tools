@@ -181,7 +181,8 @@ export function BillingAddressForm({
               pointerEvents: "none",
             }}
           >
-            <PaymentElement />
+            {/* Decorative preview; matches the real forms' layout. */}
+            <PaymentElement options={{ layout: { type: "tabs" } }} />
           </div>
         )}
       </div>

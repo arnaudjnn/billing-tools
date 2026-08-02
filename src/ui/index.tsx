@@ -244,7 +244,24 @@ export function BillingPaymentForm({
   return (
     <form onSubmit={onSubmit} className={className}>
       {collectAddress && <AddressElement options={{ mode: "billing" }} />}
-      <PaymentElement />
+      {/*
+        `tabs` is what makes a card-only form look like a form. The default
+        (accordion) always draws a header row for the method — a "Card" label and
+        an icon above the fields — even when there is exactly one method and
+        nothing to choose. The tabs layout renders no tab bar for a single method,
+        so the card fields sit inline with the surrounding inputs. MEASURED, not
+        assumed: with one method the accordion still shows its header.
+
+        `wallets.link: never` removes the Link WALLET. It does not remove Link's
+        inline signup ("Save my info for faster checkout") — that comes from the
+        account's Link setting, and only a payment-method configuration with Link
+        off turns it off (see ensurePaymentMethodConfig, passed to the SetupIntent).
+        Both are set because the client option can be dropped by a refactor while
+        the configuration is server-side and cannot.
+      */}
+      <PaymentElement
+        options={{ layout: { type: "tabs" }, wallets: { link: "never" } }}
+      />
       {collectTaxId && <TaxIdElement options={{}} />}
       {children({ submitting })}
     </form>
@@ -486,8 +503,14 @@ export function BillingCheckoutSessionForm({
   return (
     <form onSubmit={onSubmit} className={className}>
       {collectAddress && <BillingAddressElement />}
+      {/* Same reason as AddCardForm: no accordion header when there is one
+          method to pick. With several (a wallet, Klarna) the tabs appear, which
+          is correct — there is then something to choose. */}
       <CheckoutPaymentElement
-        options={{ wallets: { link: link ? "auto" : "never" } }}
+        options={{
+          layout: { type: "tabs" },
+          wallets: { link: link ? "auto" : "never" },
+        }}
       />
       {collectTaxId && taxIdAvailable && <CheckoutTaxIdElement options={{}} />}
       {children({ submitting })}
