@@ -72,6 +72,25 @@ This was NOT true before the audit: plan changes, payment methods, the billing p
 
 `registerBillingTools` gates two groups: `profileTools` (default on) and `subscriptionTools` (default on when `plans` is set), so an app that keeps plan changes in its own UI can pass `false`.
 
+## Changing plan mid-cycle — what the customer is charged
+
+Measured, not assumed (`scripts/e2e-proration.mjs`, test clock, Pro €18/mo → Premium €90/mo on day 15 of 30):
+
+| | charged today | next invoice |
+|---|---|---|
+| **upgrade, deferred** — `proration: "next_invoice"` (default) | nothing | **€127.16** = −€9.29 unused Pro **+** €46.45 Premium remainder **+** €90 next month |
+| **upgrade, immediate** — `proration: "invoice_now"` | €37.16 | €90.00 |
+| **downgrade** — `timing: "auto"` → period end (default) | nothing | €18.00 |
+| **downgrade now** — `timing: "now"` | nothing | €18.00, with the unused remainder credited |
+
+**The customer pays the same in both upgrade cases** — €37.16 either way, only the timing differs. The unused part of the old plan is always credited back; that is the `−€9.29` line, and `previewPlanChange` reports it as `credit`.
+
+**Why deferred is the default.** Billing immediately means taking a payment, and a payment can be challenged by SCA. `always_invoice` + `pending_if_incomplete` then leaves the upgrade *not applied* until the customer completes the challenge, and the pending update expires in ~23h — an upgrade that silently doesn't happen is worse than a larger invoice, especially for a European consumer app. The cost of deferring is the surprise: the next invoice is €127.16, not €90. That is why `previewPlanChange` returns **`nextInvoiceTotal` AND `nextInvoiceAt`** — quote both and it stops being a surprise. Apps that prefer the industry-common immediate charge pass `proration: "invoice_now"`.
+
+**Why a downgrade credits nothing.** It takes effect at the period end, so the customer keeps the tier they already paid for and loses nothing — there is nothing to refund. This is Stripe's own recommendation and near-universal SaaS practice. `timing: "now"` gives the alternative (drop immediately, credit the remainder), which is worse for the customer on features and leaves a credit balance that auto-applies to a later invoice — the exact mechanism behind the grant-vs-cap defect above.
+
+`previewPlanChange` shares `desiredPrices` and `diffItems` with `changePlan`, so the quoted number is the charged number. Pass it the **same** `proration` you will pass to `changePlan`, or you are quoting a different policy from the one you apply.
+
 ## Who is calling — org vs principal (`src/auth.ts`)
 
 Every call resolves to an **org**. An org API key means exactly that: the org, with no person behind it, which is what a headless agent holds. So org-keyed calls are owner-level, deliberately and unchanged.

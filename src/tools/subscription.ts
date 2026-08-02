@@ -105,6 +105,7 @@ change_plan — the numbers come from the same arithmetic, so they agree.`,
           recurring_total: p.recurringTotal,
           credit_applied: p.credit,
           effective_at: p.effectiveAt,
+          next_invoice_at: p.nextInvoiceAt,
           lines: p.lines,
         });
       } catch (e) {

@@ -512,6 +512,17 @@ export interface PlanChangePreview {
   credit: number;
   /** When the change takes effect — now, or the period end for a scheduled one. */
   effectiveAt: string | null;
+  /**
+   * When `nextInvoiceTotal` will actually be charged.
+   *
+   * Deferring the proration is the kinder default (no payment today, so no SCA
+   * challenge and no upgrade that silently fails to apply), but it produces the
+   * classic surprise: measured on a mid-month €18 → €90 upgrade, the next
+   * invoice is €127.16, not €90. A surface that shows the figure AND the date
+   * turns that from a surprise into a quote, which is the whole reason this
+   * field exists.
+   */
+  nextInvoiceAt: string | null;
   /** The proration lines Stripe would write, for an itemised summary. */
   lines: Array<{ description: string; amount: number; proration: boolean }>;
 }
@@ -557,6 +568,7 @@ export async function previewPlanChange(
     recurringTotal: 0,
     credit: 0,
     effectiveAt,
+    nextInvoiceAt: null,
     lines: [],
   });
 
@@ -632,6 +644,7 @@ export async function previewPlanChange(
       recurringTotal,
       credit: 0,
       effectiveAt: periodEndOf(sub),
+      nextInvoiceAt: periodEndOf(sub),
       lines: [],
     };
   }
@@ -649,6 +662,8 @@ export async function previewPlanChange(
     recurringTotal,
     credit,
     effectiveAt: new Date().toISOString(),
+    // The next scheduled invoice is the one the deferred proration rides on.
+    nextInvoiceAt: periodEndOf(sub),
     lines,
   };
 }

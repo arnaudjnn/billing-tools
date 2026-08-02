@@ -549,6 +549,7 @@ export async function resolvePlanPrices(
   opts: { currency?: string; taxBehavior?: Stripe.Price.TaxBehavior } = {},
 ): Promise<PlanPrices> {
   const key = memoKey(plans, opts);
+  if (memo?.key === "__test__") return memo.prices;
   if (memo && memo.key === key && Date.now() - memo.at < MEMO_TTL_MS) return memo.prices;
   if (inflight && inflight.key === key) return inflight.promise;
 
@@ -576,6 +577,19 @@ export async function resolvePlanPrices(
  */
 export function invalidatePlanPrices(): void {
   memo = null;
+}
+
+/**
+ * Prime the price memo. TESTS ONLY.
+ *
+ * `resolvePlanPrices` provisions through `ensurePlans`, which WRITES to Stripe
+ * and archives anything the passed catalogue doesn't mention — a partial config
+ * once archived every real price in the test account that way. So a test that
+ * wants the arithmetic downstream of price resolution stubs the map instead of
+ * letting the reconcile run. Nothing in the library calls this.
+ */
+export function __setPlanPricesForTests(prices: PlanPrices): void {
+  memo = { key: "__test__", at: Number.MAX_SAFE_INTEGER, prices };
 }
 
 /** Resolve the current Stripe price id for a plan + interval (via lookup_key).
