@@ -1,3 +1,10 @@
+# [0.65.0](https://github.com/arnaudjnn/billing-tools/compare/v0.64.3...v0.65.0) (2026-08-02)
+
+
+### Features
+
+* **subscription:** previewPlanChange says WHEN the deferred difference lands ([f8c4b43](https://github.com/arnaudjnn/billing-tools/commit/f8c4b43b0f1acdeec3a38c71ae4c78ffcdf5b0f2))
+
 ## [0.64.3](https://github.com/arnaudjnn/billing-tools/compare/v0.64.2...v0.64.3) (2026-08-01)
 
 
