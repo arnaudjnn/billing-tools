@@ -20,10 +20,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      # Same flag the release job uses: the peer deps are supplied by the host app.
-      - run: npm install --legacy-peer-deps
-      - run: npm run typecheck
-      - run: npm test
+          cache: pnpm
+      # pnpm, not npm: the repo's lockfile is pnpm-lock.yaml, and `npm install`
+      # ignores it entirely — CI was resolving fresh versions on every run, so
+      # a transitive dependency could change under it and the lockfile everyone
+      # develops against was never validated. --frozen-lockfile makes a stale
+      # lockfile a failure instead of a silent re-resolve.
+      #
+      # release.yml stays on npm on purpose: publishing needs npm >= 11.5.1 for
+      # OIDC trusted publishing.
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      # Builds first, then runs Vitest over test/** — the tests import from
+      # dist/, so they exercise the artifact that actually gets published.
+      - run: pnpm test

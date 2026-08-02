@@ -17,6 +17,11 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "node",
+    // On CI, also emit GitHub Actions annotations: a failing assertion shows up
+    // inline on the pull request's diff, on the offending line. This is what a
+    // "test bot" GitHub App would sell you, built into the runner — no app, no
+    // org-wide repo permissions, nothing to keep authorised.
+    reporters: process.env.CI ? ["default", "github-actions"] : ["default"],
     include: ["test/**/*.test.mjs"],
   },
 });
