@@ -68,7 +68,10 @@ function stripeFor(
   const key = `${publishableKey}|${(betas ?? []).join(",")}|${locale ?? ""}`;
   const hit = stripeCache.get(key);
   if (hit) return hit;
-  const options = { ...(betas?.length ? { betas } : {}), ...(locale ? { locale } : {}) };
+  const options = {
+    ...(betas?.length ? { betas } : {}),
+    ...(locale ? { locale } : {}),
+  };
   const p = Object.keys(options).length
     ? loadStripe(publishableKey, options)
     : loadStripe(publishableKey);
@@ -142,6 +145,29 @@ export type BillingPaymentFormProps = {
    * tax line stays 0 and the total silently disagrees with the summary above.
    */
   collectAddress?: boolean;
+  /**
+   * Hide the address fields, keeping them collected.
+   *
+   * For a caller that already has a complete address on file and wants to show its
+   * OWN one-line summary of it — "name / street / postcode city country", with a
+   * "change" action — instead of six prefilled inputs. This is what a Checkout
+   * Session does on its own (`BillingAddressElement` collapses when the session
+   * carries an address), and the reason this prop exists is that the SetupIntent
+   * path has no equivalent: Stripe's plain `AddressElement` has no collapsed mode,
+   * so the same customer met two different address UIs depending on which dialog
+   * they opened.
+   *
+   * The summary itself is the CALLER's, rendered from the same `defaultAddress` and
+   * placed in `children` — which lands directly after the address, where the fields
+   * would have been. The look stays app-side, like the submit button.
+   *
+   * The element is still MOUNTED while collapsed, and that is the whole trick:
+   * confirm reads the address from every mounted element in the group, so nothing
+   * about confirmation changes and a collapsed form submits exactly what an expanded
+   * one would. Flipping this back to false reveals the real fields with their values
+   * intact — no remount, so no lost input.
+   */
+  addressCollapsed?: boolean;
   /**
    * Render Stripe's Tax ID Element — the "Business tax ID (Optional)" field with
    * its type selector.
@@ -225,6 +251,7 @@ export type BillingPaymentFormProps = {
  */
 export function BillingPaymentForm({
   collectAddress = false,
+  addressCollapsed = false,
   collectTaxId = false,
   defaultAddress,
   returnUrl,
@@ -268,8 +295,10 @@ export function BillingPaymentForm({
         return;
       }
       onSuccess?.({
-        setupIntent: "setupIntent" in result ? (result.setupIntent ?? null) : null,
-        paymentIntent: "paymentIntent" in result ? (result.paymentIntent ?? null) : null,
+        setupIntent:
+          "setupIntent" in result ? (result.setupIntent ?? null) : null,
+        paymentIntent:
+          "paymentIntent" in result ? (result.paymentIntent ?? null) : null,
       });
     } finally {
       setSubmitting(false);
@@ -300,28 +329,53 @@ export function BillingPaymentForm({
           the address is the paperwork that follows it. Stripe re-validates on
           submit either way, so the order is presentation, not logic. */}
       {collectAddress && (
-        <AddressElement
-          options={{
-            mode: "billing",
-            // Only the fields we actually have: Stripe rejects a defaultValues
-            // address with a null line1, and an empty string is not "unset".
-            ...(defaultAddress?.line1 && defaultAddress.country
+        // Collapsed = taken OUT OF FLOW and made invisible, not unmounted and not
+        // `display: none`. Three things had to hold at once:
+        //   • mounted, so confirm still reads the address (see `addressCollapsed`);
+        //   • laid out at a real width, because a Stripe element that first mounts
+        //     inside a `display: none` box can come back zero-height when revealed;
+        //   • out of flow, or a zero-height child would still draw the parent's flex
+        //     `gap` and leave a band of dead space where the fields used to be.
+        // `visibility: hidden` is what also takes the fields out of the tab order —
+        // clipping alone leaves an invisible field focusable.
+        <div
+          style={
+            addressCollapsed
               ? {
-                  defaultValues: {
-                    ...(defaultAddress.name ? { name: defaultAddress.name } : {}),
-                    address: {
-                      line1: defaultAddress.line1,
-                      line2: defaultAddress.line2 ?? undefined,
-                      city: defaultAddress.city ?? undefined,
-                      state: defaultAddress.state ?? undefined,
-                      postal_code: defaultAddress.postal_code ?? undefined,
-                      country: defaultAddress.country,
-                    },
-                  },
+                  position: "fixed",
+                  top: -9999,
+                  left: 0,
+                  width: "100%",
+                  visibility: "hidden",
                 }
-              : {}),
-          }}
-        />
+              : undefined
+          }
+        >
+          <AddressElement
+            options={{
+              mode: "billing",
+              // Only the fields we actually have: Stripe rejects a defaultValues
+              // address with a null line1, and an empty string is not "unset".
+              ...(defaultAddress?.line1 && defaultAddress.country
+                ? {
+                    defaultValues: {
+                      ...(defaultAddress.name
+                        ? { name: defaultAddress.name }
+                        : {}),
+                      address: {
+                        line1: defaultAddress.line1,
+                        line2: defaultAddress.line2 ?? undefined,
+                        city: defaultAddress.city ?? undefined,
+                        state: defaultAddress.state ?? undefined,
+                        postal_code: defaultAddress.postal_code ?? undefined,
+                        country: defaultAddress.country,
+                      },
+                    },
+                  }
+                : {}),
+            }}
+          />
+        </div>
       )}
       {collectTaxId && <TaxIdElement options={{}} />}
       {children({ submitting })}
@@ -444,7 +498,8 @@ export function BillingCheckoutSessionProvider({
   children,
 }: BillingCheckoutSessionProviderProps) {
   const stripe = React.useMemo(
-    () => stripeFor(publishableKey, taxIdBeta ? [TAX_ID_BETA] : undefined, locale),
+    () =>
+      stripeFor(publishableKey, taxIdBeta ? [TAX_ID_BETA] : undefined, locale),
     [publishableKey, taxIdBeta, locale],
   );
   return (
@@ -476,7 +531,11 @@ export function BillingCheckoutSessionProvider({
               },
             }
           : defaultCountry
-            ? { defaultValues: { billingAddress: { address: { country: defaultCountry } } } }
+            ? {
+                defaultValues: {
+                  billingAddress: { address: { country: defaultCountry } },
+                },
+              }
             : {}),
       }}
     >
@@ -600,7 +659,8 @@ export function BillingCheckoutSessionForm({
   // it's missing the checkout still works — no tax ID field, and B2B customers
   // enter their VAT number on the invoice side instead.
   const taxIdAvailable =
-    result.type === "success" && typeof result.checkout.createTaxIdElement === "function";
+    result.type === "success" &&
+    typeof result.checkout.createTaxIdElement === "function";
 
   // Charging a card the app ALREADY KNOWS ABOUT, rather than asking Stripe which
   // cards exist.
@@ -626,7 +686,9 @@ export function BillingCheckoutSessionForm({
       if (!payWith) {
         const validated = await result.checkout.validateElements();
         if (validated.type === "error") {
-          onError?.(validated.error.message ?? "Payment details are incomplete");
+          onError?.(
+            validated.error.message ?? "Payment details are incomplete",
+          );
           return;
         }
       }
@@ -661,7 +723,9 @@ export function BillingCheckoutSessionForm({
           {/* Card first here too, so the two forms read the same way. The address
               still drives the tax recalculation; it just sits below now. */}
           {collectAddress && <BillingAddressElement />}
-          {collectTaxId && taxIdAvailable && <CheckoutTaxIdElement options={{}} />}
+          {collectTaxId && taxIdAvailable && (
+            <CheckoutTaxIdElement options={{}} />
+          )}
         </>
       )}
       {children({ submitting })}
@@ -705,17 +769,51 @@ export {
 const TAX_ID_TYPE_BY_COUNTRY: Record<string, StripeCheckoutTaxIdType> = {
   // EU: one type for the whole single market, which is what makes intra-EU
   // reverse charge work.
-  AT: "eu_vat", BE: "eu_vat", BG: "eu_vat", CY: "eu_vat", CZ: "eu_vat",
-  DE: "eu_vat", DK: "eu_vat", EE: "eu_vat", ES: "eu_vat", FI: "eu_vat",
-  FR: "eu_vat", GR: "eu_vat", HR: "eu_vat", HU: "eu_vat", IE: "eu_vat",
-  IT: "eu_vat", LT: "eu_vat", LU: "eu_vat", LV: "eu_vat", MT: "eu_vat",
-  NL: "eu_vat", PL: "eu_vat", PT: "eu_vat", RO: "eu_vat", SE: "eu_vat",
-  SI: "eu_vat", SK: "eu_vat",
+  AT: "eu_vat",
+  BE: "eu_vat",
+  BG: "eu_vat",
+  CY: "eu_vat",
+  CZ: "eu_vat",
+  DE: "eu_vat",
+  DK: "eu_vat",
+  EE: "eu_vat",
+  ES: "eu_vat",
+  FI: "eu_vat",
+  FR: "eu_vat",
+  GR: "eu_vat",
+  HR: "eu_vat",
+  HU: "eu_vat",
+  IE: "eu_vat",
+  IT: "eu_vat",
+  LT: "eu_vat",
+  LU: "eu_vat",
+  LV: "eu_vat",
+  MT: "eu_vat",
+  NL: "eu_vat",
+  PL: "eu_vat",
+  PT: "eu_vat",
+  RO: "eu_vat",
+  SE: "eu_vat",
+  SI: "eu_vat",
+  SK: "eu_vat",
   // Non-EU Europe + the majors.
-  GB: "gb_vat", CH: "ch_vat", NO: "no_vat",
-  AU: "au_abn", NZ: "nz_gst", CA: "ca_bn", US: "us_ein",
-  JP: "jp_cn", SG: "sg_gst", IN: "in_gst", BR: "br_cnpj", MX: "mx_rfc",
-  ZA: "za_vat", AE: "ae_trn", SA: "sa_vat", TR: "tr_tin", KR: "kr_brn",
+  GB: "gb_vat",
+  CH: "ch_vat",
+  NO: "no_vat",
+  AU: "au_abn",
+  NZ: "nz_gst",
+  CA: "ca_bn",
+  US: "us_ein",
+  JP: "jp_cn",
+  SG: "sg_gst",
+  IN: "in_gst",
+  BR: "br_cnpj",
+  MX: "mx_rfc",
+  ZA: "za_vat",
+  AE: "ae_trn",
+  SA: "sa_vat",
+  TR: "tr_tin",
+  KR: "kr_brn",
 };
 
 export type BillingTaxIdState = {
@@ -763,13 +861,17 @@ export function useBillingTaxId(): BillingTaxIdState {
   const apply = React.useCallback(
     async (businessName?: string) => {
       if (!checkout) return null;
-      const type = country ? TAX_ID_TYPE_BY_COUNTRY[country.toUpperCase()] : undefined;
+      const type = country
+        ? TAX_ID_TYPE_BY_COUNTRY[country.toUpperCase()]
+        : undefined;
       const trimmed = value.trim();
       // Clearing is a legitimate outcome: the customer typed a number, thought
       // better of it, and the session must forget it too.
       if (!trimmed || !type) {
         const cleared = await checkout.updateTaxIdInfo(null);
-        return cleared.type === "error" ? (cleared.error.message ?? "Invalid tax ID") : null;
+        return cleared.type === "error"
+          ? (cleared.error.message ?? "Invalid tax ID")
+          : null;
       }
       setApplying(true);
       try {
@@ -779,7 +881,8 @@ export function useBillingTaxId(): BillingTaxIdState {
           // the session (the address element's) is the sensible default.
           businessName: businessName ?? checkout.billingAddress?.name ?? "",
         });
-        const message = r.type === "error" ? (r.error.message ?? "Invalid tax ID") : null;
+        const message =
+          r.type === "error" ? (r.error.message ?? "Invalid tax ID") : null;
         setError(message);
         return message;
       } finally {
@@ -791,7 +894,9 @@ export function useBillingTaxId(): BillingTaxIdState {
 
   return {
     handledByStripe,
-    type: country ? (TAX_ID_TYPE_BY_COUNTRY[country.toUpperCase()] ?? null) : null,
+    type: country
+      ? (TAX_ID_TYPE_BY_COUNTRY[country.toUpperCase()] ?? null)
+      : null,
     country,
     value,
     setValue,
@@ -827,8 +932,7 @@ export type CheckoutSessionIntent = {
 };
 
 export type CheckoutSessionSync =
-  | ({ ok: true } & CheckoutSessionIntent)
-  | { ok: false; error: string };
+  ({ ok: true } & CheckoutSessionIntent) | { ok: false; error: string };
 
 /** A session plus the basket it was created for. */
 type InitialSession = ({ basket: string } & CheckoutSessionIntent) | null;
@@ -883,7 +987,9 @@ export function useCheckoutSession(opts: {
   // `.then().catch()` on it can blow up because `then` returns undefined. Detect
   // it structurally, and adopt it with `Promise.resolve` before chaining.
   const pendingServerSession = isThenable(initial);
-  const ready = pendingServerSession ? null : ((initial as InitialSession) ?? null);
+  const ready = pendingServerSession
+    ? null
+    : ((initial as InitialSession) ?? null);
 
   const [state, setState] = React.useState(ready);
   const [status, setStatus] = React.useState<CheckoutStatus>(
@@ -892,7 +998,8 @@ export function useCheckoutSession(opts: {
   const [error, setError] = React.useState<string | null>(null);
   // Nothing is fetched while the server's session is still streaming in — it is
   // about to answer for this very basket.
-  const [awaitingServer, setAwaitingServer] = React.useState(pendingServerSession);
+  const [awaitingServer, setAwaitingServer] =
+    React.useState(pendingServerSession);
 
   // The SDK is the same for every session, so warm it from whichever key is
   // known first rather than waiting for the one this render is fetching.
@@ -1012,11 +1119,20 @@ export function useCheckout(opts: {
   status: CheckoutStatus;
   error: string | null;
 } {
-  const { basket, create, update, cancel, debounceMs = 500, paused = false } = opts;
+  const {
+    basket,
+    create,
+    update,
+    cancel,
+    debounceMs = 500,
+    paused = false,
+  } = opts;
 
-  const [state, setState] = React.useState<
-    { basket: string; clientSecret: string; subscriptionId: string } | null
-  >(null);
+  const [state, setState] = React.useState<{
+    basket: string;
+    clientSecret: string;
+    subscriptionId: string;
+  } | null>(null);
   const [status, setStatus] = React.useState<CheckoutStatus>("idle");
   const [error, setError] = React.useState<string | null>(null);
 
@@ -1037,7 +1153,11 @@ export function useCheckout(opts: {
       if (ticket !== latest.current) return; // superseded by a newer basket
       if (r.ok) {
         subIdRef.current = r.subscriptionId;
-        setState({ basket, clientSecret: r.clientSecret, subscriptionId: r.subscriptionId });
+        setState({
+          basket,
+          clientSecret: r.clientSecret,
+          subscriptionId: r.subscriptionId,
+        });
         setStatus("ready");
       } else {
         setError(r.error);
@@ -1252,4 +1372,8 @@ export { BillingAddressForm, type AddressValue } from "./address.js";
 export { INVOICE_LOCALES, type InvoiceLocale } from "./locales.js";
 
 // Tax-ID types Stripe accepts (leaf module: safe for the browser).
-export { TAX_ID_TYPES, splitTaxIdType, type TaxIdType } from "./tax-id-types.js";
+export {
+  TAX_ID_TYPES,
+  splitTaxIdType,
+  type TaxIdType,
+} from "./tax-id-types.js";
