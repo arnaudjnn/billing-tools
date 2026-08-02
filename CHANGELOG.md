@@ -1,3 +1,10 @@
+# [2.6.0](https://github.com/arnaudjnn/billing-tools/compare/v2.5.1...v2.6.0) (2026-08-02)
+
+
+### Features
+
+* **ui:** let a caller collapse the address behind its own summary ([00b81d6](https://github.com/arnaudjnn/billing-tools/commit/00b81d658dbb1b2bdfc648d37e3f8ecced770f0b))
+
 ## [2.5.1](https://github.com/arnaudjnn/billing-tools/compare/v2.5.0...v2.5.1) (2026-08-02)
 
 
