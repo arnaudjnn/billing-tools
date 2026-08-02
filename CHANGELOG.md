@@ -1,3 +1,10 @@
+## [2.4.2](https://github.com/arnaudjnn/billing-tools/compare/v2.4.1...v2.4.2) (2026-08-02)
+
+
+### Bug Fixes
+
+* **billing:** a saved card must actually be OFFERED at an embedded top-up ([fe7f8e1](https://github.com/arnaudjnn/billing-tools/commit/fe7f8e11c4bbb3b6ab551fa5c854d591d2f5277a))
+
 ## [2.4.1](https://github.com/arnaudjnn/billing-tools/compare/v2.4.0...v2.4.1) (2026-08-02)
 
 
