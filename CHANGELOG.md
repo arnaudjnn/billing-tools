@@ -1,3 +1,10 @@
+## [0.70.2](https://github.com/arnaudjnn/billing-tools/compare/v0.70.1...v0.70.2) (2026-08-02)
+
+
+### Bug Fixes
+
+* **payments:** card and wallets only, not whatever the Dashboard has enabled ([de26988](https://github.com/arnaudjnn/billing-tools/commit/de269886ceaa4ffc4544646536253989d973e4e4))
+
 ## [0.70.1](https://github.com/arnaudjnn/billing-tools/compare/v0.70.0...v0.70.1) (2026-08-02)
 
 
