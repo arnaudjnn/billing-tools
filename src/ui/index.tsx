@@ -178,6 +178,25 @@ export type BillingPaymentFormProps = {
   children: (state: { submitting: boolean }) => React.ReactNode;
   /** Called after the intent is confirmed without a redirect. */
   /**
+   * Prefill the billing address (and cardholder name) from what the org already
+   * has on file — its billing profile.
+   *
+   * Worth doing because the alternative is not "empty", it is WRONG: with no
+   * default the Address Element guesses a country from the browser, so an Italian
+   * workspace was offered France. The customer then either corrects it or saves a
+   * card whose billing country is not theirs, which is a tax question, not a
+   * cosmetic one.
+   */
+  defaultAddress?: {
+    name?: string | null;
+    line1?: string | null;
+    line2?: string | null;
+    city?: string | null;
+    state?: string | null;
+    postal_code?: string | null;
+    country?: string | null;
+  } | null;
+  /**
    * Called after a successful confirm, WITH what was confirmed.
    *
    * The argument is what lets a caller act on the specific card that was just
@@ -207,6 +226,7 @@ export type BillingPaymentFormProps = {
 export function BillingPaymentForm({
   collectAddress = false,
   collectTaxId = false,
+  defaultAddress,
   returnUrl,
   intent = "payment",
   messages,
@@ -279,7 +299,30 @@ export function BillingPaymentForm({
       {/* Card FIRST, address second. The card is what the customer came to type;
           the address is the paperwork that follows it. Stripe re-validates on
           submit either way, so the order is presentation, not logic. */}
-      {collectAddress && <AddressElement options={{ mode: "billing" }} />}
+      {collectAddress && (
+        <AddressElement
+          options={{
+            mode: "billing",
+            // Only the fields we actually have: Stripe rejects a defaultValues
+            // address with a null line1, and an empty string is not "unset".
+            ...(defaultAddress?.line1 && defaultAddress.country
+              ? {
+                  defaultValues: {
+                    ...(defaultAddress.name ? { name: defaultAddress.name } : {}),
+                    address: {
+                      line1: defaultAddress.line1,
+                      line2: defaultAddress.line2 ?? undefined,
+                      city: defaultAddress.city ?? undefined,
+                      state: defaultAddress.state ?? undefined,
+                      postal_code: defaultAddress.postal_code ?? undefined,
+                      country: defaultAddress.country,
+                    },
+                  },
+                }
+              : {}),
+          }}
+        />
+      )}
       {collectTaxId && <TaxIdElement options={{}} />}
       {children({ submitting })}
     </form>
