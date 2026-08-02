@@ -1,3 +1,10 @@
+# [2.4.0](https://github.com/arnaudjnn/billing-tools/compare/v2.3.1...v2.4.0) (2026-08-02)
+
+
+### Features
+
+* **billing:** a top-up can render its payment form in the app ([8c8ed9d](https://github.com/arnaudjnn/billing-tools/commit/8c8ed9d2b7002efdf87e08ad07ec5f349cab04a2))
+
 ## [2.3.1](https://github.com/arnaudjnn/billing-tools/compare/v2.3.0...v2.3.1) (2026-08-02)
 
 
