@@ -77,3 +77,91 @@ test("overflowing to a wallet nobody can fill is flagged", () => {
     0,
   );
 });
+
+// ── covers: who the included window belongs to ───────────────────────────────
+//
+// "API usage is pay-as-you-go, 0 credits included" is a different statement from
+// `onExhausted`. A machine caller ALREADY overflowed to the wallet once a window
+// was spent; it still spent the window first, so an agent drew a person's monthly
+// allowance and could burn it in a minute.
+
+import { capCovers, fundingFor } from "../dist/index.js";
+
+const model = (cap) =>
+  normalizePlan("pro", {
+    sells: {
+      kind: "seats",
+      seatTypes: {
+        standard: { price: { monthly: 2104, yearly: 21600 }, includedCredits: 1000 },
+        api: { price: { monthly: 0, yearly: 0 }, includedCredits: 0, shared: true },
+      },
+    },
+    cap,
+    replenish: { purchase: {} },
+    sale: "self_serve",
+  });
+
+const state = (over) => ({
+  plan: "pro",
+  cycle: { start: 0, end: 1, key: "k" },
+  limits: [],
+  pool: null,
+  pack: { seatType: "standard", size: 1000, used: 0, extra: 0, remaining: 1000 },
+  wallet: 0,
+  ...over,
+});
+
+test("covers defaults to all, so a machine caller draws the window (unchanged)", () => {
+  const m = model({ kind: "per_seat" });
+  assert.equal(capCovers(m, { kind: "api" }), true);
+  assert.deepEqual(fundingFor(state(), m, 10, { kind: "api", seatType: "standard" }), {
+    ok: true,
+    source: "pack",
+  });
+});
+
+test('covers: "users" puts a machine caller on the wallet from its FIRST call', () => {
+  const m = model({ kind: "per_seat", covers: "users" });
+  assert.equal(capCovers(m, { kind: "user", seatType: "standard" }), true);
+  assert.equal(capCovers(m, { kind: "api" }), false);
+  // A shared seat is a machine caller too — the seat exists to be drawn by agents.
+  assert.equal(capCovers(m, { kind: "user", seatType: "api" }), false);
+
+  // The person still gets their pack.
+  assert.deepEqual(fundingFor(state(), m, 10, { kind: "user", seatType: "standard" }), {
+    ok: true,
+    source: "pack",
+  });
+  // The agent is refused with an empty wallet — 0 included, top up.
+  assert.deepEqual(fundingFor(state(), m, 10, { kind: "api", seatType: "standard" }), {
+    ok: false,
+    source: null,
+    reason: "insufficient_balance",
+  });
+  // ...and funded by it when there is money, rather than by the pack.
+  assert.deepEqual(fundingFor(state({ wallet: 500 }), m, 10, { kind: "api" }), {
+    ok: true,
+    source: "wallet",
+  });
+});
+
+test('a window the caller is not covered by is SKIPPED, not "exhausted"', () => {
+  // `onExhausted: "block"` must not refuse a machine caller over an allowance that
+  // was never included for it: the reason has to be the wallet, not the pack.
+  const m = model({ kind: "per_seat", covers: "users", onExhausted: "block" });
+  const f = fundingFor(state(), m, 10, { kind: "api" });
+  assert.equal(f.reason, "insufficient_balance");
+  assert.notEqual(f.reason, "seat_allowance_reached");
+});
+
+test('covers: "users" with no way to buy credits is flagged', () => {
+  const found = checkPlansConfig({
+    p: {
+      sells: { kind: "seats", seatTypes: { s: { price: { monthly: 2104, yearly: 21600 } } } },
+      cap: { kind: "per_seat", covers: "users" },
+      sale: "self_serve",
+    },
+  }).checks.filter((c) => /wallet it cannot fill/.test(c.title));
+  assert.equal(found.length, 1);
+  assert.match(found[0].detail, /every API key and agent/);
+});

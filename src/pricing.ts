@@ -83,6 +83,8 @@ export type {
   Sells,
   Grant,
   Cap,
+  CapWindow,
+  CapCovers,
   Replenish,
   Sale,
   Quantities,

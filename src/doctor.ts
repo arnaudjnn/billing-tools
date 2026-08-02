@@ -408,8 +408,14 @@ export function checkPlansConfig(
     // when its window runs out — or has no window at all — refuses every call past
     // that point unless the customer can put money in, so the claim and the
     // capability have to travel together.
+    const covers =
+      m.cap.kind === "per_seat" || m.cap.kind === "pool" ? (m.cap.covers ?? "all") : "all";
     const overflows =
       m.cap.kind === "wallet" ||
+      // `covers: "users"` puts every machine caller on the wallet from its first
+      // call, so the wallet is not a fallback there, it is the only funding an
+      // agent has.
+      covers === "users" ||
       ((m.cap.kind === "per_seat" || m.cap.kind === "pool") && m.cap.onExhausted === "wallet");
     if (overflows && !m.replenish.purchase && !m.replenish.autoReload) {
       checks.push({
@@ -418,8 +424,14 @@ export function checkPlansConfig(
         detail:
           m.cap.kind === "wallet"
             ? "the wallet is its only gate, but the plan offers no way to buy credits"
-            : 'its cap falls through to the wallet (`onExhausted: "wallet"`), but the plan offers no way to buy credits',
-        fix: 'Add `replenish: { purchase: {} }` (and/or `autoReload`), or set `onExhausted: "block"`',
+            : covers === "users"
+              ? 'its cap covers people only (`covers: "users"`), so every API key and agent is funded by the ' +
+                "wallet from its FIRST call — and the plan offers no way to buy credits"
+              : 'its cap falls through to the wallet (`onExhausted: "wallet"`), but the plan offers no way to buy credits',
+        fix:
+          covers === "users"
+            ? "Add `replenish: { purchase: {} }` (and/or `autoReload`), or drop `covers` so agents draw the included window"
+            : 'Add `replenish: { purchase: {} }` (and/or `autoReload`), or set `onExhausted: "block"`',
       });
     }
     // Two windows, one allowance: `rollover` widens the window to the
