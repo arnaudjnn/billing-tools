@@ -1,3 +1,10 @@
+# [0.68.0](https://github.com/arnaudjnn/billing-tools/compare/v0.67.0...v0.68.0) (2026-08-02)
+
+
+### Features
+
+* **ui:** prefill the card form's billing address from the org's profile ([96f6c44](https://github.com/arnaudjnn/billing-tools/commit/96f6c447443a35db6577c54747b74edb341d0c30))
+
 # [0.67.0](https://github.com/arnaudjnn/billing-tools/compare/v0.66.1...v0.67.0) (2026-08-02)
 
 
