@@ -1,3 +1,10 @@
+# [2.3.0](https://github.com/arnaudjnn/billing-tools/compare/v2.2.0...v2.3.0) (2026-08-02)
+
+
+### Features
+
+* **billing:** quote a credit purchase before charging it ([9c89393](https://github.com/arnaudjnn/billing-tools/commit/9c893931d6f8e16b819a7efa781ad6146884b401))
+
 # [2.2.0](https://github.com/arnaudjnn/billing-tools/compare/v2.1.0...v2.2.0) (2026-08-02)
 
 
