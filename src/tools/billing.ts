@@ -9,6 +9,7 @@ import {
   getAutoReloadSettings,
   setAutoReloadSettings,
   createCreditCheckoutSession,
+  quoteCreditPurchase,
   createBillingPortalSession,
   listInvoices,
   getInvoice,
@@ -67,6 +68,41 @@ export function registerBillingOnlyTools(
             type: "text" as const,
             text: JSON.stringify(
               { credit_balance: balance, tool_costs: toolCosts, auto_reload: autoReload || { enabled: false } },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    },
+  );
+
+  server.tool(
+    "preview_credit_purchase",
+    `What a credit purchase will cost, before buying: credits, tax and total.
+Quoted from the same Stripe tax rates buy_credits will charge, so the two agree.`,
+    {
+      amount: z.number().min(5).max(200000).describe("Amount in your currency to quote (e.g. 10 = 1000 credits)"),
+    },
+    async ({ amount }) => {
+      const auth = await enforceAccess(adapter);
+      if ("isError" in auth) return auth;
+      if (!stripeConfigured()) return NO_STRIPE;
+      const rates = topUp.taxRates ? await topUp.taxRates(auth.orgId) : undefined;
+      const quote = await quoteCreditPurchase(amount, rates ?? []);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify(
+              {
+                credits: quote.credits,
+                subtotal: quote.subtotal,
+                tax: quote.tax,
+                total: quote.total,
+                tax_percent: quote.taxPercent,
+                currency: config.currency,
+              },
               null,
               2,
             ),

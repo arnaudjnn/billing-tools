@@ -162,6 +162,7 @@ export const BILLING_TOOL_NAMES = [
   "revoke_api_key",
   "get_credit_balance",
   "buy_credits",
+  "preview_credit_purchase",
   "set_auto_reload",
   "get_billing_portal",
   "list_invoices",

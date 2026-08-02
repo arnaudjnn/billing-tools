@@ -64,9 +64,9 @@ Deliberate exceptions (already SDK-first everywhere else — don't "fix" these):
 
 ## The tool surface, and the parity rule
 
-**30 tools.** Keys (3) · wallet (3) · invoices (4) · usage (2) · seats (2) · top-ups (5) · plans (1) · billing account (6) · lifecycle (4).
+**31 tools.** Keys (3) · wallet (4) · invoices (4) · usage (2) · seats (2) · top-ups (5) · plans (1) · billing account (6) · lifecycle (4).
 
-**The rule: anything the app's own UI can do, an API / CLI / MCP caller can do too.** REST and MCP get this structurally — `createDispatcher` monkey-patches `server.tool`, so every registered tool is an endpoint with no extra wiring — and `test/surface.test.mjs` asserts the tools exist and that `BILLING_TOOL_NAMES` matches what registration actually produces. The CLI is hand-written and covers 29/30; `get_api_key` is the exception, because the `auth` command already performs that flow.
+**The rule: anything the app's own UI can do, an API / CLI / MCP caller can do too.** REST and MCP get this structurally — `createDispatcher` monkey-patches `server.tool`, so every registered tool is an endpoint with no extra wiring — and `test/surface.test.mjs` asserts the tools exist and that `BILLING_TOOL_NAMES` matches what registration actually produces. The CLI is hand-written and covers 30/31 (`buy --quote` is `preview_credit_purchase`); `get_api_key` is the exception, because the `auth` command already performs that flow.
 
 This was NOT true before the audit: plan changes, payment methods, the billing profile and the tax id existed as library functions and as app UI and as nothing else. When adding a capability, register the tool in the same change — a function reachable only from a React component is the failure mode this rule exists to prevent.
 
@@ -105,7 +105,9 @@ Anything that files something against a billing cycle must key it with `currentC
 
 ## Tax on charges the library raises itself
 
-A subscription is taxed by whoever builds its Checkout Session. Two charges have no session: the **auto-reload invoice** and the **top-up** bought through `buy_credits`. Both were untaxed — an account charging 22% IVA on seats invoiced 0% on a top-up. Now `config.tax.rates(customerId)` (or `automatic`) covers the auto-reload, and `registerBillingTools({ topUp })` covers `buy_credits`. Manual rates and `automatic_tax` are mutually exclusive — Stripe rejects both together. Auto-reload bills as an **invoice**, not a PaymentIntent: a receipt is not a valid sales document, and it is the one purchase the customer never confirms. It carries an idempotency key per customer/target/hour because the meter fires it, fire-and-forget, on every metered call.
+A subscription is taxed by whoever builds its Checkout Session. Two charges have no session: the **auto-reload invoice** and the **top-up** bought through `buy_credits`. Both were untaxed — an account charging 22% IVA on seats invoiced 0% on a top-up. Now `config.tax.rates(customerId)` (or `automatic`) covers the auto-reload, and `registerBillingTools({ topUp })` covers `buy_credits`. Manual rates and `automatic_tax` are mutually exclusive — Stripe rejects both together. `quoteCreditPurchase(amount, taxRateIds)` is the READ side of the same charge, for a "credits / estimated tax / total due" dialog: it reads the same Stripe TaxRate objects `createCreditCheckoutSession` will carry, so the quoted number is the charged number (`preview_credit_purchase`, or `buy --quote`). INCLUSIVE rates leave the total alone — that is what inclusive means — and several rates round ONCE on the summed percentage, because rounding each and adding drifts a cent from Stripe's own total.
+
+Auto-reload bills as an **invoice**, not a PaymentIntent: a receipt is not a valid sales document, and it is the one purchase the customer never confirms. It carries an idempotency key per customer/target/hour because the meter fires it, fire-and-forget, on every metered call.
 
 ## Agent auth — auth.md (`src/agent-auth/`)
 

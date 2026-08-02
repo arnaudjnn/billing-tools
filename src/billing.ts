@@ -320,6 +320,80 @@ export interface TopUpCheckoutOptions {
   cancelUrl?: string;
 }
 
+/** What a credit purchase costs, before anyone is charged. */
+export interface CreditQuote {
+  /** Credits bought. 1 unit of currency = 100 credits, as `buy_credits` says. */
+  credits: number;
+  /** Minor units, exclusive of tax. */
+  subtotal: number;
+  /** Minor units of tax added on top. 0 under reverse charge, or with no rates. */
+  tax: number;
+  total: number;
+  /** Summed percentage of the EXCLUSIVE rates applied, for a "IVA (22%)" label. */
+  taxPercent: number;
+  /** Every rate id this quote accounted for — the ones the charge will carry. */
+  taxRateIds: readonly string[];
+}
+
+// A TaxRate is immutable in the ways that matter here (percentage, inclusive), so
+// its percentage is cached for the process. This is on the path of a dialog that
+// re-quotes on every preset click.
+const taxRatePercent = new Map<string, Promise<{ percentage: number; inclusive: boolean }>>();
+
+/**
+ * Quote a credit purchase from the SAME Stripe TaxRate objects the charge will
+ * carry — not from a percentage kept somewhere else.
+ *
+ * A dialog that says "Estimated tax €4.40" and a Checkout Session that charges
+ * something else is the drift this library keeps designing out: pass the rate ids
+ * you will pass to `createCreditCheckoutSession` (`topUp.taxRates(orgId)`) and the
+ * two cannot disagree, because they are the same objects.
+ *
+ * INCLUSIVE rates are counted as already inside the amount, so `total` stays the
+ * amount asked for — that is what "inclusive" means, and adding them on top would
+ * overstate the charge.
+ */
+export async function quoteCreditPurchase(
+  amountMajor: number,
+  taxRateIds: readonly string[] = [],
+): Promise<CreditQuote> {
+  const subtotal = Math.round(amountMajor * 100);
+  const stripe = getStripe();
+  const rates = await Promise.all(
+    taxRateIds.map((id) => {
+      let hit = taxRatePercent.get(id);
+      if (!hit) {
+        hit = stripe.taxRates
+          .retrieve(id)
+          .then((r) => ({ percentage: r.percentage ?? 0, inclusive: r.inclusive === true }));
+        // A failed read must not be cached, or one transient error mis-quotes for
+        // the life of the process.
+        hit.catch(() => taxRatePercent.delete(id));
+        taxRatePercent.set(id, hit);
+      }
+      return hit;
+    }),
+  );
+  const exclusive = rates.filter((r) => !r.inclusive);
+  const taxPercent = exclusive.reduce((sum, r) => sum + r.percentage, 0);
+  // Rounded ONCE on the summed percentage, the way Stripe totals a line item's
+  // rates: rounding each rate first and adding them drifts by a cent.
+  const tax = Math.round((subtotal * taxPercent) / 100);
+  return {
+    credits: subtotal,
+    subtotal,
+    tax,
+    total: subtotal + tax,
+    taxPercent,
+    taxRateIds: [...taxRateIds],
+  };
+}
+
+/** Forget cached TaxRate percentages — for a test, or after editing a rate. */
+export function invalidateCreditQuotes(): void {
+  taxRatePercent.clear();
+}
+
 export async function createCreditCheckoutSession(
   stripeCustomerId: string,
   orgId: string,

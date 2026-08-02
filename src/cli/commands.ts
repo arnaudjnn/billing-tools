@@ -82,8 +82,16 @@ export function registerBillingCommands(program: Command, opts: CliOptions) {
   program
     .command("buy <amount>")
     .description("Buy credits (returns a Stripe Checkout URL)")
-    .action(async (amount: string) =>
-      print(await callTool(requireConfig(), "buy_credits", { amount: parseInt(amount, 10) })),
+    // `--quote` rather than a second command: "what would this cost" is the same
+    // intent as buying, one step earlier, and it keeps the CLI at parity with the
+    // tool surface without adding a verb nobody would guess.
+    .option("--quote", "Show credits, tax and total without opening a checkout")
+    .action(async (amount: string, o: { quote?: boolean }) =>
+      print(
+        await callTool(requireConfig(), o.quote ? "preview_credit_purchase" : "buy_credits", {
+          amount: parseInt(amount, 10),
+        }),
+      ),
     );
 
   program
