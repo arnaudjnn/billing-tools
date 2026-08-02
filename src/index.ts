@@ -215,7 +215,6 @@ export {
   // The one definition of "this cycle". Anything that files something against a
   // cycle must use it, or the meter will look the grant up under another key.
   currentCycle,
-  legacyCycleKey,
   type AllowanceState,
   type AllowanceInput,
   type FundingDecision,

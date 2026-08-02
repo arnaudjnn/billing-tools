@@ -205,6 +205,23 @@ export type Exhausted =
  */
 export type CapWindow = "cycle" | "month";
 
+/**
+ * WHO an included window covers.
+ *
+ * `all` (the default, and the historical behaviour) means every caller draws it,
+ * agents included. `users` restricts it to people: a machine caller (an API key,
+ * an agent — `caller.kind: "api"`, or a `shared` seat) gets NO included
+ * allowance and is funded by the prepaid wallet from its first call.
+ *
+ * That is a different statement from `onExhausted`, which only says what happens
+ * once a window is spent — a machine caller already overflows to the wallet there.
+ * This says the window was never theirs, which is what "API usage is
+ * pay-as-you-go, 0 credits included" means: the two are ordinarily sold as
+ * different things, and a plan whose seat pack is a person's monthly allowance
+ * should not hand the same allowance to a script that can spend it in a minute.
+ */
+export type CapCovers = "all" | "users";
+
 export type Cap =
   /**
    * No entitlement window: the prepaid wallet is the only gate. This is exactly
@@ -213,7 +230,7 @@ export type Cap =
    */
   | { kind: "wallet" }
   /** Each caller is capped to its seat type's pack for the window. */
-  | { kind: "per_seat"; window?: CapWindow; onExhausted?: Exhausted }
+  | { kind: "per_seat"; window?: CapWindow; covers?: CapCovers; onExhausted?: Exhausted }
   /**
    * ONE org-wide window: all usage in the cycle counts against `credits`,
    * whoever spends it. "We don't care about seats."
@@ -235,6 +252,7 @@ export type Cap =
       perCallerMax?: Money;
       /** Mutually exclusive with `rollover`, which widens the window instead. */
       window?: CapWindow;
+      covers?: CapCovers;
       onExhausted?: Exhausted;
     };
 
@@ -754,6 +772,28 @@ export function exhaustedPolicy(
   if (model.cap.kind === "pool") return model.cap.onExhausted ?? "block";
   if (model.cap.kind === "per_seat") return model.cap.onExhausted ?? "block";
   return "wallet";
+}
+
+/**
+ * Whether this caller draws the plan's included window at all.
+ *
+ * False only for a machine caller on a plan whose cap declares `covers: "users"`.
+ * A `shared` seat counts as a machine caller for the same reason it does in
+ * `exhaustedPolicy`: the seat exists to be drawn by agents.
+ */
+export function capCovers(
+  model: PlanModel | null,
+  caller?: { seatType?: string; kind?: "user" | "api" },
+): boolean {
+  if (!model) return true;
+  const covers =
+    model.cap.kind === "per_seat" || model.cap.kind === "pool" ? (model.cap.covers ?? "all") : "all";
+  if (covers === "all") return true;
+  if (caller?.kind === "api") return false;
+  const type = caller?.seatType
+    ? model.seatTypes.find((s) => s.key === caller.seatType)
+    : undefined;
+  return !type?.shared;
 }
 
 // ── Cycle windows ───────────────────────────────────────────────────────────

@@ -239,17 +239,7 @@ export async function extraAllowance(
   orgId: string,
   memberId: string,
   cycle: string,
-  /** Key this library used before the cycle came from the subscription period.
-   *  Consulted only when the current key has no entry, so a grant approved under
-   *  the old scheme still applies and one approved under both is not counted
-   *  twice. Removable once no live org has a pre-migration grant. */
-  legacyCycle?: string,
 ): Promise<number> {
   const grants = await readJson<Grants>(adapter, orgId, GRANTS_KEY, {});
-  const forMember = grants[memberId];
-  if (!forMember) return 0;
-  const current = forMember[cycle];
-  if (current !== undefined) return current;
-  if (legacyCycle && forMember[legacyCycle] !== undefined) return forMember[legacyCycle];
-  return 0;
+  return grants[memberId]?.[cycle] ?? 0;
 }

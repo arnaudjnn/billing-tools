@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 
-import { currentCycle, legacyCycleKey } from "../dist/allowance.js";
+import { currentCycle } from "../dist/allowance.js";
 import { approveTopUp, extraAllowance, requestTopUp } from "../dist/topup.js";
 import { fakeAdapter } from "./helpers.mjs";
 
@@ -39,9 +39,9 @@ test("the cycle key comes from the subscription period, not the calendar", async
   const cycle = await currentCycle(adapter, { orgId: "org_1", plans: PLANS, plan: "pro", now: NOW });
 
   assert.equal(cycle.key, "2026-08-14");
-  // The exact disagreement that lost the grant.
-  assert.notEqual(cycle.key, legacyCycleKey(NOW));
-  assert.equal(legacyCycleKey(NOW), "2026-08");
+  // The exact disagreement that lost the grant: the calendar month this used
+  // to be keyed by is a different string for the same instant.
+  assert.notEqual(cycle.key, "2026-08");
 });
 
 test("a grant approved this cycle is readable by the meter", async () => {
@@ -59,44 +59,20 @@ test("a grant approved this cycle is readable by the meter", async () => {
   assert.equal(approved.ok, true);
 
   // Read back exactly as resolveAllowance does.
-  const extra = await extraAllowance(adapter, "org_1", "user_1", cycle.key, legacyCycleKey(NOW));
+  const extra = await extraAllowance(adapter, "org_1", "user_1", cycle.key);
   assert.equal(extra, 250);
 });
 
-test("a grant filed under the OLD calendar key still applies", async () => {
-  // Migration case: approved before writer and reader agreed. It must not
-  // vanish, or fixing the bug would silently revoke live grants.
+test("a grant filed under a cycle the meter is not in is not readable", async () => {
+  // The calendar key this library once used. Nothing reads it any more: a grant
+  // is only ever visible under the cycle `currentCycle` produces.
   const adapter = fakeAdapter({
     subscription: MID_MONTH,
     metadata: { topUpGrants: JSON.stringify({ user_1: { "2026-08": 400 } }) },
   });
   const cycle = await currentCycle(adapter, { orgId: "org_1", plans: PLANS, plan: "pro", now: NOW });
 
-  assert.equal(await extraAllowance(adapter, "org_1", "user_1", cycle.key, legacyCycleKey(NOW)), 400);
-});
-
-test("a grant present under both keys is not counted twice", async () => {
-  const adapter = fakeAdapter({
-    subscription: MID_MONTH,
-    metadata: {
-      topUpGrants: JSON.stringify({ user_1: { "2026-08": 400, "2026-08-14": 250 } }),
-    },
-  });
-  const cycle = await currentCycle(adapter, { orgId: "org_1", plans: PLANS, plan: "pro", now: NOW });
-
-  assert.equal(await extraAllowance(adapter, "org_1", "user_1", cycle.key, legacyCycleKey(NOW)), 250);
-});
-
-test("an explicit zero grant is honoured, not treated as absent", async () => {
-  // `?? 0` on a lookup would fall through to the legacy key here and resurrect
-  // an old grant the current cycle deliberately set to zero.
-  const adapter = fakeAdapter({
-    subscription: MID_MONTH,
-    metadata: { topUpGrants: JSON.stringify({ user_1: { "2026-08": 400, "2026-08-14": 0 } }) },
-  });
-  const cycle = await currentCycle(adapter, { orgId: "org_1", plans: PLANS, plan: "pro", now: NOW });
-
-  assert.equal(await extraAllowance(adapter, "org_1", "user_1", cycle.key, legacyCycleKey(NOW)), 0);
+  assert.equal(await extraAllowance(adapter, "org_1", "user_1", cycle.key), 0);
 });
 
 test("with no subscription the cycle falls back to the calendar month", async () => {
@@ -105,5 +81,4 @@ test("with no subscription the cycle falls back to the calendar month", async ()
   const cycle = await currentCycle(adapter, { orgId: "org_1", plans: PLANS, plan: "hobby", now: NOW });
 
   assert.equal(cycle.key, "2026-08");
-  assert.equal(cycle.key, legacyCycleKey(NOW));
 });

@@ -101,7 +101,7 @@ Two deliberate fallbacks, both "allow": no principal (the org-key case above), a
 
 ## Cycles — one definition (`currentCycle`)
 
-Anything that files something against a billing cycle must key it with `currentCycle(adapter, {orgId, plans, plan})`, the same window the meter reads. This is not stylistic: `request_top_up` used to write a calendar month while the meter read the subscription period, so for **every org with a subscription** an approved top-up granted nothing, with no error anywhere. `extraAllowance` still consults `legacyCycleKey()` as a read-only fallback so pre-fix grants survive; that fallback can go once no live org holds one.
+Anything that files something against a billing cycle must key it with `currentCycle(adapter, {orgId, plans, plan})`, the same window the meter reads. This is not stylistic: `request_top_up` used to write a calendar month while the meter read the subscription period, so for **every org with a subscription** an approved top-up granted nothing, with no error anywhere. There is now exactly ONE key — `extraAllowance` reads the cycle it is given and nothing else, so a grant is visible under the window the meter is in or it is not visible at all. Do not reintroduce a second key to read as a fallback: the reason the defect was invisible is that a miss looked like "no grant" rather than an error.
 
 ## Tax on charges the library raises itself
 

@@ -1,6 +1,7 @@
 import { getBillingCustomerId, getCreditBalance } from "./billing.js";
 import { formatMessage, resolveMessages, type PartialMessages } from "./i18n.js";
 import {
+  capCovers,
   cycleWindowFor,
   exhaustedPolicy,
   packSizeOf,
@@ -110,13 +111,6 @@ export async function currentCycle(
   return cycleWindowFor(model, await subscriptionPeriod(adapter, input.orgId, model), now);
 }
 
-/** The calendar-month key this library used before the window came from the
- *  subscription. Read-only fallback, so grants filed under it still apply. */
-export function legacyCycleKey(now: number = Date.now()): string {
-  const d = new Date(now);
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
 export async function resolveAllowance(
   adapter: BillingAdapter,
   config: ResolvedConfig,
@@ -188,12 +182,10 @@ export async function resolveAllowance(
         }),
     // Top-up grants raise a member's pack for the cycle, keyed by the cycle
     // identity `currentCycle` produces — the same one the approving tool writes,
-    // which is now guaranteed by both going through that function. The legacy
-    // calendar key is read as a fallback so grants approved before the two
-    // agreed still apply instead of vanishing.
+    // which is guaranteed by both going through that function.
     packSize == null || input.caller?.kind !== "user" || !input.caller.id
       ? Promise.resolve(0)
-      : extraAllowance(adapter, input.orgId, input.caller.id, cycle.key, legacyCycleKey(now)),
+      : extraAllowance(adapter, input.orgId, input.caller.id, cycle.key),
     Promise.all(limitReads),
   ]);
 
@@ -291,14 +283,19 @@ export function fundingFor(
     }
   }
 
-  if (state.pool) {
+  // A window the caller is not covered by is not theirs to spend — it is skipped
+  // entirely rather than treated as exhausted, so no `onExhausted: "block"` can
+  // refuse a machine caller over an allowance that was never included for it.
+  const covered = capCovers(model, caller);
+
+  if (covered && state.pool) {
     if (state.pool.remaining >= cost) return { ok: true, source: "pool" };
     if (exhaustedPolicy(model, caller) === "block") {
       return { ok: false, source: null, reason: "pool_exhausted" };
     }
   }
 
-  if (state.pack) {
+  if (covered && state.pack) {
     if (state.pack.remaining >= cost) return { ok: true, source: "pack" };
     if (exhaustedPolicy(model, caller) === "block") {
       return { ok: false, source: null, reason: "seat_allowance_reached" };
