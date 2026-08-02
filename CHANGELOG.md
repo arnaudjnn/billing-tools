@@ -1,3 +1,10 @@
+# [2.1.0](https://github.com/arnaudjnn/billing-tools/compare/v2.0.0...v2.1.0) (2026-08-02)
+
+
+### Features
+
+* **plans:** an included window can cover people only, so agents are pay-as-you-go ([33f044e](https://github.com/arnaudjnn/billing-tools/commit/33f044e7e173882d015b2ccaf4918048e873866a))
+
 # [2.0.0](https://github.com/arnaudjnn/billing-tools/compare/v1.0.0...v2.0.0) (2026-08-02)
 
 
