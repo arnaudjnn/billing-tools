@@ -1,3 +1,10 @@
+# [2.7.0](https://github.com/arnaudjnn/billing-tools/compare/v2.6.1...v2.7.0) (2026-08-02)
+
+
+### Features
+
+* **payment-methods:** save a card through a setup-mode Checkout Session ([112e0f0](https://github.com/arnaudjnn/billing-tools/commit/112e0f0bfa5ccda2dba2623372f2eac54bfdd132))
+
 ## [2.6.1](https://github.com/arnaudjnn/billing-tools/compare/v2.6.0...v2.6.1) (2026-08-02)
 
 
