@@ -1,3 +1,10 @@
+# [0.67.0](https://github.com/arnaudjnn/billing-tools/compare/v0.66.1...v0.67.0) (2026-08-02)
+
+
+### Features
+
+* **ui:** card form reports WHAT it confirmed, and puts the card above the address ([0f28321](https://github.com/arnaudjnn/billing-tools/commit/0f28321f56398e9a81ed50fd11de468cf7639406))
+
 ## [0.66.1](https://github.com/arnaudjnn/billing-tools/compare/v0.66.0...v0.66.1) (2026-08-02)
 
 
