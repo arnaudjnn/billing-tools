@@ -1,3 +1,10 @@
+## [2.3.1](https://github.com/arnaudjnn/billing-tools/compare/v2.3.0...v2.3.1) (2026-08-02)
+
+
+### Bug Fixes
+
+* **billing:** an untouched wallet is 0 credits, not -0 ([62dacd3](https://github.com/arnaudjnn/billing-tools/commit/62dacd32973817b8fb6acefab8b0a2dc1789954c))
+
 # [2.3.0](https://github.com/arnaudjnn/billing-tools/compare/v2.2.0...v2.3.0) (2026-08-02)
 
 
