@@ -124,6 +124,12 @@ export async function createCardSetupIntent(
   const intent = await getStripe().setupIntents.create({
     customer: customerId,
     usage: "off_session",
+    // NOTE `allow_redisplay` cannot be set here: it is a confirm-time field on
+    // `payment_method_data`, and confirmation happens in the browser. A card saved
+    // through this intent therefore comes back `unspecified`, which is why
+    // `createCreditCheckoutSession` includes that value in its
+    // `allow_redisplay_filters` — filtering to `always` hid cards this library had
+    // just saved.
     ...(pmc
       ? {
           payment_method_configuration: pmc,

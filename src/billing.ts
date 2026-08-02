@@ -446,8 +446,14 @@ export async function createCreditCheckoutSession(
             // with a saved card was still shown blank card fields. It controls the
             // "save for future use" CHECKBOX; surfacing existing methods is
             // `allow_redisplay_filters`, matched against each method's own
-            // `allow_redisplay` (cards saved off-session are `always`).
-            allow_redisplay_filters: ["always"],
+            // `allow_redisplay`.
+            //
+            // `unspecified` is in the list and has to be: a card saved through a
+            // merchant-created SetupIntent comes back `unspecified`, not `always`
+            // (measured on a card this library had just saved), and so does every
+            // card saved before the field existed. Filtering to `always` alone
+            // showed a customer with a card on file an empty card form.
+            allow_redisplay_filters: ["always", "limited", "unspecified"],
             // And keep offering to save a NEW card, so a first purchase leaves
             // something behind for auto-reload.
             payment_method_save: "enabled",
