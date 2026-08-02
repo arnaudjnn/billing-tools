@@ -1,3 +1,10 @@
+## [2.4.1](https://github.com/arnaudjnn/billing-tools/compare/v2.4.0...v2.4.1) (2026-08-02)
+
+
+### Bug Fixes
+
+* **billing:** an embedded top-up offers the cards the customer already has ([463d63b](https://github.com/arnaudjnn/billing-tools/commit/463d63b0f2814f53755c270f3bbc7b6dff883ecd))
+
 # [2.4.0](https://github.com/arnaudjnn/billing-tools/compare/v2.3.1...v2.4.0) (2026-08-02)
 
 
