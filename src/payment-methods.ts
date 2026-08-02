@@ -141,6 +141,86 @@ export async function createCardSetupIntent(
   return { clientSecret: intent.client_secret, customerId };
 }
 
+/**
+ * A Checkout Session in `mode: "setup"` — saves a card, charges nothing.
+ *
+ * Same job as `createCardSetupIntent`, different UI. A SetupIntent is mounted with
+ * `BillingPaymentForm`, which renders Stripe's plain `AddressElement`: six prefilled
+ * address inputs. A Checkout Session is mounted with `BillingCheckoutSessionForm`,
+ * which renders `BillingAddressElement` — the collapsed "name / street / city"
+ * summary with a change link, and the saved cards the customer already has. That
+ * collapsed box CANNOT be had from the SetupIntent path at any configuration, so a
+ * surface that must look like the subscription checkout or a top-up has to be a
+ * session. Use this one there, and `createCardSetupIntent` for a plain
+ * "add a card" screen where matching a payment flow doesn't matter.
+ *
+ * `currency` is required by Stripe in setup mode before it will offer the wallets —
+ * a session without it silently drops Apple Pay and Google Pay.
+ *
+ * Returns the id as well as the secret, because a setup session carries its result
+ * in a SetupIntent the browser never sees: read the saved card back with
+ * `savedCardFromCheckoutSession(sessionId)` once the form confirms.
+ */
+export async function createCardSetupCheckoutSession(
+  adapter: BillingAdapter,
+  orgId: string,
+  opts: {
+    /** Where Stripe returns after an off-site step (3DS). Must be absolute. */
+    returnUrl: string;
+    /** Three-letter code. Needed for the wallets — see above. */
+    currency: string;
+    paymentMethodConfiguration?: string;
+    config?: BillingConfig;
+  },
+): Promise<{ clientSecret: string; sessionId: string }> {
+  const customerId = await customerFor(adapter, orgId);
+  if (!customerId) throw new Error("No billing customer for this organization");
+
+  const pmc =
+    opts.paymentMethodConfiguration ??
+    (await defaultPaymentMethodConfig("setup", opts.config));
+
+  const session = await getStripe().checkout.sessions.create({
+    customer: customerId,
+    mode: "setup",
+    currency: opts.currency,
+    // `custom` on this API version; the response echoes back `elements`. Same note
+    // as createCheckoutSession — a newer version renames it.
+    ui_mode: "custom" as "custom",
+    return_url: opts.returnUrl,
+    // Collect the address, so the session carries one and the element renders its
+    // collapsed summary rather than empty fields.
+    billing_address_collection: "required",
+    // Offer the cards already on file, and keep the values `unspecified` in the
+    // filter list — see createCreditCheckoutSession for why that one matters.
+    saved_payment_method_options: {
+      allow_redisplay_filters: ["always", "limited", "unspecified"],
+    },
+    ...(pmc ? { payment_method_configuration: pmc } : {}),
+  });
+  if (!session.client_secret) throw new Error("Stripe returned no client secret");
+  return { clientSecret: session.client_secret, sessionId: session.id };
+}
+
+/**
+ * The card a confirmed setup session saved, or null if it saved none.
+ *
+ * The browser only learns that confirmation succeeded, so the id has to be read
+ * here — from the session's SetupIntent, not by listing the customer's cards and
+ * taking the newest, which is a race the moment two tabs are open.
+ */
+export async function savedCardFromCheckoutSession(
+  sessionId: string,
+): Promise<string | null> {
+  const session = await getStripe().checkout.sessions.retrieve(sessionId, {
+    expand: ["setup_intent"],
+  });
+  const intent = session.setup_intent;
+  if (!intent || typeof intent === "string") return null;
+  const pm = intent.payment_method;
+  return typeof pm === "string" ? pm : (pm?.id ?? null);
+}
+
 /** Assert the card belongs to this org's customer before acting on its id. */
 async function assertOwned(
   adapter: BillingAdapter,

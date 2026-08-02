@@ -453,6 +453,8 @@ export type { PlanSource } from "./session.js";
 export {
   listPaymentMethods,
   createCardSetupIntent,
+  createCardSetupCheckoutSession,
+  savedCardFromCheckoutSession,
   setDefaultPaymentMethod,
   detachPaymentMethod,
 } from "./payment-methods.js";
