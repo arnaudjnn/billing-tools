@@ -1,3 +1,10 @@
+# [2.8.0](https://github.com/arnaudjnn/billing-tools/compare/v2.7.1...v2.8.0) (2026-08-02)
+
+
+### Features
+
+* **billing:** savePaymentMethod option for the top-up checkout ([7b1d210](https://github.com/arnaudjnn/billing-tools/commit/7b1d2104786ff445100441b904bb80532c96201f))
+
 ## [2.7.1](https://github.com/arnaudjnn/billing-tools/compare/v2.7.0...v2.7.1) (2026-08-02)
 
 
