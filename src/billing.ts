@@ -322,6 +322,22 @@ export interface TopUpCheckoutOptions {
   automaticTax?: boolean;
   /** Defaults to `${baseUrl}/billing/success?credits=…`. */
   successUrl?: string;
+  /**
+   * Render the payment form INSIDE the app instead of sending the customer to
+   * Stripe's hosted page.
+   *
+   * `hosted` (the default) returns a URL to redirect to. `embedded` returns a
+   * client secret for a `ui_mode: "elements"` session, which
+   * `BillingCheckoutSessionProvider` mounts — the same components the seat
+   * checkout uses, so a top-up can show card fields in a dialog rather than
+   * leaving the page. `returnUrl` then covers both success and cancel, because an
+   * embedded session has one place to come back to after an off-site step.
+   *
+   * Embedded is NOT the default: a redirect works with no Stripe.js on the page
+   * and no publishable key wired, and switching every existing consumer's top-up
+   * flow silently is not a thing a minor release should do.
+   */
+  uiMode?: "hosted" | "embedded";
   /** Defaults to `${baseUrl}/billing/cancel`. */
   cancelUrl?: string;
 }
@@ -414,9 +430,21 @@ export async function createCreditCheckoutSession(
   // default the subscription checkout and the add-card form get. Undefined when a
   // restricted key cannot provision it, or when `paymentMethods.link` opts in.
   const pmc = await defaultPaymentMethodConfig("payment", config);
+  const embedded = opts.uiMode === "embedded";
   const session = await getStripe().checkout.sessions.create({
     customer: stripeCustomerId,
     mode: "payment",
+    // See createCheckoutSession: the value is `custom` on this API version and the
+    // response echoes back `elements`. A newer version renames it.
+    ...(embedded
+      ? {
+          ui_mode: "custom" as "custom",
+          return_url: opts.successUrl ?? `${config.baseUrl}/billing/success?credits=${credits}`,
+          // The saved card is offered rather than re-collected: a customer who has
+          // one should not type it again to buy credits.
+          saved_payment_method_options: { payment_method_save: "enabled" },
+        }
+      : {}),
     ...(pmc ? { payment_method_configuration: pmc } : {}),
     // No payment_method_types → Checkout auto-offers every method the
     // configuration allows (cards + Apple Pay / Google Pay), maximizing
@@ -444,10 +472,17 @@ export async function createCreditCheckoutSession(
       metadata: { org_id: orgId, credits: String(credits) },
     },
     metadata: { org_id: orgId, credits: String(credits) },
-    success_url: opts.successUrl ?? `${config.baseUrl}/billing/success?credits=${credits}`,
-    cancel_url: opts.cancelUrl ?? `${config.baseUrl}/billing/cancel`,
+    // A hosted session needs both; an embedded one has `return_url` instead and
+    // Stripe rejects these alongside it.
+    ...(embedded
+      ? {}
+      : {
+          success_url: opts.successUrl ?? `${config.baseUrl}/billing/success?credits=${credits}`,
+          cancel_url: opts.cancelUrl ?? `${config.baseUrl}/billing/cancel`,
+        }),
   });
-  return session.url!;
+  // The caller knows which it asked for; returning one string keeps the signature.
+  return embedded ? session.client_secret! : session.url!;
 }
 
 /** A Stripe Billing Portal session URL — the no-code self-serve surface where a
