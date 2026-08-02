@@ -1,3 +1,10 @@
+## [2.5.1](https://github.com/arnaudjnn/billing-tools/compare/v2.5.0...v2.5.1) (2026-08-02)
+
+
+### Bug Fixes
+
+* **ui:** charge a saved card by id, passed in rather than discovered ([0522cc5](https://github.com/arnaudjnn/billing-tools/commit/0522cc52b7d9204823428419075fbcd7887cb788))
+
 # [2.5.0](https://github.com/arnaudjnn/billing-tools/compare/v2.4.2...v2.5.0) (2026-08-02)
 
 
