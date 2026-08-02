@@ -67,10 +67,18 @@ export function registerSubscriptionTools(
 
   server.tool(
     "preview_plan_change",
-    `What moving to a plan would cost, WITHOUT making the change. Returns the prorated
-amount due now (the unused part of the current plan credited against the new one),
-the recurring total afterwards, and when it takes effect. Quote this before
-change_plan — the numbers come from the same arithmetic, so they agree.`,
+    `What moving to a plan would cost, WITHOUT making the change.
+
+Returns four numbers, and they mean different things: \`due_now\` is charged today
+(zero unless proration is invoice_now), \`next_invoice_total\` is what the NEXT
+invoice comes to including any deferred difference, \`recurring_total\` is the
+steady-state price after that, and \`credit_applied\` is the unused part of the
+current plan credited back. On a mid-cycle upgrade the next invoice is LARGER
+than the plan price — quote it together with \`next_invoice_at\` so the customer
+is told rather than surprised.
+
+Quote this before change_plan, with the same \`proration\`: both come from the
+same arithmetic, so the number shown is the number charged.`,
     {
       plan: z.string().describe("Target plan key, from list_plans"),
       interval: z.enum(["monthly", "yearly"]).optional(),
