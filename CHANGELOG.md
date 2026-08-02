@@ -1,3 +1,10 @@
+# [0.70.0](https://github.com/arnaudjnn/billing-tools/compare/v0.69.0...v0.70.0) (2026-08-02)
+
+
+### Features
+
+* **payments:** card + Apple Pay + Google Pay, no Link, by default ([c75a135](https://github.com/arnaudjnn/billing-tools/commit/c75a135d90cb1a729b7b234a55a7bc1111d66ddf))
+
 # [0.69.0](https://github.com/arnaudjnn/billing-tools/compare/v0.68.0...v0.69.0) (2026-08-02)
 
 
