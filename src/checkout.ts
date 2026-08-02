@@ -8,6 +8,8 @@ import {
   type PlanCatalog,
 } from "./plans.js";
 import type { BillingInterval, PlansConfig } from "./plans.js";
+import { defaultPaymentMethodConfig } from "./payment-method-config.js";
+import type { BillingConfig } from "./types.js";
 
 // Server side of the embedded checkout: turn "these seats, this interval" into
 // something the browser can pay, and hand back the client secret that
@@ -269,21 +271,29 @@ async function openCheckoutSession(opts: {
   taxIdCollection?: boolean;
   paymentMethods?: string[] | "automatic";
   paymentMethodConfiguration?: string;
+  config?: BillingConfig;
   metadata?: Record<string, string>;
 }): Promise<CheckoutSessionResult> {
   const stripe = getStripe();
 
   const wanted = selected(opts.seats);
 
-  // Independent, and both on the critical path of a customer waiting for the
+  // Independent, and all three on the critical path of a customer waiting for the
   // payment form: resolve the prices (memoised; provisions them the first time a
-  // seat type is ever sold) while the customer is created.
-  const [prices, customerId] = await Promise.all([
+  // seat type is ever sold) and the method configuration (memoised too) while the
+  // customer is created.
+  const [prices, customerId, pmc] = await Promise.all([
     resolvePlanPrices(opts.plans, { currency: opts.currency }),
     opts.customerId ??
       stripe.customers
         .create({ email: opts.email, metadata: opts.metadata })
         .then((c) => c.id),
+    // Only when the caller named neither a configuration nor an explicit method
+    // list: an app that asked for exactly SEPA meant it.
+    opts.paymentMethodConfiguration ??
+      (opts.paymentMethods
+        ? undefined
+        : defaultPaymentMethodConfig("payment", opts.config)),
   ]);
 
   const line_items: Stripe.Checkout.SessionCreateParams.LineItem[] = priceIdsFor(
@@ -322,8 +332,8 @@ async function openCheckoutSession(opts: {
     return_url: opts.returnUrl,
     // A configuration wins: it is the only lever that removes Link, and Stripe
     // rejects a session that carries both it and an explicit method list.
-    ...(opts.paymentMethodConfiguration
-      ? { payment_method_configuration: opts.paymentMethodConfiguration }
+    ...(pmc
+      ? { payment_method_configuration: pmc }
       : opts.paymentMethods === "automatic"
         ? {}
         : { payment_method_types: (opts.paymentMethods ?? ["card"]) as Stripe.Checkout.SessionCreateParams.PaymentMethodType[] }),

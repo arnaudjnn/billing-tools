@@ -1,5 +1,6 @@
 import { getStripe } from "./billing.js";
-import type { BillingAdapter } from "./types.js";
+import { defaultPaymentMethodConfig } from "./payment-method-config.js";
+import type { BillingAdapter, BillingConfig } from "./types.js";
 
 // Saved cards for an organization: list, add, promote, remove.
 //
@@ -100,19 +101,32 @@ export async function createCardSetupIntent(
      * for faster checkout"), which the Payment Element draws from the account's
      * Link setting. Mutually exclusive with `payment_method_types`, so passing
      * this replaces it.
+     *
+     * Omit it and the library provisions its own (card + the wallets, no Link) —
+     * `defaultPaymentMethodConfig`. Pass one only to offer something else.
      */
     paymentMethodConfiguration?: string;
+    /** Config, read for `paymentMethods.link`. */
+    config?: BillingConfig;
   } = {},
 ): Promise<{ clientSecret: string; customerId: string }> {
   const customerId = await customerFor(adapter, orgId);
   if (!customerId) throw new Error("No billing customer for this organization");
 
+  // Defaulted rather than left to the caller: every app that mounts this form
+  // wants the same thing (a card, the wallets, no Link), and the one lever that
+  // achieves it is obscure enough that leaving it out meant every consumer
+  // shipped the Link signup by accident.
+  const pmc =
+    opts.paymentMethodConfiguration ??
+    (await defaultPaymentMethodConfig("setup", opts.config));
+
   const intent = await getStripe().setupIntents.create({
     customer: customerId,
     usage: "off_session",
-    ...(opts.paymentMethodConfiguration
+    ...(pmc
       ? {
-          payment_method_configuration: opts.paymentMethodConfiguration,
+          payment_method_configuration: pmc,
           automatic_payment_methods: { enabled: true },
         }
       : { payment_method_types: ["card"] }),

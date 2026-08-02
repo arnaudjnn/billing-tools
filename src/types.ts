@@ -135,9 +135,26 @@ export interface BillingConfig {
     /** Use Stripe Tax instead. Ignored when `rates` returns any. */
     automatic?: boolean;
   };
+  /** What the payment forms offer. See `defaultPaymentMethodConfig`. */
+  paymentMethods?: {
+    /**
+     * Offer Stripe Link. Default FALSE, and that default is the whole point:
+     * Link's inline signup ("Save my info for faster checkout") is drawn by the
+     * Payment Element from the ACCOUNT's Link setting, so it survives both
+     * `wallets.link: "never"` and `payment_method_types: ["card"]`. The only
+     * lever is a payment-method configuration, which the library now provisions
+     * itself rather than leaving every app to discover this.
+     *
+     * Set `true` to keep Stripe's behaviour (no configuration is imposed).
+     */
+    link?: boolean;
+  };
 }
 
-export type ResolvedConfig = Required<Omit<BillingConfig, "tax">> & Pick<BillingConfig, "tax">;
+// `tax` and `paymentMethods` stay optional: they are "unset means Stripe's own
+// behaviour", which is not a value `resolveConfig` can invent.
+export type ResolvedConfig = Required<Omit<BillingConfig, "tax" | "paymentMethods">> &
+  Pick<BillingConfig, "tax" | "paymentMethods">;
 
 export function resolveConfig(c: BillingConfig): ResolvedConfig {
   return {
@@ -147,6 +164,7 @@ export function resolveConfig(c: BillingConfig): ResolvedConfig {
     internalDomains: c.internalDomains ?? [],
     defaultLocale: c.defaultLocale ?? "",
     tax: c.tax,
+    paymentMethods: c.paymentMethods,
   };
 }
 

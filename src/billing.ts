@@ -1,4 +1,5 @@
 import Stripe from "stripe";
+import { defaultPaymentMethodConfig } from "./payment-method-config.js";
 import type { BillingAdapter, BillingConfig, ResolvedConfig } from "./types.js";
 
 // Token model: 1 token = 1 cent. Held in the Stripe customer credit balance,
@@ -329,11 +330,17 @@ export async function createTokenCheckoutSession(
   const amountMinor = Math.round(amountMajor * 100);
   const tokens = amountMinor; // 1 token = 1 minor unit
   const taxRates = opts.taxRates?.length ? opts.taxRates : null;
+  // Every method the account has enabled, plus the wallets, minus Link — the same
+  // default the subscription checkout and the add-card form get. Undefined when a
+  // restricted key cannot provision it, or when `paymentMethods.link` opts in.
+  const pmc = await defaultPaymentMethodConfig("payment", config);
   const session = await getStripe().checkout.sessions.create({
     customer: stripeCustomerId,
     mode: "payment",
-    // No payment_method_types → Checkout auto-offers every method enabled in the
-    // Dashboard (cards + Apple Pay / Google Pay / Link), maximizing conversion.
+    ...(pmc ? { payment_method_configuration: pmc } : {}),
+    // No payment_method_types → Checkout auto-offers every method the
+    // configuration allows (cards + Apple Pay / Google Pay), maximizing
+    // conversion.
     line_items: [
       {
         price_data: {

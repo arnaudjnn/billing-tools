@@ -117,7 +117,16 @@ The **payment** sibling of auth.md: Stripe's [MPP](https://mpp.dev) (Machine Pay
 
 **Dunning / past_due** is reflected via the polled `customer.subscription.updated` **and** `invoice.payment_failed` events (→ `adapter.setSubscription("past_due")` + the `hooks.onPaymentFailed(orgId)` sync hook — use it to notify/gate the user). Stripe **Smart Retries** + the card-updater handle the actual retries (Dashboard config, no code).
 
-**Self-serve billing:** `createBillingPortalSession(customerId, returnUrl)` + the `get_billing_portal` tool return a Stripe Billing Portal URL where customers manage their subscription (upgrade/downgrade/cancel), fix a failing card, and view invoices — the no-code self-serve surface. **Checkout offers wallets automatically:** `createTokenCheckoutSession` sets no `payment_method_types`, so Stripe surfaces every Dashboard-enabled method (cards + Apple Pay / Google Pay / Link).
+**Self-serve billing:** `createBillingPortalSession(customerId, returnUrl)` + the `get_billing_portal` tool return a Stripe Billing Portal URL where customers manage their subscription (upgrade/downgrade/cancel), fix a failing card, and view invoices — the no-code self-serve surface. **What the payment forms offer is a library default, not an app decision** (`payment-method-config.ts`). Every form the library builds — the add-card SetupIntent, the subscription Checkout Session, the `buy_tokens` one — resolves `defaultPaymentMethodConfig(kind, config)` when the caller names no `paymentMethodConfiguration`:
+
+| kind | offers | why |
+|---|---|---|
+| `setup` (save a card) | **exactly** card + Apple Pay + Google Pay | a Klarna authorization is not a reusable payment method; listing it is an error the customer finds after picking it |
+| `payment` (a real charge) | every method the account has ON, **plus** the wallets, **minus** Link | a charge should keep whatever the Dashboard offers (SEPA, iDEAL…), and a wallet costs the customer a tap and the account nothing |
+
+**Link is off by default, and that default is the point.** Link's inline signup ("Save my info for faster checkout") is drawn by the Payment Element from the **account's** Link setting, so it survives both `wallets.link: "never"` (that only removes the Link *wallet*) and `payment_method_types: ["card"]`. A payment-method configuration is the only lever, obscure enough that leaving it to each consumer meant every app shipped the signup by accident. `config.paymentMethods.link = true` opts back in (no configuration is imposed at all). The Element side — `layout: {type:"tabs"}` so a single method renders bare card fields instead of a "Card" accordion header — is already unconditional in `src/ui`.
+
+`ensurePaymentMethodConfig` takes `only` (exactly these) / `enable` (these on top of the account's) / `disable` (these off), is memoised per process and idempotent by `name`. `defaultPaymentMethodConfig` **never throws**: a restricted key that cannot read or write configurations returns undefined and the form renders with the account default, because a missing permission must not take down checkout.
 
 ## Mounting in a Next app
 

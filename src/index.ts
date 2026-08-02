@@ -455,6 +455,7 @@ export type { SavedCard } from "./payment-methods.js";
 // Which payment methods a form offers, provisioned from code. The only lever that
 // removes Link: its inline signup ignores `payment_method_types`.
 export {
+  defaultPaymentMethodConfig,
   ensurePaymentMethodConfig,
   invalidatePaymentMethodConfigs,
   type PaymentMethodConfigOptions,
