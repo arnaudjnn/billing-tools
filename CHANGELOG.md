@@ -1,3 +1,10 @@
+# [2.10.0](https://github.com/arnaudjnn/billing-tools/compare/v2.9.0...v2.10.0) (2026-08-03)
+
+
+### Features
+
+* **usage:** ship the SQL usage ledger, and pick it from `meter.db` ([488d146](https://github.com/arnaudjnn/billing-tools/commit/488d14663a80c8674fd6b532b3f11d36d5759c7a))
+
 # [2.9.0](https://github.com/arnaudjnn/billing-tools/compare/v2.8.0...v2.9.0) (2026-08-03)
 
 
