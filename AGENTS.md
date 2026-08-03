@@ -255,9 +255,11 @@ Measured on a per-seat catalogue with a caller-scoped limit, per metered call:
 
 | caller | uncached | cached 2 s |
 |---|---|---|
-| member (`user`) | **5.95** | **2.90** |
-| API key (`api`) | **2.00** | **1.00** |
-| member, bursty (3 callers) | 5.07 | **1.33** |
+| member (`user`) | **3.95** | **1.95** |
+| API key (`api`) | **1.30** | **1.00** |
+
+(Was 6.63 for a member before three fixes: one customer retrieve instead of two,
+`sources` skipping the leg that must return 0, and per-tick batching below.)
 
 **The bottleneck is metered calls per SECOND for the whole account, not users.**
 Stripe's limits are per account, so idle users cost nothing and the ceiling is
@@ -303,6 +305,22 @@ through it, so `overspend <= (calls/sec by one caller) x ttlMs x credits/call`.
 Size the TTL against the TIGHTEST window enforced — a `600/hour` limit tolerates
 seconds and would not tolerate a minute. `record` is never cached: a write served
 from cache is usage counted by nothing.
+
+**Several windows over one caller cost ONE request.** A plan declares a monthly
+pack and a weekly limit over the same member, and `resolveAllowance` issues them
+together in a single tick — so `stripeScopeUsageLedger` collects what arrives in a
+tick and answers it in as few requests as Stripe allows: the meter groups by time
+(`value_grouping_window: "day"`, verified — a slice of the bucketed response equals
+a dedicated narrow read exactly), and the balance walk sums every window in one
+pass. Stripe ENFORCES day alignment for bucketing, which `rateWindowFor` already
+satisfies for day/week/month; an `every: "hour"` window is not aligned and keeps
+its own read, which costs nothing since an hour is one bucket either way.
+
+**This batching is fragile in one specific way: an `await` between the reads
+breaks it.** Adding the shared customer retrieve as an `await` before the pack read
+silently undid it — the reads landed in two ticks and two flushes. It is started as
+a promise and awaited inside the same `Promise.all` for that reason. If you add a
+read to `resolveAllowance`, add it to that batch rather than in front of it.
 
 **A per-member usage SCREEN is the other amplifier.** `memberUsage` is N summaries
 by construction (the ledger has no group-by), so a 100-seat org is ~400 requests per

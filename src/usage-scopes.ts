@@ -248,24 +248,18 @@ export interface ScopeLedgerOptions {
    * Where WALLET-funded per-caller usage is read from. Defaults to the balance
    * ledger, which is exact and has no lag because the debit IS the record.
    *
-   * This is the most expensive read here and the only unbounded one: `usageSince`
-   * pages balance transactions newest-first across the whole window, 100 per
-   * request, and an org whose API usage the wallet funds writes one transaction
-   * per call — so a monthly window can cost tens of requests.
+   * A seam so a test can substitute one; there is no second right answer.
    *
-   * **You should not normally need to touch this.** `resolveAllowance` states on
-   * every read whether the window can hold wallet-funded usage at all
-   * (`UsageQuery.sources`), derived from `exhaustedPolicy`, and the leg is skipped
-   * when it cannot. That is strictly better than deciding here, because it is per
-   * QUERY rather than per deployment: the same plan can have a member window that
-   * overflows to the wallet and an agent window that is wallet-only.
-   *
-   * `null` remains as a blunt override for a consumer driving this ledger
-   * directly, without `resolveAllowance` to supply the hint. Setting it when any
-   * per-caller window CAN move money under-reports, and under-reporting reads as
-   * generosity and refuses no one.
+   * There used to be a `null` here meaning "never read the wallet", because that
+   * walk is the most expensive read in this file. It is gone: it was a
+   * per-DEPLOYMENT switch for a per-QUERY fact, and the same plan can have a
+   * member window that overflows into the wallet and an agent window that is
+   * wallet-only — so one flag could not be right for both, and setting it wrong
+   * under-reported, which reads as generosity and refuses no one.
+   * `UsageQuery.sources` carries it per read instead, and `resolveAllowance`
+   * derives it from the plan, so nothing has to be declared by hand.
    */
-  wallet?: UsageLedger | null;
+  wallet?: UsageLedger;
 }
 
 /**
@@ -283,11 +277,7 @@ export interface ScopeLedgerOptions {
  */
 export function stripeScopeUsageLedger(opts: ScopeLedgerOptions = {}): UsageLedger {
   const eventName = opts.eventName ?? SCOPE_METER_EVENT;
-  // `undefined` is "the caller did not say" and gets the balance ledger; an
-  // explicit `null` is "no per-caller window here is ever wallet-funded", which
-  // is the one statement that makes skipping the walk correct rather than
-  // under-reporting.
-  const wallet = opts.wallet === null ? null : (opts.wallet ?? stripeBalanceUsageLedger());
+  const wallet = opts.wallet ?? stripeBalanceUsageLedger();
 
   const api: UsageLedger = {
     covers: { orgIncluded: false, callerIncluded: true } satisfies LedgerCoverage,
@@ -397,19 +387,17 @@ export function stripeScopeUsageLedger(opts: ScopeLedgerOptions = {}): UsageLedg
 
     // An org-wide window is not this leg's question — see `total`'s old comment.
     if (scope === "org") {
-      const sums = wallet
-        ? await legTotals(wallet, group.map((w) => w.query))
-        : group.map(() => 0);
+      const sums = await legTotals(wallet, group.map((w) => w.query));
       group.forEach((w, i) => w.resolve(sums[i] ?? 0));
       return;
     }
 
-    const wantsWallet = (first.sources?.wallet ?? true) && Boolean(wallet);
+    const wantsWallet = first.sources?.wallet ?? true;
     const wantsIncluded = first.sources?.included ?? true;
 
     const [paid, included] = await Promise.all([
       wantsWallet
-        ? legTotals(wallet!, group.map((w) => w.query)).catch((e) => {
+        ? legTotals(wallet, group.map((w) => w.query)).catch((e) => {
             complain(`${first.orgId}|wallet`, e);
             return group.map(() => 0);
           })

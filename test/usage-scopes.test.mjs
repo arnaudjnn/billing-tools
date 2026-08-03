@@ -248,7 +248,7 @@ test("a Stripe failure degrades to uncounted rather than throwing", async () => 
   assert.equal(total, 4, "the wallet figure still stands");
 });
 
-test("wallet: null skips the balance walk — the one unbounded read here", async () => {
+test("sources.wallet=false skips the balance walk — the one unbounded read here", async () => {
   // `usageSince` pages balance transactions across the whole window, 100 per
   // request, and an org whose API usage the wallet funds writes one transaction
   // per call. On a plan where no per-caller window can ever be wallet-funded that
@@ -266,7 +266,7 @@ test("wallet: null skips the balance walk — the one unbounded read here", asyn
   assert.equal(walked.calls, 1, "consulted by default");
 
   invalidateUsageScopes();
-  const without = stripeScopeUsageLedger({ wallet: null });
+  const without = scopeLedgerNoWallet();
   const total = await without.total({
     orgId: "org_1", customerId: "cus_org", start: 1, filter: { callerId: "u1" },
   });
@@ -279,7 +279,7 @@ test("wallet: null skips the balance walk — the one unbounded read here", asyn
 
 test("wallet: null still answers an org-scoped query with 0 rather than throwing", async () => {
   fakeStripe();
-  const l = stripeScopeUsageLedger({ wallet: null });
+  const l = scopeLedgerNoWallet();
   assert.equal(await l.total({ orgId: "org_1", customerId: "cus_org", start: 1 }), 0);
 });
 
@@ -323,6 +323,12 @@ test("sources skips the leg that cannot contribute, and defaults to BOTH", async
 // one pass. The contract is that batching changes the COST, never the answer.
 
 const DAY = 86_400_000;
+/** A ledger whose wallet leg reports nothing, so a test can assert the METER
+ *  requests alone. `sources.wallet` is the per-query way to say the same thing. */
+const scopeLedgerNoWallet = () =>
+  stripeScopeUsageLedger({
+    wallet: { covers: { orgIncluded: false, callerIncluded: false }, async record() {}, async total() { return 0 }, async totals(qs) { return qs.map(() => 0) } },
+  });
 /** A day-aligned window ending in the future, like `rateWindowFor` produces. */
 const aligned = (daysBack) => ({
   start: Math.floor(Date.now() / DAY) * DAY - daysBack * DAY,
@@ -365,7 +371,7 @@ test("two day-aligned windows over one caller cost ONE bucketed request", async 
     { start_time: (today - DAY) / 1000, end_time: today / 1000, aggregated_value: 11 },
     { start_time: today / 1000, end_time: (today + DAY) / 1000, aggregated_value: 5 },
   ]);
-  const l = stripeScopeUsageLedger({ wallet: null });
+  const l = scopeLedgerNoWallet();
   const q = (w) => ({ orgId: "org_1", customerId: "cus_org", ...w, filter: { callerId: "u1" } });
 
   // Issued together, exactly as resolveAllowance issues them.
@@ -379,7 +385,7 @@ test("two day-aligned windows over one caller cost ONE bucketed request", async 
 
 test("a single window is read plainly, not bucketed", async () => {
   const calls = bucketStripe([{ start_time: 0, end_time: 9e9, aggregated_value: 4 }]);
-  const l = stripeScopeUsageLedger({ wallet: null });
+  const l = scopeLedgerNoWallet();
   const v = await l.total({ orgId: "org_1", customerId: "cus_org", ...aligned(1), filter: { callerId: "u1" } });
   assert.equal(calls.bucketed.length, 0, "bucketing one window buys nothing");
   assert.equal(calls.plain.length, 1);
@@ -388,7 +394,7 @@ test("a single window is read plainly, not bucketed", async () => {
 
 test("an unaligned window keeps its own read — Stripe rejects bucketing it", async () => {
   const calls = bucketStripe([{ start_time: 0, end_time: 9e9, aggregated_value: 3 }]);
-  const l = stripeScopeUsageLedger({ wallet: null });
+  const l = scopeLedgerNoWallet();
   const a = aligned(7);
   await Promise.all([
     l.total({ orgId: "org_1", customerId: "cus_org", ...a, filter: { callerId: "u1" } }),
@@ -402,7 +408,7 @@ test("an unaligned window keeps its own read — Stripe rejects bucketing it", a
 
 test("different callers are never mixed into one read", async () => {
   const calls = bucketStripe([{ start_time: 0, end_time: 9e9, aggregated_value: 1 }]);
-  const l = stripeScopeUsageLedger({ wallet: null });
+  const l = scopeLedgerNoWallet();
   const a = aligned(3);
   await Promise.all([
     l.total({ orgId: "org_1", customerId: "cus_org", ...a, filter: { callerId: "u1" } }),
