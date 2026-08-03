@@ -1,3 +1,10 @@
+# [10.1.0](https://github.com/arnaudjnn/billing-tools/compare/v10.0.0...v10.1.0) (2026-08-03)
+
+
+### Features
+
+* **tax:** `oss` — whose rate a cross-border EU sale carries without a VAT id ([cf71d84](https://github.com/arnaudjnn/billing-tools/commit/cf71d844e1f705eaca729b6d03c078484d642e9e))
+
 # [10.0.0](https://github.com/arnaudjnn/billing-tools/compare/v9.0.0...v10.0.0) (2026-08-03)
 
 
