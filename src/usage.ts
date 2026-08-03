@@ -272,9 +272,17 @@ export async function memberUsage(
           customerId,
           start: org.cycle.start,
           end: org.cycle.end ?? undefined,
+          // An api member is narrowed to its own KEY when one is named. The gate
+          // deliberately sums api usage by kind — there is one shared agent window,
+          // and no top-up buys a second — but this is a READ, and "which key spent
+          // it" is the question an admin screen is asking. Summed by kind here, a
+          // list of five keys returned the org total five times: a table that looks
+          // per-key and is not.
           filter:
             kind === "api"
-              ? { callerKind: "api" }
+              ? m.id
+                ? { callerKind: "api", callerId: m.id }
+                : { callerKind: "api" }
               : { callerKind: "user", callerId: m.id },
         }),
       ]);

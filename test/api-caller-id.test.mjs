@@ -84,3 +84,65 @@ test("an invalid key is still refused before anything is metered", async () => {
   assert.equal(res?.status, 401);
   assert.equal(calls.length, 0, "nothing metered for a key that does not resolve");
 });
+
+test("memberUsage narrows an api member to its own key", async () => {
+  // Summed by kind, a list of five keys returned the org total five times — a table
+  // that looks per-key and is not. The GATE still sums by kind (one shared agent
+  // window); this is the read an admin screen makes.
+  const { memberUsage } = await import("../dist/usage.js");
+  const { __setStripeForTests } = await import("../dist/billing.js");
+  // The wallet and spend-ceiling reads inside usageSummary go to Stripe; neither is
+  // what this asserts. The customer carries no metadata and no balance.
+  __setStripeForTests({
+    customers: {
+      async retrieve() {
+        return { id: "cus_1", metadata: {}, currency: "eur" };
+      },
+      listBalanceTransactions() {
+        return { async *[Symbol.asyncIterator]() {} };
+      },
+    },
+  });
+  const seen = [];
+  const ledger = {
+    covers: { orgIncluded: true, callerIncluded: true },
+    async record() {},
+    async total(q) {
+      seen.push(q.filter);
+      return q.filter?.callerId === "key_a" ? 40 : q.filter?.callerId === "key_b" ? 2 : 100;
+    },
+  };
+  const adapter = {
+    async getBillingCustomerId() {
+      return "cus_1";
+    },
+    async getOrgMetadata() {
+      return {};
+    },
+  };
+  const rows = await memberUsage(
+    adapter,
+    { freeCredits: 0, currency: "eur", baseUrl: "https://x", internalDomains: [] },
+    {
+      orgId: "ws_1",
+      plans: {},
+      plan: null,
+      members: [
+        { id: "key_a", kind: "api" },
+        { id: "key_b", kind: "api" },
+      ],
+      ledger,
+    },
+  );
+
+  assert.deepEqual(
+    rows.map((r) => [r.id, r.usedInCycle]),
+    [
+      ["key_a", 40],
+      ["key_b", 2],
+    ],
+    "each key reports its own usage",
+  );
+  // And the filter carried the key, which is what makes that possible.
+  assert.ok(seen.some((f) => f?.callerKind === "api" && f?.callerId === "key_a"));
+});
