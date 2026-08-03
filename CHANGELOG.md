@@ -1,3 +1,48 @@
+# [4.0.0](https://github.com/arnaudjnn/billing-tools/compare/v3.2.0...v4.0.0) (2026-08-03)
+
+
+* feat!: remove the legacy PlanDef shape ([5c16f82](https://github.com/arnaudjnn/billing-tools/commit/5c16f8282582f53d8c9ca53762b92ca9130f8238))
+
+
+### BREAKING CHANGES
+
+* `PlanDef`, `PlansConfig`, `SeatTypeDef`, `isLegacyPlan`,
+`DEFAULT_SEAT_TYPES` and `PlanModel.legacy` are removed. `PlanCatalog` is now
+`Record<string, PlanSpec>`, so a config must declare `sells` / `cap` / `sale`.
+
+It was kept for exactly one reason: both apps declared `PLANS: PlansConfig` and
+read `PLANS[k].price.monthly`, so turning `PlanDef` into a union would have
+stopped their builds compiling. Both migrated to `definePlans` with `PlanSpec`
+long ago, and by 3.1.x the only things still naming the legacy shape were this
+library and its own tests — traced across all three repos, the sole hit outside
+here was a COMMENT in gtm-tools saying it had stopped using `DEFAULT_SEAT_TYPES`.
+Compatibility you are the sole consumer of is not compatibility.
+
+What that was costing: 176 lines of plan-model.ts, a second normalisation branch
+running in parallel with the real one, a `legacy: boolean` carried on every
+PlanModel, a doctor warning for a state no config could reach, and a
+`normalizeSeatTypes` that read every field twice (`max ?? legacy.seats`,
+`display ?? legacy.label`) so a reader could never be sure which spelling won.
+`normalizePlan` now has one branch.
+
+Both consumers typecheck and pass their suites against this unchanged — 241 and
+29 tests — which is the evidence that nothing was using it.
+
+Migration is mechanical, and AGENTS.md carries the table: `seats` ->
+`limits.members`, `price` -> `sells.flat`, `seatTypes` -> `sells.seats` (with
+`seats` -> `max`, `label` -> `display.label`), `allowanceMode: "per_seat"` ->
+`cap: per_seat` + `onExhausted: "block"`, `allowanceMode: "global"` ->
+`cap: wallet` (never `pool` — it only ever meant "no per-seat cap", and a pool
+would start blocking a live customer), `creditsPerSeat` -> `grant.per_member` or
+`cap.pool` depending on which you actually meant. `sale` is now required rather
+than guessed from whether any price exists — guessing it is what let a quote-only
+plan be bought at its placeholder price.
+
+`sale: "legacy"` is unrelated and stays: a plan kept for existing subscribers and
+offered to nobody new.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
 # [3.2.0](https://github.com/arnaudjnn/billing-tools/compare/v3.1.1...v3.2.0) (2026-08-03)
 
 
