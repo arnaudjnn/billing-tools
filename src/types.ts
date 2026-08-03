@@ -192,6 +192,20 @@ export interface BillingConfig {
     /** Override the mode `origin` / `automatic` imply. See `TaxMode`. */
     mode?: "local" | "stripe" | "none";
     /**
+     * Accept a knowingly-approximate rate under `mode: "local"`.
+     *
+     * Only US destinations are affected: `sales-tax` carries one rate per state,
+     * but US sales tax stacks county, city and district rates on top of it across
+     * 13 000+ jurisdictions, and SaaS is taxable in some states and not others.
+     * Illinois reads 6.25% where a Chicago buyer owes ~10.25%.
+     *
+     * Without this, such a charge THROWS rather than going out under-taxed —
+     * under-collection is the one direction that is not recoverable. Prefer
+     * `mode: "stripe"` if you sell into the US; set this only if you have decided
+     * the state rate is close enough for your case.
+     */
+    allowApproximate?: boolean;
+    /**
      * Resolve the TaxRate ids yourself, e.g. from your own records. Wins over
      * `mode` when it returns any — the hook exists to be authoritative.
      */

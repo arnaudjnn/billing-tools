@@ -106,6 +106,29 @@ export async function checkBillingSetup(opts: {
     detail: `${account.id} (${account.country ?? "?"}) — ${livemode ? "LIVE" : "test"} mode`,
   });
 
+  // `"local"` is genuinely as good as Stripe Tax for VAT/GST — 27 EU countries with
+  // one published rate each — and genuinely not for the US, where the rate is a
+  // stack of state + county + city + district across 13 000+ jurisdictions. Saying
+  // so at deploy time is the only place it can be said usefully: at charge time the
+  // choice has already been made, and on an invoice it is invisible.
+  if (taxMode === "local") {
+    const origin = opts.config?.tax?.origin;
+    const allowed = opts.config?.tax?.allowApproximate;
+    if (origin?.toUpperCase() === "US" && !allowed) {
+      checks.push({
+        level: "warn",
+        title: "US sales tax under local calculation",
+        detail:
+          "the origin is US and `allowApproximate` is not set, so any US-destination charge will " +
+          "THROW rather than go out under-taxed",
+        fix:
+          'Use `tax: { mode: "stripe" }` for US destinations — local rates are state-level only ' +
+          "(Illinois 6.25% vs Chicago ~10.25%), and no free dataset resolves the 13 000+ local " +
+          "jurisdictions. Set `allowApproximate: true` only if the state rate is close enough for you",
+      });
+    }
+  }
+
   if (taxMode === "local") {
     // `taxRatesFor` mints a TaxRate per (country, percent, name) on first use and
     // reuses it forever, so the account accumulates a handful. Nothing to provision,

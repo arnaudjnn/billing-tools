@@ -106,3 +106,64 @@ test("an account with no country reports none, and is not re-read", async () => 
   assert.equal(await originFor(undefined), null);
   assert.equal(calls, 1, "a settled answer should be remembered");
 });
+
+// ── US destinations are refused, not approximated ────────────────────────────
+//
+// `sales-tax` carries ONE rate per US state. US sales tax is destination-based
+// across 13 000+ jurisdictions — counties, cities and special districts stack on
+// the state rate — and SaaS is taxable in some states and not others. Illinois
+// reads 6.25% where a Chicago buyer owes ~10.25%.
+//
+// Verified against npm while deciding this: no package ships accurate US local
+// rates. `taxjar` is a client for a paid API, `washington-state-sales-tax` covers
+// one state, `eu-vat-rates-data` is EU-only. The data is a licensed product, so
+// this is not a gap a dependency can close.
+//
+// So the rate is not silently applied. Under-collection is the one direction that
+// is not recoverable: the customer is gone and the difference is yours, with
+// interest. A charge that fails with a reason can be fixed.
+
+import { ApproximateTaxError, resolveTax, taxRatesFor } from "../dist/tax.js";
+
+test("a US destination is flagged approximate; the EU is not", async () => {
+  const us = await resolveTax({ originCountry: "US", country: "US", state: "IL" });
+  assert.equal(us.approximate, true);
+  // The state rate itself is still reported — the flag says "incomplete", not "wrong".
+  assert.ok(us.percent > 0);
+
+  const it = await resolveTax({ originCountry: "FR", country: "IT" });
+  assert.equal(it.approximate, undefined, "EU VAT is one published rate per country");
+  assert.equal(it.percent, 22);
+});
+
+test("minting a rate from an approximate decision throws, and says what to do", async () => {
+  await assert.rejects(
+    () => taxRatesFor({ originCountry: "US", country: "US", state: "IL" }),
+    (e) => {
+      assert.ok(e instanceof ApproximateTaxError, "should be the typed error");
+      // The message has to carry the numbers: "approximate" alone does not convey
+      // that the gap is four percentage points.
+      assert.match(e.message, /Chicago/);
+      assert.match(e.message, /mode: "stripe"/);
+      return true;
+    },
+  );
+});
+
+test("allowApproximate is the explicit way to accept it", async () => {
+  // Not asserting Stripe behaviour — asserting the refusal is opt-outable, so a
+  // caller who has decided the state rate is close enough is not blocked.
+  await assert.doesNotReject(async () => {
+    try {
+      await taxRatesFor({
+        originCountry: "US",
+        country: "US",
+        state: "IL",
+        allowApproximate: true,
+      });
+    } catch (e) {
+      // Anything but the approximation guard is fine here (no real Stripe key).
+      if (e instanceof ApproximateTaxError) throw e;
+    }
+  });
+});

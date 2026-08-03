@@ -19,6 +19,21 @@ import type { BillingConfig } from "./types.js";
 export type TaxDecision = {
   /** e.g. 22 for 22%. Zero for reverse charge and out-of-scope sales. */
   percent: number;
+  /**
+   * The rate is a KNOWN UNDER-ESTIMATE, not an exact answer.
+   *
+   * Set for US destinations, and only there. `sales-tax` carries one rate per US
+   * state, but US sales tax is destination-based across 13 000+ jurisdictions:
+   * counties, cities and special districts stack on the state rate, and SaaS is
+   * taxable in some states and not others. Illinois is 6.25% in the table while a
+   * Chicago buyer owes ~10.25%. Getting that right needs address → geocode →
+   * jurisdiction boundaries, which is a data operation and not something a local
+   * table can approximate.
+   *
+   * `taxRatesFor` refuses to mint a Stripe rate from an approximate decision, so
+   * this cannot be applied by accident — see `allowApproximate`.
+   */
+  approximate?: boolean;
   /** The customer accounts for the VAT (cross-border EU B2B with a valid id). */
   reverseCharge: boolean;
   country: string;
@@ -48,12 +63,32 @@ export async function resolveTax(opts: {
     opts.state ?? undefined,
     opts.taxNumber || undefined,
   );
+  const country = opts.country.toUpperCase();
   return {
     percent: Math.round(r.rate * 10000) / 100,
     reverseCharge: Boolean(r.charge?.reverse),
-    country: opts.country.toUpperCase(),
+    country,
     type: r.type,
+    // A state-level rate for a country whose tax is local. Flagged rather than
+    // silently returned: under-collecting is the one direction that is not
+    // recoverable — you owe the difference yourself, with interest, and the
+    // customer is long gone.
+    ...(country === "US" ? { approximate: true } : {}),
   };
+}
+
+/** Thrown when a charge would carry a rate this library knows to be wrong. */
+export class ApproximateTaxError extends Error {
+  constructor(readonly decision: TaxDecision) {
+    super(
+      `Refusing to apply an approximate tax rate for ${decision.country}: ${decision.percent}% is ` +
+        "the state-level rate, and US sales tax stacks county, city and district rates on top " +
+        "(Illinois 6.25% vs Chicago ~10.25%), with SaaS taxable in some states and not others. " +
+        'Use `config.tax.mode: "stripe"` for US destinations, or set ' +
+        "`config.tax.allowApproximate: true` to accept a known under-estimate.",
+    );
+    this.name = "ApproximateTaxError";
+  }
 }
 
 /**
@@ -266,6 +301,7 @@ export async function taxFor(
       }
       const where = stripeCustomerId ? await customerPlaceOfSupply(stripeCustomerId) : null;
       const { rateIds } = await taxRatesFor({
+        allowApproximate: tax?.allowApproximate,
         originCountry,
         // No address on file → treat it as a domestic sale (see above).
         country: where?.country ?? originCountry,
@@ -307,8 +343,20 @@ export async function taxRatesFor(opts: {
   state?: string | null;
   taxNumber?: string | null;
   displayName?: string;
+  /**
+   * Apply a rate this library knows to be an under-estimate (US destinations).
+   *
+   * Off by default, and the refusal is the point: a 6.25% Illinois rate on an
+   * invoice to a Chicago buyer who owes ~10.25% is a liability that surfaces at
+   * audit, long after the customer is gone and the difference is yours. A charge
+   * that fails with a reason is recoverable; one that succeeds at the wrong rate
+   * is not. `config.tax.allowApproximate` is how a caller who understands that
+   * says so.
+   */
+  allowApproximate?: boolean;
 }): Promise<{ decision: TaxDecision; rateIds: string[] }> {
   const decision = await resolveTax(opts);
+  if (decision.approximate && !opts.allowApproximate) throw new ApproximateTaxError(decision);
   const id = await ensureStripeTaxRate(decision, { displayName: opts.displayName });
   return { decision, rateIds: id ? [id] : [] };
 }
