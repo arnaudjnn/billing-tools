@@ -136,6 +136,27 @@ single bucketed read, and `UsageQuery.sources` skipping the leg that cannot
 contribute. If you outgrow it, the levers are asking Stripe to raise the account
 limit, or bringing your own `ledger` — the seam is unchanged.
 
+### ⚖️ What this deliberately does not do
+
+Worth knowing before you adopt it, rather than after.
+
+- **No per-action audit trail.** Usage is counted, not logged: a total can say a
+  member spent 412 credits this cycle, never *which* calls made it up. That is the
+  price of having no database. If you owe customers an itemised breakdown —
+  enterprise contracts often do — bring your own `ledger`; the seam is unchanged
+  and takes a store alongside.
+- **Counting degrades, it does not stop the product.** A read that cannot be
+  answered serves the last known value (or 0), and a write that cannot be delivered
+  is retried and then dropped. Both report through `onUsageFault` — **wire it**, or
+  your only signal is one line on stderr.
+- **The wallet read fails closed.** If the customer's balance cannot be read the
+  metered call is refused, because a stale balance would let someone spend what
+  they do not have. Usage windows degrade; money does not.
+- **Versioning is semantic and moves fast.** Releases are automated from
+  Conventional Commits, so anything that changes a signature or a default lands as
+  a major — several have. Pin a major range and read the changelog; the majors are
+  honest, not cosmetic.
+
 ### 🏛️ Design doctrine
 - 📐 **SDK-first:** thin-wraps the Stripe & WorkOS SDKs (SDK types, pagination, typed errors, idempotency) so the lib evolves *with* the platforms instead of drifting.
 - 🎯 **One memoized client per SDK:** lazy, never constructed at import.
