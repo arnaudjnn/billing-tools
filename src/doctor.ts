@@ -251,11 +251,18 @@ export async function checkBillingSetup(opts: {
     // simply blocked, with no failure anywhere to explain why.
     const reloadNoCard: string[] = [];
     let seen = 0;
+    // Objects EXAMINED, not counted. The two differ once `stripeScopeUsageLedger`
+    // is wired: a deployment with many members has more usage-scope customers than
+    // real ones, and they are the most recently created, so they sit at the front
+    // of this list. Bounding only `seen` would page through every one of them —
+    // 100 per request — before the sample filled. The doctor is a preflight; it
+    // must cost a bounded number of requests whatever the account looks like.
+    let scanned = 0;
     for await (const customer of stripe.customers.list({ limit: 100 })) {
+      if (++scanned > 2_000) break;
       // A per-caller usage scope is a COUNTER wearing a customer's shape
       // (`stripeScopeUsageLedger`): it buys nothing, is never invoiced and has no
-      // currency to be pinned to. Counting them would dilute the ratio below and
-      // could exhaust the 500-customer sample without looking at a real one.
+      // currency to be pinned to. Counting them would dilute the ratio below.
       if (customer.metadata?.bt_kind === USAGE_SCOPE_KIND) continue;
       seen++;
       if (customer.currency && customer.currency !== want) {
