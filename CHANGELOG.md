@@ -1,3 +1,10 @@
+# [2.15.0](https://github.com/arnaudjnn/billing-tools/compare/v2.14.0...v2.15.0) (2026-08-03)
+
+
+### Features
+
+* **pricing:** publish the name of the seat a seatless plan gives ([0179d28](https://github.com/arnaudjnn/billing-tools/commit/0179d2834c76e00d29f749377899c8ab9b91b5fe))
+
 # [2.14.0](https://github.com/arnaudjnn/billing-tools/compare/v2.13.0...v2.14.0) (2026-08-03)
 
 
