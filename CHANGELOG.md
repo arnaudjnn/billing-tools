@@ -1,3 +1,10 @@
+# [2.16.0](https://github.com/arnaudjnn/billing-tools/compare/v2.15.0...v2.16.0) (2026-08-03)
+
+
+### Features
+
+* **usage:** export USAGE_COUNTERS / USAGE_EVENTS ([a086e86](https://github.com/arnaudjnn/billing-tools/commit/a086e860b6f70b513e7a3db2966b07ef406679eb))
+
 # [2.15.0](https://github.com/arnaudjnn/billing-tools/compare/v2.14.0...v2.15.0) (2026-08-03)
 
 
