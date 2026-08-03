@@ -273,8 +273,10 @@ export {
   type ApiMeterGuard,
 } from "./metering.js";
 
-// Top-up requests (user → owner approval) + admin-gated auto-top-up. Stored in
-// WorkOS org metadata via the adapter — no new backend.
+// Top-up requests (user → owner approval) + admin-gated auto-top-up. Stored via
+// the adapter — no new backend. A GRANT goes on the MEMBER (setUserMetadata) so
+// there is no member ceiling; the request queue stays on the org, trimmed to what
+// a metadata value actually holds. See the note at the top of topup.ts.
 export {
   requestTopUp,
   listTopUpRequests,
@@ -283,6 +285,8 @@ export {
   grantTopUp,
   grantExtraAllowance,
   extraAllowance,
+  trimRequestsToBudget,
+  METADATA_VALUE_LIMIT,
   type TopUpRequest,
 } from "./topup.js";
 

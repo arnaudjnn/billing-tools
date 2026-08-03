@@ -10,9 +10,52 @@ import { getSeatType } from "./seats.js";
 // checks adapter.isAdmin(orgId, userId) itself before calling. Auto-top-up for the
 // shared reserve is just `setAutoReloadSettings` (the set_auto_reload tool).
 
+// ── Where each record lives, and why they are not in the same place ─────────
+//
+// Both of these used to be one JSON blob in the ORG's metadata, bounded by a
+// guessed record count. Measured against the real limit (WorkOS: 10 keys per
+// org, 600 chars per VALUE, ASCII only):
+//
+//   topUpRequests   175 chars per request → the 4th request overflows the value,
+//                   222 with `grantedBy`     or the 3rd for an admin grant
+//                                           (the cap said 50 — over 20x too many)
+//   topUpGrants      53 chars per member  → the 12th member overflows it, and no
+//                                           cycle was ever pruned, so a single
+//                                           member's grants also grew forever
+//
+// An overflow is not a local failure. `setOrgMetadata` and `setSubscription`
+// both re-write the WHOLE metadata object, so ONE oversized value makes every
+// metadata write for that org fail — including the subscription status sync. A
+// long enough top-up history stopped `past_due` from ever being recorded.
+//
+// So each record now lives where its shape says it should:
+//
+//   a GRANT is per-member, and is what the meter READS  → stored on the member
+//     (`adapter.setUserMetadata`), so every member has their own budget and
+//     there is no member ceiling at all. Pruned to the cycle being written,
+//     because `extraAllowance` only ever asks for the current one.
+//
+//   a REQUEST is a shared queue an owner works through  → stays on the org, but
+//     trimmed to what FITS rather than to a count, evicting SETTLED records
+//     first so a member's unanswered ask is never what gets dropped.
+//
+// The asymmetry is deliberate: losing a request loses history, losing a grant
+// loses allowance the customer was promised.
+
 const REQUESTS_KEY = "topUpRequests"; // org metadata → JSON TopUpRequest[]
 const GRANTS_KEY = "topUpGrants"; // org metadata → JSON { [memberId]: { [cycle]: credits } }
-const MAX_STORED_REQUESTS = 50;
+const MEMBER_GRANTS_KEY = "btTopUpGrants"; // user metadata → JSON { [orgId]: { [cycle]: credits } }
+
+/**
+ * Chars available in one metadata value.
+ *
+ * WorkOS is the tightest store this library targets (600 per value, 10 keys per
+ * org, ASCII), and it is what the shipped adapter writes to. Anything packed
+ * into a value is measured against this rather than against a record count —
+ * a count cannot be checked against the thing that actually rejects the write,
+ * which is exactly how a cap of 50 shipped for a value that holds 2.
+ */
+export const METADATA_VALUE_LIMIT = 600;
 
 export interface TopUpRequest {
   id: string;
@@ -24,8 +67,6 @@ export interface TopUpRequest {
   /** Set when an admin granted it outright rather than approving a request. */
   grantedBy?: string;
 }
-
-type Grants = Record<string, Record<string, number>>;
 
 async function readJson<T>(adapter: BillingAdapter, orgId: string, key: string, fallback: T): Promise<T> {
   const md = (await adapter.getOrgMetadata?.(orgId)) ?? {};
@@ -42,6 +83,105 @@ async function writeJson(adapter: BillingAdapter, orgId: string, key: string, va
   await adapter.setOrgMetadata?.(orgId, { [key]: JSON.stringify(value) });
 }
 
+function parse<T>(raw: string | undefined, fallback: T): T {
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+/** org metadata (legacy + fallback): member → cycle → credits. */
+type Grants = Record<string, Record<string, number>>;
+/** user metadata: org → cycle → credits. Scoped by org because a WorkOS user can
+ *  belong to several, and a grant is only good in the one that gave it. */
+type MemberGrants = Record<string, Record<string, number>>;
+
+/**
+ * Keep the newest requests that FIT, giving up settled records before pending ones.
+ *
+ * The previous bound was a count (50) on a value that holds 2, which is why this
+ * failed in production and never in a test — a count cannot be validated against
+ * the thing that rejects the write. Bounding by the same unit the store limits
+ * (characters) is the only version that cannot drift from it.
+ *
+ * A settled record is history; a pending one is a member waiting for an answer.
+ * So settled records go first, oldest-first, and pending ones are only dropped
+ * when nothing settled is left to give up — at which point the oldest goes,
+ * since a request nobody answered for a whole cycle is stale anyway.
+ */
+export function trimRequestsToBudget(
+  list: TopUpRequest[],
+  limit = METADATA_VALUE_LIMIT,
+): TopUpRequest[] {
+  const fits = (l: TopUpRequest[]) => JSON.stringify(l).length <= limit;
+  const out = [...list];
+  while (!fits(out)) {
+    const settled = out.findIndex((r) => r.status !== "pending");
+    if (settled >= 0) out.splice(settled, 1);
+    else if (out.length > 0) out.shift();
+    else break; // an empty array is "[]" — always fits; guards a limit below 2
+  }
+  return out;
+}
+
+/** A member's grant for one cycle, from wherever this adapter can store it. */
+async function readGrant(
+  adapter: BillingAdapter,
+  orgId: string,
+  memberId: string,
+  cycle: string,
+): Promise<number> {
+  if (adapter.getUserMetadata) {
+    const md = await adapter.getUserMetadata(memberId).catch((): Record<string, string> => ({}));
+    const mine = parse<MemberGrants>(md[MEMBER_GRANTS_KEY], {});
+    const own = mine[orgId]?.[cycle];
+    if (own != null) return own;
+    // Fall through rather than returning 0: a grant approved before this version
+    // is still in the org blob, and this cycle's allowance must not vanish the
+    // moment the library is upgraded.
+  }
+  const blob = await readJson<Grants>(adapter, orgId, GRANTS_KEY, {});
+  return blob[memberId]?.[cycle] ?? 0;
+}
+
+/** Add to a member's grant for one cycle, and return the new total. */
+async function addGrant(
+  adapter: BillingAdapter,
+  orgId: string,
+  memberId: string,
+  cycle: string,
+  amount: number,
+): Promise<number> {
+  const base = await readGrant(adapter, orgId, memberId, cycle);
+  const total = base + amount;
+
+  if (adapter.getUserMetadata && adapter.setUserMetadata) {
+    const md = await adapter.getUserMetadata(memberId).catch((): Record<string, string> => ({}));
+    const mine = parse<MemberGrants>(md[MEMBER_GRANTS_KEY], {});
+    // Only the cycle being written is kept for this org: `extraAllowance` reads
+    // exactly one cycle, so every other one is unreadable weight that only grows.
+    // Other orgs keep their single entry — they are bounded by org count, and
+    // this call has no way to know what cycle they are in.
+    mine[orgId] = { [cycle]: total };
+    await adapter.setUserMetadata(memberId, { [MEMBER_GRANTS_KEY]: JSON.stringify(mine) });
+    return total;
+  }
+
+  // No per-member store. The org blob, pruned to this cycle so that at least it
+  // stops growing without bound; the ~12-member ceiling stays, which is what
+  // implementing getUserMetadata/setUserMetadata buys an adapter.
+  const blob = await readJson<Grants>(adapter, orgId, GRANTS_KEY, {});
+  const pruned: Grants = {};
+  for (const [m, byCycle] of Object.entries(blob)) {
+    if (byCycle?.[cycle] != null) pruned[m] = { [cycle]: byCycle[cycle] };
+  }
+  pruned[memberId] = { [cycle]: total };
+  await writeJson(adapter, orgId, GRANTS_KEY, pruned);
+  return total;
+}
+
 /** A user requests extra credits for the current cycle (owner must approve). */
 export async function requestTopUp(
   adapter: BillingAdapter,
@@ -50,7 +190,7 @@ export async function requestTopUp(
 ): Promise<void> {
   const list = await readJson<TopUpRequest[]>(adapter, orgId, REQUESTS_KEY, []);
   list.push({ ...req, status: "pending" });
-  await writeJson(adapter, orgId, REQUESTS_KEY, list.slice(-MAX_STORED_REQUESTS));
+  await writeJson(adapter, orgId, REQUESTS_KEY, trimRequestsToBudget(list));
 }
 
 export async function listTopUpRequests(adapter: BillingAdapter, orgId: string): Promise<TopUpRequest[]> {
@@ -68,11 +208,13 @@ export async function approveTopUp(
   const req = list.find((r) => r.id === requestId);
   if (!req || req.status !== "pending") return { ok: false, reason: "not_found" };
   req.status = "approved";
-  const grants = await readJson<Grants>(adapter, orgId, GRANTS_KEY, {});
-  grants[req.memberId] = grants[req.memberId] ?? {};
-  grants[req.memberId][req.cycle] = (grants[req.memberId][req.cycle] ?? 0) + req.amount;
-  await writeJson(adapter, orgId, REQUESTS_KEY, list);
-  await writeJson(adapter, orgId, GRANTS_KEY, grants);
+  // The grant first: it is the part the meter reads, so if the history write is
+  // what fails, the member still has the allowance they were promised.
+  await addGrant(adapter, orgId, req.memberId, req.cycle, req.amount);
+  // Trimmed on the way out even though nothing was added — an org whose list is
+  // already over the limit from a previous version would otherwise be unable to
+  // record ANY approval, and this repairs it on the first one.
+  await writeJson(adapter, orgId, REQUESTS_KEY, trimRequestsToBudget(list));
   return { ok: true };
 }
 
@@ -109,14 +251,12 @@ export async function grantTopUp(
   }
   const list = await readJson<TopUpRequest[]>(adapter, orgId, REQUESTS_KEY, []);
   if (input.id && list.some((r) => r.id === input.id)) {
-    const grants = await readJson<Grants>(adapter, orgId, GRANTS_KEY, {});
-    return { ok: true, total: grants[input.memberId]?.[input.cycle] ?? 0, reason: "duplicate" };
+    const total = await readGrant(adapter, orgId, input.memberId, input.cycle);
+    return { ok: true, total, reason: "duplicate" };
   }
 
-  const grants = await readJson<Grants>(adapter, orgId, GRANTS_KEY, {});
-  grants[input.memberId] = grants[input.memberId] ?? {};
-  const total = (grants[input.memberId][input.cycle] ?? 0) + input.amount;
-  grants[input.memberId][input.cycle] = total;
+  // The grant before the history, for the reason in `approveTopUp`.
+  const total = await addGrant(adapter, orgId, input.memberId, input.cycle, input.amount);
 
   list.push({
     id: input.id ?? `grant_${input.memberId}_${input.cycle}_${input.amount}`,
@@ -128,8 +268,7 @@ export async function grantTopUp(
     ...(input.grantedBy ? { grantedBy: input.grantedBy } : {}),
   });
 
-  await writeJson(adapter, orgId, REQUESTS_KEY, list.slice(-MAX_STORED_REQUESTS));
-  await writeJson(adapter, orgId, GRANTS_KEY, grants);
+  await writeJson(adapter, orgId, REQUESTS_KEY, trimRequestsToBudget(list));
   return { ok: true, total };
 }
 
@@ -227,19 +366,19 @@ export async function denyTopUp(
   const req = list.find((r) => r.id === requestId);
   if (!req || req.status !== "pending") return { ok: false, reason: "not_found" };
   req.status = "denied";
-  await writeJson(adapter, orgId, REQUESTS_KEY, list);
+  await writeJson(adapter, orgId, REQUESTS_KEY, trimRequestsToBudget(list));
   return { ok: true };
 }
 
-/** A member's approved extra allowance for a cycle. The consumer reads this and
- *  passes it into `meterUsage` as `extraAllowance` so the meter adds it to the
- *  seat pack. */
+/** A member's approved extra allowance for a cycle. `resolveAllowance` reads this
+ *  on the hot path and adds it to the seat pack. Reads the member's own store when
+ *  the adapter has one, falling back to the org blob so a grant written by an
+ *  earlier version is still honoured. */
 export async function extraAllowance(
   adapter: BillingAdapter,
   orgId: string,
   memberId: string,
   cycle: string,
 ): Promise<number> {
-  const grants = await readJson<Grants>(adapter, orgId, GRANTS_KEY, {});
-  return grants[memberId]?.[cycle] ?? 0;
+  return readGrant(adapter, orgId, memberId, cycle);
 }

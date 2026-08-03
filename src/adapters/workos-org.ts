@@ -311,6 +311,31 @@ export class WorkOSOrgAdapter implements BillingAdapter {
     await this.workos.organizations.updateOrganization({ organization: wid, metadata });
   }
 
+  /**
+   * A member's own metadata — the same 10-key/600-char budget, but per user.
+   *
+   * This is where a per-MEMBER record belongs. Packed into an org value instead,
+   * a per-member map hits a ceiling of about twelve members (measured), and the
+   * overflow fails the whole org metadata write rather than just that record.
+   * See the note at the top of `topup.ts`.
+   */
+  async getUserMetadata(userId: string): Promise<Record<string, string>> {
+    const user = await this.workos.userManagement.getUser(userId);
+    return (user.metadata as Record<string, string>) ?? {};
+  }
+
+  /** Merge a patch into a member's metadata (null/"" deletes the key). Read-then-
+   *  write for the same reason `setOrgMetadata` does it: the update replaces. */
+  async setUserMetadata(userId: string, patch: Record<string, string | null>): Promise<void> {
+    const user = await this.workos.userManagement.getUser(userId);
+    const metadata: Record<string, string> = { ...((user.metadata as Record<string, string>) ?? {}) };
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === null || v === "") delete metadata[k];
+      else metadata[k] = v;
+    }
+    await this.workos.userManagement.updateUser({ userId, metadata });
+  }
+
   /** Admin/owner check via the user's role in the org (WorkOS "admin" slug). */
   async isAdmin(orgId: string, userId: string): Promise<boolean> {
     const r = await this.workos.userManagement.listOrganizationMemberships({

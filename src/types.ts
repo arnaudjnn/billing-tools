@@ -62,6 +62,22 @@ export interface BillingAdapter {
   /** Merge a patch into the org metadata (null value = delete the key). */
   setOrgMetadata?(orgId: string, patch: Record<string, string | null>): Promise<void>;
 
+  /**
+   * The same store, for ONE MEMBER — where per-member records belong.
+   *
+   * The org map is a single shared budget (WorkOS: 600 chars per value), so a
+   * per-member map packed into one of its values has a member ceiling. Measured,
+   * that ceiling was 12: the 12th member's top-up grant overflowed the value and
+   * the write failed. A record that is per-member is stored per-member instead,
+   * where each one has a budget of its own and there is no ceiling.
+   *
+   * Optional, and the top-up engine falls back to the org map when it is absent —
+   * so an existing adapter keeps working, with that ceiling.
+   */
+  getUserMetadata?(userId: string): Promise<Record<string, string>>;
+  /** Merge a patch into a member's metadata (null value = delete the key). */
+  setUserMetadata?(userId: string, patch: Record<string, string | null>): Promise<void>;
+
   // Subscription state + seat count. The billing-sync engine relies on these,
   // but they were only ever declared on the concrete WorkOSOrgAdapter — so an
   // app holding the seam type had no way to READ what the engine had written,
