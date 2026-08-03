@@ -1,3 +1,27 @@
+# [7.0.0](https://github.com/arnaudjnn/billing-tools/compare/v6.0.0...v7.0.0) (2026-08-03)
+
+
+* perf(usage)!: answer a caller's windows in one request, and drop wallet: null ([a74ef20](https://github.com/arnaudjnn/billing-tools/commit/a74ef202bd796c9617279fa7cc0998c97c83fbfa))
+
+
+### BREAKING CHANGES
+
+* `stripeScopeUsageLedger({ wallet: null })` is removed. It was a
+per-DEPLOYMENT switch for a per-QUERY fact: the same plan can have a member window
+that overflows into the wallet and an agent window that is wallet-only, so one flag
+could not be right for both, and setting it wrong under-reported — which reads as
+generosity and refuses no one. `UsageQuery.sources` carries it per read and
+`resolveAllowance` derives it from the plan (`capCovers` / `exhaustedPolicy`), so
+nothing has to be declared by hand. Consumers driving the ledger directly pass
+`sources` on the query.
+
+Also fixes an imprecision this surfaced: stripeBalanceUsageLedger.total went
+through `usageSince`, which has no upper bound and summed past a CLOSED window's
+end. No gate hit it (a current window always ends in the future) but a historical
+read would have; both paths now share one bounded walk.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
 # [6.0.0](https://github.com/arnaudjnn/billing-tools/compare/v5.1.0...v6.0.0) (2026-08-03)
 
 
