@@ -1,3 +1,10 @@
+## [11.0.2](https://github.com/arnaudjnn/billing-tools/compare/v11.0.1...v11.0.2) (2026-08-03)
+
+
+### Bug Fixes
+
+* **usage:** retry the write, bound the last unbounded scan, pin multi-instance ([7344ac9](https://github.com/arnaudjnn/billing-tools/commit/7344ac9033e460acb9ca65226557f2090b669a30))
+
 ## [11.0.1](https://github.com/arnaudjnn/billing-tools/compare/v11.0.0...v11.0.1) (2026-08-03)
 
 
