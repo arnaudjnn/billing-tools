@@ -1,3 +1,10 @@
+# [3.1.0](https://github.com/arnaudjnn/billing-tools/compare/v3.0.0...v3.1.0) (2026-08-03)
+
+
+### Features
+
+* **doctor:** runBillingDoctor, the CLI both consumers hand-wrote ([f1218a0](https://github.com/arnaudjnn/billing-tools/commit/f1218a0bbd78662194631e288b83394a7273b498))
+
 # [3.0.0](https://github.com/arnaudjnn/billing-tools/compare/v2.19.0...v3.0.0) (2026-08-03)
 
 
