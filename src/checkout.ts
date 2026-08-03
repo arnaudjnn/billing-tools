@@ -320,7 +320,7 @@ async function openCheckoutSession(opts: {
 
   // Tax, from the deployment's ONE declaration (`config.tax`) unless this call
   // named its own. Needs the customer id, so it can't join the round above — and
-  // under `mode: "billing-tools"` it is the customer's address that decides the
+  // under `mode: "local"` it is the customer's address that decides the
   // rate, which on a brand-new customer is not typed yet: the domestic rate goes on
   // now and the browser re-applies via `updateCheckoutSessionTaxRates` once the
   // address exists. That handoff is what Stripe Tax would otherwise charge for.

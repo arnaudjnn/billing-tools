@@ -130,14 +130,14 @@ test("plans are reconciled when passed, and named in the report", async () => {
   assert.equal(stripe.calls.prices[0].currency, "eur", "the currency comes from config");
 });
 
-test("Stripe Tax is skipped for a billing-tools account, rather than configured", async () => {
+test("Stripe Tax is skipped for a `local` account, rather than configured", async () => {
   // Running it would create registrations the account doesn't need and is billed
   // against, so the mode decides — and it comes from the same `config.tax` the
   // charges read.
   const { result } = await run({ plans: PLANS });
   const s = step(result, "tax");
   assert.equal(s.skipped, true);
-  assert.match(s.detail, /billing-tools/);
+  assert.match(s.detail, /"local"/);
 });
 
 test('mode "stripe" with no registrations passed is a WARNING, not silence', async () => {

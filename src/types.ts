@@ -182,7 +182,7 @@ export interface BillingConfig {
     /**
      * Where YOU are established, as an ISO country code ("IT", "FR", "US").
      *
-     * Setting it selects `mode: "billing-tools"` — the library works the rate out
+     * Setting it selects `mode: "local"` — the library works the rate out
      * itself (`sales-tax` + VIES) from the customer's address and tax id, and
      * applies it as an explicit Stripe TaxRate. It decides domestic vs
      * cross-border, which is the whole question a VAT rate turns on, so there is
@@ -190,7 +190,7 @@ export interface BillingConfig {
      */
     origin?: string;
     /** Override the mode `origin` / `automatic` imply. See `TaxMode`. */
-    mode?: "billing-tools" | "stripe" | "none";
+    mode?: "local" | "stripe" | "none";
     /**
      * Resolve the TaxRate ids yourself, e.g. from your own records. Wins over
      * `mode` when it returns any — the hook exists to be authoritative.

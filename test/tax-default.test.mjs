@@ -1,5 +1,5 @@
 // The tax DEFAULT, which changed in 4.x: configuring nothing now means
-// `"billing-tools"` — this library's own `sales-tax` + VIES calculation, applied as
+// `"local"` — this library's own `sales-tax` + VIES calculation, applied as
 // explicit Stripe TaxRates — where it used to mean `"none"`.
 //
 // The old default was the expensive direction. Silence meant no tax on anything the
@@ -21,9 +21,9 @@ import { test } from "vitest";
 import { taxModeOf, originFor, invalidateTaxOrigin } from "../dist/tax.js";
 import { __setStripeForTests } from "../dist/billing.js";
 
-test("configuring nothing means billing-tools, not none", () => {
-  assert.equal(taxModeOf(undefined), "billing-tools");
-  assert.equal(taxModeOf({}), "billing-tools");
+test("configuring nothing means local, not none", () => {
+  assert.equal(taxModeOf(undefined), "local");
+  assert.equal(taxModeOf({}), "local");
 });
 
 test('"none" is now an explicit opt-out, which is the point', () => {

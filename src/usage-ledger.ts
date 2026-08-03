@@ -1,4 +1,4 @@
-import { getStripe, usageSince } from "./billing.js";
+import { getStripe, usageSince, usageSinceWindows } from "./billing.js";
 import { ledgerGaps, normalizePlans, type LedgerCoverage, type PlanCatalog } from "./plan-model.js";
 
 // Counting usage, separately from moving money.
@@ -73,6 +73,20 @@ export interface UsageLedger {
   /** Summed cost in [start, end). */
   total(query: UsageQuery): Promise<number>;
   /**
+   * Several windows at once, in as few requests as the backend allows.
+   *
+   * Optional, and purely an optimisation: the answer must equal
+   * `Promise.all(queries.map(total))` element for element. It exists because a
+   * plan declares several windows over the SAME caller — a monthly pack and a
+   * weekly limit, say — and both a Stripe meter (via `value_grouping_window`) and
+   * a balance-transaction walk can serve all of them from one pass.
+   *
+   * Callers should not reach for this directly; `stripeScopeUsageLedger` batches
+   * per tick internally, so ordinary `total` calls issued together already
+   * collapse.
+   */
+  totals?(queries: readonly UsageQuery[]): Promise<number[]>;
+  /**
    * Which windows this ledger can count (see `LedgerCoverage`).
    *
    * Optional, and omitting it means "not stated" rather than "counts nothing":
@@ -103,7 +117,44 @@ export function stripeBalanceUsageLedger(): UsageLedger {
       /* the balance transaction IS the record */
     },
     // `start` is epoch ms throughout this seam; Stripe's `created` is seconds.
-    total: (q) => usageSince(q.customerId, Math.floor(q.start / 1000), q.filter),
+    //
+    // Routed through the multi-window walk so `total` and `totals` cannot disagree
+    // — the contract is that the batch equals the individual calls. It also fixes
+    // an old imprecision: this used to call `usageSince`, which has no upper bound
+    // and therefore summed past a CLOSED window's end. No gate hit it (a current
+    // window always ends in the future) but a historical read would have.
+    total: (q) =>
+      usageSinceWindows(
+        q.customerId,
+        [{ since: Math.floor(q.start / 1000), until: q.end == null ? undefined : Math.floor(q.end / 1000) }],
+        q.filter,
+      ).then((r) => r[0]!),
+    // Many windows, ONE walk. Grouped by customer+filter, since those are what
+    // decide which transactions are eligible; the window bounds only decide which
+    // of the groups' totals each one lands in.
+    async totals(queries) {
+      const out = new Array<number>(queries.length).fill(0);
+      const groups = new Map<string, number[]>();
+      queries.forEach((q, i) => {
+        const key = `${q.customerId}|${q.filter?.callerKind ?? ""}|${q.filter?.callerId ?? ""}`;
+        (groups.get(key) ?? groups.set(key, []).get(key)!).push(i);
+      });
+      await Promise.all(
+        [...groups.values()].map(async (idx) => {
+          const first = queries[idx[0]!]!;
+          const sums = await usageSinceWindows(
+            first.customerId,
+            idx.map((i) => ({
+              since: Math.floor(queries[i]!.start / 1000),
+              until: queries[i]!.end == null ? undefined : Math.floor(queries[i]!.end! / 1000),
+            })),
+            first.filter,
+          );
+          idx.forEach((qi, n) => (out[qi] = sums[n]!));
+        }),
+      );
+      return out;
+    },
   };
 }
 

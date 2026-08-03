@@ -314,3 +314,120 @@ test("sources skips the leg that cannot contribute, and defaults to BOTH", async
   assert.equal(await l.total(q({ included: true, wallet: false })), 30);
   assert.equal(walked.n, before, "the balance walk did not happen");
 });
+
+// ── Batching: several windows over one caller, one request ──────────────────
+//
+// `resolveAllowance` issues a plan's windows together, in one tick. The meter can
+// group by time (`value_grouping_window: "day"`), so day-aligned windows over the
+// same scope come out of ONE response — and the balance walk serves all of them in
+// one pass. The contract is that batching changes the COST, never the answer.
+
+const DAY = 86_400_000;
+/** A day-aligned window ending in the future, like `rateWindowFor` produces. */
+const aligned = (daysBack) => ({
+  start: Math.floor(Date.now() / DAY) * DAY - daysBack * DAY,
+  end: Math.floor(Date.now() / DAY) * DAY + DAY,
+});
+
+function bucketStripe(buckets) {
+  const calls = { summaries: [], bucketed: [], plain: [] };
+  __setStripeForTests({
+    customers: {
+      async search() { return { data: [{ id: "cus_u1" }] }; },
+      async create() { return { id: "cus_u1" }; },
+    },
+    billing: {
+      meters: {
+        list() {
+          return { [Symbol.asyncIterator]: async function* () { yield { id: "mtr_scope", event_name: "billing_tools_scope_usage" }; } };
+        },
+        listEventSummaries(meter, params) {
+          calls.summaries.push(params);
+          if (params.value_grouping_window === "day") {
+            calls.bucketed.push(params);
+            const page = buckets;
+            return { [Symbol.asyncIterator]: async function* () { yield* page; }, data: page };
+          }
+          calls.plain.push(params);
+          return Promise.resolve({ data: buckets });
+        },
+      },
+    },
+    v2: { billing: { meterEventSession: { async create() { return { authentication_token: "t", expires_at: new Date(Date.now() + 1e6).toISOString() }; } }, meterEventStream: { async create() {} } } },
+  });
+  return calls;
+}
+
+test("two day-aligned windows over one caller cost ONE bucketed request", async () => {
+  const today = Math.floor(Date.now() / DAY) * DAY;
+  const calls = bucketStripe([
+    { start_time: (today - 2 * DAY) / 1000, end_time: (today - DAY) / 1000, aggregated_value: 7 },
+    { start_time: (today - DAY) / 1000, end_time: today / 1000, aggregated_value: 11 },
+    { start_time: today / 1000, end_time: (today + DAY) / 1000, aggregated_value: 5 },
+  ]);
+  const l = stripeScopeUsageLedger({ wallet: null });
+  const q = (w) => ({ orgId: "org_1", customerId: "cus_org", ...w, filter: { callerId: "u1" } });
+
+  // Issued together, exactly as resolveAllowance issues them.
+  const [wide, narrow] = await Promise.all([l.total(q(aligned(2))), l.total(q(aligned(0)))]);
+
+  assert.equal(calls.bucketed.length, 1, "one bucketed read served both windows");
+  assert.equal(calls.plain.length, 0);
+  assert.equal(wide, 23, "3 days of buckets");
+  assert.equal(narrow, 5, "today only, sliced from the same response");
+});
+
+test("a single window is read plainly, not bucketed", async () => {
+  const calls = bucketStripe([{ start_time: 0, end_time: 9e9, aggregated_value: 4 }]);
+  const l = stripeScopeUsageLedger({ wallet: null });
+  const v = await l.total({ orgId: "org_1", customerId: "cus_org", ...aligned(1), filter: { callerId: "u1" } });
+  assert.equal(calls.bucketed.length, 0, "bucketing one window buys nothing");
+  assert.equal(calls.plain.length, 1);
+  assert.equal(v, 4);
+});
+
+test("an unaligned window keeps its own read — Stripe rejects bucketing it", async () => {
+  const calls = bucketStripe([{ start_time: 0, end_time: 9e9, aggregated_value: 3 }]);
+  const l = stripeScopeUsageLedger({ wallet: null });
+  const a = aligned(7);
+  await Promise.all([
+    l.total({ orgId: "org_1", customerId: "cus_org", ...a, filter: { callerId: "u1" } }),
+    l.total({ orgId: "org_1", customerId: "cus_org", ...a, filter: { callerId: "u1" } }),
+    // An `every: "hour"` window is not on a day boundary.
+    l.total({ orgId: "org_1", customerId: "cus_org", start: a.start + 3_600_000, end: a.end, filter: { callerId: "u1" } }),
+  ]);
+  assert.equal(calls.bucketed.length, 1, "the two aligned ones batched");
+  assert.equal(calls.plain.length, 1, "the hourly one did not");
+});
+
+test("different callers are never mixed into one read", async () => {
+  const calls = bucketStripe([{ start_time: 0, end_time: 9e9, aggregated_value: 1 }]);
+  const l = stripeScopeUsageLedger({ wallet: null });
+  const a = aligned(3);
+  await Promise.all([
+    l.total({ orgId: "org_1", customerId: "cus_org", ...a, filter: { callerId: "u1" } }),
+    l.total({ orgId: "org_1", customerId: "cus_org", ...a, filter: { callerId: "u2" } }),
+  ]);
+  // Two scopes, two customers — a shared read would attribute one member's usage
+  // to another, which is worse than any number of extra requests.
+  assert.equal(calls.summaries.length, 2);
+});
+
+test("the wallet leg walks ONCE for several windows", async () => {
+  bucketStripe([]);
+  const walks = { n: 0 };
+  const wallet = {
+    covers: { orgIncluded: false, callerIncluded: false },
+    async record() {},
+    async total() { walks.n++; return 5 },
+    async totals(qs) { walks.n++; return qs.map(() => 5) },
+  };
+  const l = stripeScopeUsageLedger({ wallet });
+  const a = aligned(2), b = aligned(0);
+  const [x, y] = await Promise.all([
+    l.total({ orgId: "org_1", customerId: "cus_org", ...a, filter: { callerId: "u1" }, sources: { wallet: true, included: false } }),
+    l.total({ orgId: "org_1", customerId: "cus_org", ...b, filter: { callerId: "u1" }, sources: { wallet: true, included: false } }),
+  ]);
+  assert.equal(walks.n, 1, "one pass over the transactions, not one per window");
+  assert.deepEqual([x, y], [5, 5]);
+});

@@ -215,11 +215,19 @@ export async function resolveAllowance(
   // be served stale. Shared here rather than memoised anywhere, so the freshness
   // is unchanged and only the duplicate goes.
   const needsCustomer = !input.skipWallet || !input.skipSpendLimit;
-  const customer = needsCustomer ? await retrieveBillingCustomer(customerId) : null;
+  // Started, NOT awaited. Awaiting here would yield the tick, and the per-caller
+  // reads are batched by the scope ledger on a microtask — so an await between the
+  // rate-limit reads above and the pack read below splits them into two flushes
+  // and two Stripe requests. Measured: it silently undid the batching entirely.
+  const customerPromise = needsCustomer
+    ? retrieveBillingCustomer(customerId)
+    : Promise.resolve(null);
 
   const spendReads: Promise<LimitState[]> = input.skipSpendLimit
     ? Promise.resolve([])
-    : getSpendControls(customerId, customer).then(({ limitCredits }) => {
+    : customerPromise
+        .then((c) => getSpendControls(customerId, c))
+        .then(({ limitCredits }) => {
         if (!limitCredits) return [];
         // A CALENDAR month, deliberately, and not the plan cycle: the customer set
         // a "monthly" ceiling, and an annual subscriber's cycle would make that one
@@ -247,7 +255,9 @@ export async function resolveAllowance(
       });
 
   const [wallet, poolUsed, packUsed, extra, limits, spendLimits] = await Promise.all([
-    input.skipWallet ? Promise.resolve(0) : getCreditBalance(customerId, config.currency, customer),
+    input.skipWallet
+      ? Promise.resolve(0)
+      : customerPromise.then((c) => getCreditBalance(customerId, config.currency, c)),
     poolSize == null
       ? Promise.resolve(0)
       : ledger.total({ orgId: input.orgId, customerId, start: cycle.start, end: cycle.end ?? undefined }),

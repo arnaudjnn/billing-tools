@@ -67,7 +67,7 @@ async function doctor(argv: string[]): Promise<number> {
   const result = await checkBillingSetup({
     webhookUrl: flag(argv, "webhook-url"),
     currency: flag(argv, "currency"),
-    ...(tax ? { taxMode: tax as "billing-tools" | "stripe" | "none" } : {}),
+    ...(tax ? { taxMode: tax as "local" | "stripe" | "none" } : {}),
   });
   // The library's own renderer, not a second one — a command that formatted checks
   // differently from `formatDoctorResult` is two things to keep in step.

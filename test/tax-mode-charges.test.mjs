@@ -133,9 +133,9 @@ test("this library calculates by DEFAULT — see tax-default.test.mjs", () => {
   // now means this library's own calculation, with the origin falling back to the
   // Stripe account's country. The full argument and the origin resolution live in
   // test/tax-default.test.mjs; this only pins the precedence.
-  assert.equal(taxModeOf(undefined), "billing-tools");
-  assert.equal(taxModeOf({}), "billing-tools");
-  assert.equal(taxModeOf({ origin: "IT" }), "billing-tools");
+  assert.equal(taxModeOf(undefined), "local");
+  assert.equal(taxModeOf({}), "local");
+  assert.equal(taxModeOf({ origin: "IT" }), "local");
   assert.equal(taxModeOf({ automatic: true }), "stripe");
   // An explicit mode always wins over what the other fields imply.
   assert.equal(taxModeOf({ origin: "IT", mode: "none" }), "none");
@@ -217,8 +217,8 @@ test('no origin ANYWHERE cannot guess, and says so once', async () => {
     // Domestic vs cross-border is decided by where the SELLER is established, so
     // without it there is no rate to work out — and inventing one would be a
     // compliance guess.
-    assert.deepEqual(await taxFor("cus_1", { mode: "billing-tools" }), {});
-    await taxFor("cus_1", { mode: "billing-tools" });
+    assert.deepEqual(await taxFor("cus_1", { mode: "local" }), {});
+    await taxFor("cus_1", { mode: "local" });
   } finally {
     console.warn = real;
   }

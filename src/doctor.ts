@@ -54,17 +54,19 @@ export async function checkBillingSetup(opts: {
    * WHO calculates tax on this account — a choice the deployment makes, so it is
    * named after the thing doing the calculating rather than after how it feels:
    *
-   * - `"billing-tools"` (default) — this library: `taxRatesFor` derives the rate
+   * - `"local"` (default) — this library: `taxRatesFor` derives the rate
    *   from `sales-tax` + VIES and applies it as an explicit Stripe TaxRate. No
    *   per-transaction fee, and nothing to set up in the Dashboard. Same spelling
-   *   as the `managedBy: "billing-tools"` marker on every object this library mints.
+   *   Named for WHERE the calculation happens, not for how it feels — and
+   *   deliberately not `"auto"`, because Stripe's own field is `automatic_tax`, so
+   *   `"auto"` would name this mode after the one it is the alternative to.
    * - `"stripe"` — Stripe Tax (`automatic_tax`), for an account that wants
    *   evidence-of-location, threshold monitoring and filing handled.
    * - `"none"` — an account that charges no tax; tax is not inspected.
    *
    * It decides WHICH silent failure is worth looking for, so the wrong mode is
    * worse than no check: `"stripe"` audits the head office, the registrations and
-   * `tax_behavior`, none of which a `"billing-tools"` account has any reason to
+   * `tax_behavior`, none of which a `"local"` account has any reason to
    * hold — reporting those as errors is how a doctor sends someone to fix a config
    * that was already right.
    */
@@ -87,13 +89,13 @@ export async function checkBillingSetup(opts: {
   const stripe = getStripe();
   const checks: Check[] = [];
   // Explicit wins, then the config's own declaration, then the deprecated boolean.
-  // The final default is `"billing-tools"` rather than `"none"` so a caller that
+  // The final default is `"local"` rather than `"none"` so a caller that
   // passes nothing still gets its rates listed — a doctor that inspected no tax by
   // default would be silent on the account most likely to have got it wrong.
   const taxMode: TaxMode =
     opts.taxMode ??
     (opts.config ? taxModeOf(opts.config.tax) : undefined) ??
-    (opts.expectTax === undefined ? "billing-tools" : opts.expectTax ? "stripe" : "none");
+    (opts.expectTax === undefined ? "local" : opts.expectTax ? "stripe" : "none");
   const currency = opts.currency ?? opts.config?.currency;
 
   const account = await stripe.accounts.retrieve();
@@ -104,7 +106,7 @@ export async function checkBillingSetup(opts: {
     detail: `${account.id} (${account.country ?? "?"}) — ${livemode ? "LIVE" : "test"} mode`,
   });
 
-  if (taxMode === "billing-tools") {
+  if (taxMode === "local") {
     // `taxRatesFor` mints a TaxRate per (country, percent, name) on first use and
     // reuses it forever, so the account accumulates a handful. Nothing to provision,
     // and nothing here can be an error: a fresh account legitimately holds none

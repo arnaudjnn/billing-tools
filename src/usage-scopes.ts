@@ -202,6 +202,45 @@ async function streamToken(): Promise<string> {
   return session.token;
 }
 
+// ── Answering several windows with one request ──────────────────────────────
+//
+// A plan declares more than one window over the SAME caller — a monthly seat pack
+// and a weekly limit, say — and `resolveAllowance` issues them together, in one
+// tick, deliberately (they go in a single `Promise.all` so the meter costs one
+// round trip's latency rather than three). That makes them batchable without any
+// change to the seam: collect what arrives in a tick, then answer it in as few
+// requests as Stripe allows.
+//
+// The meter can group by time: `value_grouping_window: "day"` returns one bucket
+// per day over the range, so a month-wide read and a week-wide read over the same
+// scope both come out of ONE response. Verified against the API — a slice of the
+// bucketed response equals a dedicated narrow read exactly, and empty days are
+// simply absent, so a slice sums the buckets it contains rather than assuming they
+// are contiguous.
+//
+// Stripe ENFORCES alignment for that parameter ("start_time … should be aligned
+// with daily boundaries"), so only day-aligned windows can share a read. That is
+// most of them: `rateWindowFor` aligns day, week and month to UTC boundaries. An
+// `every: "hour"` window is not day-aligned and keeps its own read — which costs
+// nothing, since an hour is one bucket either way.
+
+const DAY_MS = 86_400_000;
+const isDayAligned = (q: UsageQuery): boolean =>
+  q.start % DAY_MS === 0 && (q.end == null || q.end % DAY_MS === 0);
+
+/** Sum the buckets that fall inside a window. Buckets are day-sized and the
+ *  window is day-aligned, so they nest exactly and none is split. */
+function sliceBuckets(
+  buckets: readonly { start_time: number; end_time: number; aggregated_value: number }[],
+  q: UsageQuery,
+): number {
+  const from = Math.floor(q.start / 1000);
+  const to = q.end == null ? Number.POSITIVE_INFINITY : Math.floor(q.end / 1000);
+  let sum = 0;
+  for (const b of buckets) if (b.start_time >= from && b.end_time <= to) sum += b.aggregated_value;
+  return sum;
+}
+
 export interface ScopeLedgerOptions {
   /** Meter event name. Defaults to `SCOPE_METER_EVENT`. */
   eventName?: string;
@@ -250,7 +289,7 @@ export function stripeScopeUsageLedger(opts: ScopeLedgerOptions = {}): UsageLedg
   // under-reporting.
   const wallet = opts.wallet === null ? null : (opts.wallet ?? stripeBalanceUsageLedger());
 
-  return {
+  const api: UsageLedger = {
     covers: { orgIncluded: false, callerIncluded: true } satisfies LedgerCoverage,
 
     async record(event: UsageEvent) {
@@ -300,43 +339,158 @@ export function stripeScopeUsageLedger(opts: ScopeLedgerOptions = {}): UsageLedg
       }
     },
 
-    async total(query: UsageQuery) {
-      const scope = scopeOf(query.filter);
-      // No caller filter means an org-wide window, which this leg does not answer.
-      // The composite never routes one here; if something else does, the wallet
-      // figure alone is the honest answer rather than a wrong one.
-      if (scope === "org") return wallet ? wallet.total(query) : 0;
-
-      // Skip the leg that cannot contribute. Absent `sources` means both, so a
-      // caller that says nothing pays for both and is never under-reported.
-      const wantsWallet = query.sources?.wallet ?? true;
-      const wantsIncluded = query.sources?.included ?? true;
-
-      const [paid, included] = await Promise.all([
-        wallet && wantsWallet ? wallet.total(query) : 0,
-        (async () => {
-          if (!wantsIncluded) return 0;
-          try {
-            const meter = await meterIdFor(eventName, { create: false });
-            if (!meter) return 0;
-            const id = await customerForScope(query.orgId, scope);
-            if (!id) return 0;
-            // Seconds, and Stripe requires the window on minute boundaries.
-            const floorMinute = (ms: number) => Math.floor(ms / 60_000) * 60;
-            const summaries = await getStripe().billing.meters.listEventSummaries(meter, {
-              customer: id,
-              start_time: floorMinute(query.start),
-              end_time: floorMinute(query.end ?? Date.now()),
-              limit: 100,
-            });
-            return summaries.data.reduce((sum, s) => sum + s.aggregated_value, 0);
-          } catch (e) {
-            complain(`${query.orgId}|${scope}`, e);
-            return 0;
-          }
-        })(),
-      ]);
-      return paid + included;
+    total(query: UsageQuery) {
+      // Queued rather than issued: everything asked for in this tick is answered
+      // together below. `resolveAllowance` issues its windows in one `Promise.all`,
+      // so this collapses them with no change at the call site.
+      return new Promise<number>((resolve, reject) => {
+        pending.push({ query, resolve, reject });
+        if (!flushing) {
+          flushing = true;
+          queueMicrotask(flush);
+        }
+      });
     },
+
+    totals: (queries) => Promise.all(queries.map((q) => api.total(q))),
   };
+
+  // ── the per-tick batcher ──────────────────────────────────────────────────
+  type Waiting = {
+    query: UsageQuery;
+    resolve: (n: number) => void;
+    reject: (e: unknown) => void;
+  };
+  let pending: Waiting[] = [];
+  let flushing = false;
+
+  async function flush(): Promise<void> {
+    const batch = pending;
+    pending = [];
+    flushing = false;
+    if (!batch.length) return;
+
+    // Group by everything that decides WHICH events are eligible. The window
+    // bounds are not part of it — they only decide which group member each event
+    // lands in, which is exactly what makes one read serve several windows.
+    const groups = new Map<string, Waiting[]>();
+    for (const w of batch) {
+      const scope = scopeOf(w.query.filter);
+      const key = [
+        w.query.orgId,
+        w.query.customerId,
+        scope,
+        w.query.sources?.wallet ?? true,
+        w.query.sources?.included ?? true,
+      ].join("|");
+      const g = groups.get(key);
+      if (g) g.push(w);
+      else groups.set(key, [w]);
+    }
+
+    await Promise.all([...groups.values()].map((g) => answerGroup(g).catch(() => {})));
+  }
+
+  async function answerGroup(group: Waiting[]): Promise<void> {
+    const first = group[0]!.query;
+    const scope = scopeOf(first.filter);
+
+    // An org-wide window is not this leg's question — see `total`'s old comment.
+    if (scope === "org") {
+      const sums = wallet
+        ? await legTotals(wallet, group.map((w) => w.query))
+        : group.map(() => 0);
+      group.forEach((w, i) => w.resolve(sums[i] ?? 0));
+      return;
+    }
+
+    const wantsWallet = (first.sources?.wallet ?? true) && Boolean(wallet);
+    const wantsIncluded = first.sources?.included ?? true;
+
+    const [paid, included] = await Promise.all([
+      wantsWallet
+        ? legTotals(wallet!, group.map((w) => w.query)).catch((e) => {
+            complain(`${first.orgId}|wallet`, e);
+            return group.map(() => 0);
+          })
+        : Promise.resolve(group.map(() => 0)),
+      wantsIncluded
+        ? meterTotals(group, scope).catch((e) => {
+            complain(`${first.orgId}|${scope}`, e);
+            return group.map(() => 0);
+          })
+        : Promise.resolve(group.map(() => 0)),
+    ]);
+
+    group.forEach((w, i) => w.resolve((paid[i] ?? 0) + (included[i] ?? 0)));
+  }
+
+  /** One bucketed read for every day-aligned window in the group; the rest keep
+   *  their own, which is what an `every: "hour"` window needs and costs nothing. */
+  async function meterTotals(group: Waiting[], scope: string): Promise<number[]> {
+    const out = new Array<number>(group.length).fill(0);
+    const meter = await meterIdFor(eventName, { create: false });
+    if (!meter) return out;
+    const id = await customerForScope(group[0]!.query.orgId, scope);
+    if (!id) return out;
+    const stripe = getStripe();
+    const floorMinute = (ms: number) => Math.floor(ms / 60_000) * 60;
+
+    const aligned: number[] = [];
+    const loose: number[] = [];
+    group.forEach((w, i) => (isDayAligned(w.query) ? aligned : loose).push(i));
+
+    const work: Promise<void>[] = [];
+
+    if (aligned.length === 1) {
+      // One window needs no bucketing, and a plain read is cheaper to page.
+      loose.push(aligned.pop()!);
+    } else if (aligned.length > 1) {
+      const from = Math.min(...aligned.map((i) => group[i]!.query.start));
+      const opened = aligned.some((i) => group[i]!.query.end == null);
+      const to = opened
+        ? Math.ceil(Date.now() / DAY_MS) * DAY_MS
+        : Math.max(...aligned.map((i) => group[i]!.query.end!));
+      work.push(
+        (async () => {
+          const buckets: { start_time: number; end_time: number; aggregated_value: number }[] = [];
+          for await (const b of stripe.billing.meters.listEventSummaries(meter, {
+            customer: id,
+            start_time: Math.floor(from / 1000),
+            end_time: Math.floor(to / 1000),
+            value_grouping_window: "day",
+            limit: 100,
+          })) {
+            buckets.push(b as unknown as (typeof buckets)[number]);
+          }
+          for (const i of aligned) out[i] = sliceBuckets(buckets, group[i]!.query);
+        })(),
+      );
+    }
+
+    for (const i of loose) {
+      const q = group[i]!.query;
+      work.push(
+        (async () => {
+          const s = await stripe.billing.meters.listEventSummaries(meter, {
+            customer: id,
+            start_time: floorMinute(q.start),
+            end_time: floorMinute(q.end ?? Date.now()),
+            limit: 100,
+          });
+          out[i] = s.data.reduce((sum, x) => sum + x.aggregated_value, 0);
+        })(),
+      );
+    }
+
+    await Promise.all(work);
+    return out;
+  }
+
+  /** A leg's answer for many windows: its own batch method when it has one. */
+  function legTotals(leg: UsageLedger, queries: readonly UsageQuery[]): Promise<number[]> {
+    return leg.totals ? leg.totals(queries) : Promise.all(queries.map((q) => leg.total(q)));
+  }
+
+  return api;
 }

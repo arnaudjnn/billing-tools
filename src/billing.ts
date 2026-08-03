@@ -307,6 +307,45 @@ export async function usageSince(
   return total;
 }
 
+/**
+ * `usageSince` for SEVERAL windows in one pass.
+ *
+ * The walk is the same whatever the window: transactions come newest-first and it
+ * stops at the oldest `since` asked for, adding each transaction to every window
+ * that contains it. Two windows over one caller — a monthly pack and a weekly
+ * limit — therefore cost ONE walk rather than two, and the pages are the expensive
+ * part: an org whose API usage the wallet funds writes a transaction per call.
+ *
+ * Windows share the filter, because that is how the caller-scoped reads arrive.
+ */
+export async function usageSinceWindows(
+  stripeCustomerId: string,
+  windows: readonly { since: number; until?: number }[],
+  filter?: { callerKind?: string; callerId?: string },
+): Promise<number[]> {
+  if (!windows.length) return [];
+  const totals = new Array<number>(windows.length).fill(0);
+  const oldest = Math.min(...windows.map((w) => w.since));
+
+  for await (const tx of getStripe().customers.listBalanceTransactions(stripeCustomerId, {
+    limit: 100,
+  })) {
+    // Newest-first, so the first transaction older than EVERY window ends it.
+    if (tx.created < oldest) break;
+    if (tx.amount <= 0) continue; // credits/grants aren't usage
+    if (tx.metadata?.kind === "adjustment") continue;
+    if (filter?.callerKind && tx.metadata?.caller_kind !== filter.callerKind) continue;
+    if (filter?.callerId && tx.metadata?.caller_id !== filter.callerId) continue;
+    for (let i = 0; i < windows.length; i++) {
+      const w = windows[i]!;
+      // [since, until) — the same half-open window the rest of the library uses,
+      // so a transaction on a boundary lands in exactly one of two adjacent ones.
+      if (tx.created >= w.since && (w.until == null || tx.created < w.until)) totals[i] += tx.amount;
+    }
+  }
+  return totals;
+}
+
 export async function grantCredits(
   stripeCustomerId: string,
   amount: number,

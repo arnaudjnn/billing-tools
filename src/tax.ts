@@ -144,14 +144,14 @@ export async function ensureStripeTaxRate(
 
 export type TaxMode =
   /** This library: `resolveTax` (sales-tax + VIES) → an explicit Stripe TaxRate. */
-  | "billing-tools"
+  | "local"
   /** Stripe Tax (`automatic_tax`). Requires registrations, or it computes 0%. */
   | "stripe"
   /** No tax on anything the library charges. */
   | "none";
 
 /**
- * The declared mode. **Nothing declared means `"billing-tools"`.**
+ * The declared mode. **Nothing declared means `"local"`.**
  *
  * That default is the whole point, and it used to be `"none"`. Silence meant no tax
  * on anything the library charged — so a deployment that never thought about VAT
@@ -173,7 +173,7 @@ export type TaxMode =
 export function taxModeOf(tax: BillingConfig["tax"] | undefined): TaxMode {
   if (tax?.mode) return tax.mode;
   if (tax?.automatic) return "stripe";
-  return "billing-tools";
+  return "local";
 }
 
 // The Stripe account's country, memoised. One read per process: an account does not
@@ -218,7 +218,7 @@ export function invalidateTaxOrigin(): void {
   warnedNoOrigin = false;
 }
 
-// A missing `origin` under the billing-tools mode is a config error, not a
+// A missing `origin` under the `local` mode is a config error, not a
 // per-charge one, so it is said once rather than on every invoice.
 let warnedNoOrigin = false;
 
@@ -228,7 +228,7 @@ let warnedNoOrigin = false;
  * Returns the same `{ taxRates, automaticTax }` shape every charge site already
  * takes, so wiring it is one line per site and an explicit argument still wins.
  *
- * Under `"billing-tools"` the rate comes from the CUSTOMER: their address decides
+ * Under `"local"` the rate comes from the CUSTOMER: their address decides
  * domestic vs cross-border and their Stripe tax id decides reverse charge. A
  * customer with no address on file is charged the DOMESTIC rate rather than
  * nothing — the same direction `resolveTax` takes for an unverifiable VAT number,
@@ -250,7 +250,7 @@ export async function taxFor(
       return { automaticTax: true };
     case "none":
       return {};
-    case "billing-tools": {
+    case "local": {
       const originCountry = await originFor(tax);
       if (!originCountry) {
         if (!warnedNoOrigin) {
