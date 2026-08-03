@@ -1,3 +1,10 @@
+# [2.14.0](https://github.com/arnaudjnn/billing-tools/compare/v2.13.0...v2.14.0) (2026-08-03)
+
+
+### Features
+
+* **usage:** count per-member windows as counters, not events ([acee119](https://github.com/arnaudjnn/billing-tools/commit/acee119e3f0d19a16fa690e4caf221fecf9f3116))
+
 # [2.13.0](https://github.com/arnaudjnn/billing-tools/compare/v2.12.0...v2.13.0) (2026-08-03)
 
 
