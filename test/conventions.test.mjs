@@ -137,7 +137,7 @@ test("the release stays on the OIDC path", () => {
 //
 // The root barrel re-exports 45 modules, so `import { planModel } from
 // "@arnaudjnn/billing-tools"` in a Server Component pulls in commander, the MCP
-// SDK, mcp-handler, authkit-nextjs, Stripe, WorkOS and sales-tax to answer a
+// SDK, mcp-handler, authkit-nextjs, Stripe, WorkOS and eu-vat-rates-data to answer a
 // question about a plain object. The leaf entries exist so that stops being the
 // only way in.
 //
@@ -199,23 +199,9 @@ test("each entry point reaches exactly the packages it needs", () => {
     "adapters/workos-org.js": ["@workos-inc/node"],
     "cli/index.js": ["node:fs", "node:os", "node:path"],
     "ui/authkit.js": ["@workos-inc/authkit-nextjs", "react"],
-    "entries/agent-auth.js": ["@workos-inc/node", "node:crypto", "sales-tax", "stripe"],
-    "entries/routes.js": [
-      "@modelcontextprotocol/sdk",
-      "mcp-handler",
-      "node:async_hooks",
-      "sales-tax",
-      "stripe",
-      "zod",
-    ],
-    "entries/tools.js": [
-      "@modelcontextprotocol/sdk",
-      "@workos-inc/node",
-      "node:async_hooks",
-      "sales-tax",
-      "stripe",
-      "zod",
-    ],
+    "entries/agent-auth.js": ["@workos-inc/node", "eu-vat-rates-data", "node:crypto", "stripe"],
+    "entries/routes.js": ["@modelcontextprotocol/sdk", "eu-vat-rates-data", "mcp-handler", "node:async_hooks", "stripe", "zod"],
+    "entries/tools.js": ["@modelcontextprotocol/sdk", "@workos-inc/node", "eu-vat-rates-data", "node:async_hooks", "stripe", "zod"],
   };
   for (const [entry, packages] of Object.entries(expected)) {
     assert.deepEqual([...externals(entry)].sort(), packages, entry);
@@ -229,7 +215,7 @@ test("each entry point reaches exactly the packages it needs", () => {
     "@workos-inc/authkit-nextjs",
     "@workos-inc/node",
     "mcp-handler",
-    "sales-tax",
+    "eu-vat-rates-data",
     "stripe",
   ]) {
     assert.ok(root.has(heavy), `root barrel unexpectedly no longer reaches ${heavy}`);

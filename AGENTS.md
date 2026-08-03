@@ -356,7 +356,7 @@ The window is the **calendar month**, even for an annual subscriber: "monthly" i
 
 ## Tax — the library calculates it, Stripe Tax is opt-in
 
-**`src/tax.ts` is the default path, and it is not Stripe Tax.** `resolveTax` works the rate out locally from `sales-tax` (a real dependency) with VIES for B2B validation, and `taxRatesFor` applies the answer as an explicit Stripe **TaxRate** on the line items — no per-transaction fee, and no registrations needed to *calculate*. `updateCheckoutSessionTaxRates` re-taxes an open session when the typed country differs from the one guessed, which is the piece Stripe Tax would otherwise do. What you take on instead: evidence-of-location records for EU B2C, threshold monitoring, and filing. The safe direction is already chosen — a tax number VIES cannot verify falls back to CHARGING tax, because wrongly charging is recoverable and wrongly exempting means owing it yourself.
+**`src/tax.ts` is the default path, and it is not Stripe Tax.** `resolveTax` works the rate out locally from `eu-vat-rates-data` (45 European countries, tracked daily from the European Commission's own TEDB) with VIES for B2B validation, and `taxRatesFor` applies the answer as an explicit Stripe **TaxRate** on the line items — no per-transaction fee, and no registrations needed to *calculate*. `updateCheckoutSessionTaxRates` re-taxes an open session when the typed country differs from the one guessed, which is the piece Stripe Tax would otherwise do. What you take on instead: evidence-of-location records for EU B2C, threshold monitoring, and filing. The safe direction is already chosen — a tax number VIES cannot verify falls back to CHARGING tax, because wrongly charging is recoverable and wrongly exempting means owing it yourself.
 
 **WHO calculates is declared ONCE, in `config.tax`, and every charge the library builds reads it** — the seat Checkout Session, the `buy_credits` top-up, and the auto-reload invoice. `taxFor(customerId, config.tax)` returns the `{ taxRates, automaticTax }` every charge site already took, so wiring it is one line per site and an explicit argument still wins.
 
@@ -376,7 +376,7 @@ Under `"local"` the rate comes from the CUSTOMER — their Stripe address decide
 
 **Nothing enables Stripe Tax implicitly.** `automatic_tax` is set only where the caller passed `automaticTax: true` (or `config.tax.automatic` for the charges the library raises itself). It used to be inferred from the ABSENCE of `taxRates`, which made it the default for every caller that passed no tax at all — and that is the expensive way round: with no active registration Stripe Tax returns **zero** tax rather than an error, so the total silently drops to the pre-tax amount on precisely the accounts that never opted in and therefore never registered. Passing neither now means an untaxed charge: right for an account that charges no tax, and loud enough to notice for one that does. Manual rates and `automatic_tax` stay mutually exclusive — Stripe rejects both together.
 
-`checkBillingSetup({ taxMode })` names WHERE the calculation happens: **`"local"`** (the default — computed in-process from `sales-tax` + VIES, and deliberately NOT `"auto"`, because Stripe's own field is `automatic_tax`, so `"auto"` would name this mode after the very thing it is the alternative to) reports which TaxRates exist, which is the audit trail of what the account has charged and legitimately empty on a fresh one; `"stripe"` audits the head office, the registrations and `tax_behavior`; `"none"` skips tax. The mode matters because auditing Stripe Tax on a `local` account reports errors for things that account has no reason to hold. `ensureTaxSetup` exists for consumers who do want Stripe Tax and is explicit-only.
+`checkBillingSetup({ taxMode })` names WHERE the calculation happens: **`"local"`** (the default — computed in-process from `eu-vat-rates-data` + VIES, and deliberately NOT `"auto"`, because Stripe's own field is `automatic_tax`, so `"auto"` would name this mode after the very thing it is the alternative to) reports which TaxRates exist, which is the audit trail of what the account has charged and legitimately empty on a fresh one; `"stripe"` audits the head office, the registrations and `tax_behavior`; `"none"` skips tax. The mode matters because auditing Stripe Tax on a `local` account reports errors for things that account has no reason to hold. `ensureTaxSetup` exists for consumers who do want Stripe Tax and is explicit-only.
 
 ### Tax on charges the library raises itself
 
@@ -417,13 +417,13 @@ Wallets are in because they are not another way to pay: Apple Pay and Google Pay
 
 ## Entry points — the root barrel is not the only way in
 
-The root re-exports 45 modules, so `import { planModel } from "@arnaudjnn/billing-tools"` in a Server Component resolves the MCP SDK, mcp-handler, authkit-nextjs, Stripe, WorkOS and sales-tax to answer a question about a plain object. Import from the narrowest entry that has what you need:
+The root re-exports 45 modules, so `import { planModel } from "@arnaudjnn/billing-tools"` in a Server Component resolves the MCP SDK, mcp-handler, authkit-nextjs, Stripe, WorkOS and eu-vat-rates-data to answer a question about a plain object. Import from the narrowest entry that has what you need:
 
 | entry | for | reaches |
 |---|---|---|
 | `/plans` | the catalogue + its arithmetic + the adapter/config types | **nothing** |
 | `/pricing` | `derivePlanViews`, `deriveCompareTable`, the markdown renderers | **nothing** |
-| `/agent-auth` | auth.md, MPP, the OAuth proxy | WorkOS, Stripe, sales-tax |
+| `/agent-auth` | auth.md, MPP, the OAuth proxy | WorkOS, Stripe, eu-vat-rates-data |
 | `/routes` | the three Next route factories + `ensureWebhookEndpoint` | MCP SDK, mcp-handler, Stripe, zod |
 | `/tools` | `registerBillingTools`, `createDispatcher` | MCP SDK, WorkOS, Stripe, zod |
 | `/ui`, `/ui/authkit` | the React checkout components | React, Stripe.js, authkit |

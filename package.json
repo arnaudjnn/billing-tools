@@ -110,7 +110,7 @@
     "@stripe/stripe-js": "^9",
     "@workos-inc/node": "^10.7.0",
     "commander": "^13.1.0",
-    "sales-tax": "^2.23.0",
+    "eu-vat-rates-data": "^2026.7.1",
     "stripe": "^20.3.1"
   },
   "peerDependencies": {

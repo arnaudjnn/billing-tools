@@ -1,4 +1,10 @@
-import SalesTax from "sales-tax";
+import {
+  getStandardRate,
+  getRate,
+  isEUMember,
+  isKnownCountry,
+  validateFormat,
+} from "eu-vat-rates-data";
 import { getStripe } from "./billing.js";
 import type { BillingConfig } from "./types.js";
 
@@ -6,10 +12,22 @@ import type { BillingConfig } from "./types.js";
 // alternative to Stripe Tax, which bills 0.5% of every taxed transaction for a
 // calculation that is, for a mostly-domestic seller, a constant.
 //
-// `sales-tax` supplies the rates (kept current, and it exposes reverse charge
-// explicitly) and VIES supplies B2B validation. What Stripe Tax also gives you
-// and this does NOT: evidence-of-location records for EU B2C, threshold
-// monitoring, and filing reports. Those become yours.
+// `eu-vat-rates-data` supplies the rates — 45 European countries tracked daily
+// from the European Commission's own TEDB — and VIES supplies B2B validation. It
+// replaced `sales-tax`, whose rates were a static JSON published whenever someone
+// cut a release, and which carried no notion of EU membership so reverse charge
+// had to be taken on trust.
+//
+// Europe ONLY, and that is the deliberate scope. EU VAT is tractable because it is
+// 27 states with one published standard rate each; everywhere else it is not, so a
+// non-European destination is marked `approximate` and refused rather than charged
+// a rate this library does not have. `sales-tax` did carry 86 other countries, but
+// a number with no authority behind it is worse than no number: it invoices
+// confidently and under-collects silently.
+//
+// What Stripe Tax also gives you and this does NOT: US local jurisdictions,
+// evidence-of-location records for EU B2C, threshold monitoring, and filing
+// reports. Those become yours.
 //
 // The one behaviour worth knowing, because it is the safe direction: a tax
 // number that VIES cannot verify falls back to CHARGING tax, not exempting.
@@ -22,8 +40,9 @@ export type TaxDecision = {
   /**
    * The rate is a KNOWN UNDER-ESTIMATE, not an exact answer.
    *
-   * Set for US destinations, and only there. `sales-tax` carries one rate per US
-   * state, but US sales tax is destination-based across 13 000+ jurisdictions:
+   * Set for every destination outside the 45 European countries the rate dataset
+   * covers — the US being the case that matters in practice. US sales tax is
+   * destination-based across 13 000+ jurisdictions:
    * counties, cities and special districts stack on the state rate, and SaaS is
    * taxable in some states and not others. Illinois is 6.25% in the table while a
    * Chicago buyer owes ~10.25%. Getting that right needs address → geocode →
@@ -37,8 +56,16 @@ export type TaxDecision = {
   /** The customer accounts for the VAT (cross-border EU B2B with a valid id). */
   reverseCharge: boolean;
   country: string;
-  /** "vat" | "gst" | "none" — from sales-tax. */
+  /** "vat" or "none". GST/other regimes are outside this dataset's scope. */
   type: string;
+  /**
+   * The country's own word for the tax — "IVA", "TVA", "MwSt" — from the dataset.
+   *
+   * On the invoice, in the language the customer uses. Consumers used to hardcode a
+   * per-country map for this (`{ IT: "IVA", FR: "TVA" }`), which stops at the second
+   * market you sell into.
+   */
+  displayName?: string;
 };
 
 /**
@@ -57,25 +84,77 @@ export async function resolveTax(opts: {
   state?: string | null;
   taxNumber?: string | null;
 }): Promise<TaxDecision> {
-  SalesTax.setTaxOriginCountry(opts.originCountry.toUpperCase());
-  const r = await SalesTax.getSalesTax(
-    opts.country.toUpperCase(),
-    opts.state ?? undefined,
-    opts.taxNumber || undefined,
-  );
+  const origin = opts.originCountry.toUpperCase();
   const country = opts.country.toUpperCase();
+
+  // Outside Europe there is no rate here to apply. Flagged rather than returned as
+  // 0%, so `taxRatesFor` refuses instead of invoicing an untaxed sale that may not
+  // be untaxed. The US is the case that matters in practice and the message names
+  // it, but the rule is the same for every country the dataset does not cover.
+  if (!isKnownCountry(country)) {
+    return { percent: 0, reverseCharge: false, country, type: "none", approximate: true };
+  }
+
+  const standard = getStandardRate(country) ?? 0;
+  const info = getRate(country);
+  const bothEU = isEUMember(origin) && isEUMember(country);
+
+  // Reverse charge, as three conditions rather than a library's opinion: both in
+  // the EU, DIFFERENT countries (an Italian seller has no border with an Italian
+  // buyer, so there is nothing to reverse), and a VAT number that stands up.
+  //
+  // The order matters for cost: the format check is local and rejects most
+  // rubbish, so VIES is only asked about numbers that could be real.
+  const crossBorderEU = bothEU && origin !== country;
+  const reverseCharge =
+    crossBorderEU && Boolean(opts.taxNumber) && (await isValidVatNumber(opts.taxNumber!));
+
   return {
-    percent: Math.round(r.rate * 10000) / 100,
-    reverseCharge: Boolean(r.charge?.reverse),
+    percent: reverseCharge ? 0 : standard,
+    reverseCharge,
     country,
-    type: r.type,
-    // A state-level rate for a country whose tax is local. Flagged rather than
-    // silently returned: under-collecting is the one direction that is not
-    // recoverable — you owe the difference yourself, with interest, and the
-    // customer is long gone.
-    ...(country === "US" ? { approximate: true } : {}),
+    // `vat_abbr` is the country's own word for it — "IVA", "TVA", "MwSt" — which is
+    // what belongs on the customer's invoice. Consumers used to hardcode a map.
+    type: info?.vat_abbr ? "vat" : "none",
+    displayName: info?.vat_abbr ?? undefined,
   };
 }
+
+/**
+ * Does this VAT number exist, per VIES?
+ *
+ * Format first, locally, from the dataset's own per-country pattern — it costs
+ * nothing and VIES is a shared public service. Then the real check.
+ *
+ * **An unverifiable number is NOT an exemption.** VIES has regular outages and
+ * per-member-state downtime, and treating either as "valid" would zero-rate a sale
+ * on the strength of a service being unreachable. Returning false means the
+ * standard rate is charged, which is the recoverable direction: a wrongly charged
+ * customer asks for it back, a wrongly exempted one leaves you owing the VAT.
+ */
+async function isValidVatNumber(vatNumber: string): Promise<boolean> {
+  const clean = vatNumber.replace(/[\s-]/g, "").toUpperCase();
+  if (!validateFormat(clean)) return false;
+
+  const country = clean.slice(0, 2);
+  const number = clean.slice(2);
+  try {
+    const res = await fetch(
+      `https://ec.europa.eu/taxation_customs/vies/rest-api/ms/${country}/vat/${number}`,
+      { signal: AbortSignal.timeout(VIES_TIMEOUT_MS) },
+    );
+    if (!res.ok) return false;
+    const body = (await res.json()) as { isValid?: boolean };
+    return body.isValid === true;
+  } catch {
+    // Timeout, network, or malformed response — all of them "not verified".
+    return false;
+  }
+}
+
+/** VIES is a shared public service and this sits on a checkout path, so the wait
+ *  is bounded. A slow lookup means the standard rate, not a slow checkout. */
+const VIES_TIMEOUT_MS = 4_000;
 
 /** Thrown when a charge would carry a rate this library knows to be wrong. */
 export class ApproximateTaxError extends Error {
@@ -126,7 +205,11 @@ export async function ensureStripeTaxRate(
 
   const displayName =
     opts.displayName ??
-    (decision.reverseCharge ? "Reverse charge" : decision.type === "gst" ? "GST" : "VAT");
+    (decision.reverseCharge
+      ? "Reverse charge"
+      : // The country's own abbreviation when the dataset has one, so an Italian
+        // invoice says IVA and a French one TVA without the app supplying a map.
+        (decision.displayName ?? "VAT"));
 
   const key = `${decision.country}|${decision.percent}|${displayName}|${decision.reverseCharge}`;
   const hit = rateCache.get(key);
@@ -178,7 +261,7 @@ export async function ensureStripeTaxRate(
 // hatch for a charge that genuinely differs.
 
 export type TaxMode =
-  /** This library: `resolveTax` (sales-tax + VIES) → an explicit Stripe TaxRate. */
+  /** This library: `resolveTax` (eu-vat-rates-data + VIES) → an explicit Stripe TaxRate. */
   | "local"
   /** Stripe Tax (`automatic_tax`). Requires registrations, or it computes 0%. */
   | "stripe"
@@ -326,7 +409,7 @@ async function customerPlaceOfSupply(
       country: customer.address?.country ?? undefined,
       state: customer.address?.state ?? null,
       // Any tax id on file: `eu_vat` is the one that reverse-charges, and
-      // `sales-tax` decides that from the number itself.
+      // Decided from the number itself, by VIES.
       taxNumber: customer.tax_ids?.data?.[0]?.value ?? null,
     };
   } catch {

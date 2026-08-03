@@ -125,15 +125,27 @@ test("an account with no country reports none, and is not re-read", async () => 
 
 import { ApproximateTaxError, resolveTax, taxRatesFor } from "../dist/tax.js";
 
-test("a US destination is flagged approximate; the EU is not", async () => {
+test("a non-European destination is flagged approximate; the EU is not", async () => {
   const us = await resolveTax({ originCountry: "US", country: "US", state: "IL" });
   assert.equal(us.approximate, true);
-  // The state rate itself is still reported — the flag says "incomplete", not "wrong".
-  assert.ok(us.percent > 0);
+  // No rate AT ALL, which is stronger than the previous behaviour: the old source
+  // returned Illinois' 6.25% and relied on the flag to say "incomplete". Now there
+  // is no number to leak past the flag if a caller forgets to check it.
+  assert.equal(us.percent, 0);
+  assert.equal(us.type, "none");
+
+  // Canada was one of 86 non-European countries the old source carried a rate for.
+  // A number with no authority behind it invoices confidently and under-collects
+  // silently, so it is refused on exactly the same footing as the US.
+  const ca = await resolveTax({ originCountry: "FR", country: "CA" });
+  assert.equal(ca.approximate, true);
 
   const it = await resolveTax({ originCountry: "FR", country: "IT" });
   assert.equal(it.approximate, undefined, "EU VAT is one published rate per country");
   assert.equal(it.percent, 22);
+  // The country's own word for it, from the dataset rather than an app-side map.
+  assert.equal(it.displayName, "IVA");
+  assert.equal((await resolveTax({ originCountry: "IT", country: "FR" })).displayName, "TVA");
 });
 
 test("minting a rate from an approximate decision throws, and says what to do", async () => {

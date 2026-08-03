@@ -183,7 +183,7 @@ export interface BillingConfig {
      * Where YOU are established, as an ISO country code ("IT", "FR", "US").
      *
      * Setting it selects `mode: "local"` — the library works the rate out
-     * itself (`sales-tax` + VIES) from the customer's address and tax id, and
+     * itself (`eu-vat-rates-data` + VIES) from the customer's address and tax id, and
      * applies it as an explicit Stripe TaxRate. It decides domestic vs
      * cross-border, which is the whole question a VAT rate turns on, so there is
      * nothing else to configure.
@@ -194,7 +194,7 @@ export interface BillingConfig {
     /**
      * Accept a knowingly-approximate rate under `mode: "local"`.
      *
-     * Only US destinations are affected: `sales-tax` carries one rate per state,
+     * Only US destinations are affected: the rate dataset is European-only, so no US rate exists here at all,
      * but US sales tax stacks county, city and district rates on top of it across
      * 13 000+ jurisdictions, and SaaS is taxable in some states and not others.
      * Illinois reads 6.25% where a Chicago buyer owes ~10.25%.

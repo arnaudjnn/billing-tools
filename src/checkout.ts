@@ -91,7 +91,7 @@ function priceIdsFor(
 // calculation, not Stripe Tax:
 //
 //   - `taxRates` (the default path) — `taxRatesFor` in src/tax.ts works the rate
-//     out from `sales-tax` + VIES and applies it as an explicit Stripe TaxRate.
+//     out from `eu-vat-rates-data` + VIES and applies it as an explicit Stripe TaxRate.
 //     No per-transaction fee and no registrations needed to CALCULATE. Re-apply
 //     with `updateCheckoutSessionTaxRates` when the typed country differs from
 //     the one you guessed; that handoff is the work Stripe Tax charges 0.5% for.
@@ -140,7 +140,7 @@ export async function createCheckoutSession(opts: {
    * Stripe Tax. OFF unless you ask for it.
    *
    * Off is the default because the library ships its own calculation
-   * (`taxRatesFor` — `sales-tax` + VIES, no per-transaction fee) and because
+   * (`taxRatesFor` — `eu-vat-rates-data` + VIES, no per-transaction fee) and because
    * "on" is the more expensive mistake: Stripe Tax with no active registration
    * computes ZERO tax rather than erroring, so the total silently drops to the
    * pre-tax amount and the seller owes the difference. Opting in is a statement

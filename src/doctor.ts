@@ -55,7 +55,7 @@ export async function checkBillingSetup(opts: {
    * named after the thing doing the calculating rather than after how it feels:
    *
    * - `"local"` (default) — this library: `taxRatesFor` derives the rate
-   *   from `sales-tax` + VIES and applies it as an explicit Stripe TaxRate. No
+   *   from `eu-vat-rates-data` + VIES and applies it as an explicit Stripe TaxRate. No
    *   per-transaction fee, and nothing to set up in the Dashboard. Same spelling
    *   Named for WHERE the calculation happens, not for how it feels — and
    *   deliberately not `"auto"`, because Stripe's own field is `automatic_tax`, so

@@ -3,7 +3,7 @@
 //
 // The root barrel re-exports 45 modules, so `import { planModel } from
 // "@arnaudjnn/billing-tools"` in a Server Component pulls in the MCP SDK,
-// mcp-handler, authkit-nextjs, Stripe, WorkOS and sales-tax to answer a question
+// mcp-handler, authkit-nextjs, Stripe, WorkOS and eu-vat-rates-data to answer a question
 // about a plain object. This leaf is the same three modules the pricing entry
 // already proves can stand alone: `plan-model.ts`, `i18n.ts` and `types.ts` import
 // no external package at all, so this graph is pure TypeScript.
