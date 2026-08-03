@@ -402,6 +402,9 @@ export {
 // tax_behavior, a missing or disabled endpoint, duplicates).
 export {
   checkBillingSetup,
+  // The other half of the substrate. Stripe was audited thoroughly and WorkOS not
+  // at all, so an environment could look healthy until the first sign-in.
+  checkWorkOSSetup,
   checkPlansConfig,
   formatDoctorResult,
   // The CLI around the two checks. Both consumers hand-wrote the same argv parsing

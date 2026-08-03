@@ -1,4 +1,5 @@
 import { getStripe } from "./billing.js";
+import { getWorkOS } from "./workos.js";
 import {
   ledgerGaps,
   normalizePlans,
@@ -743,6 +744,10 @@ export interface RunDoctorOptions {
   hasCheckout?: boolean;
   /** The deployed endpoint, used unless `--url` or `--no-webhook` says otherwise. */
   webhookUrl?: string;
+  /** Audit WorkOS too — the other half of the substrate. Pass `{ oauthProxy: true }`
+   *  when the app mounts the MCP OAuth proxy, which is what makes
+   *  `REFRESH_TOKEN_SECRET` required. Omit to skip. */
+  workos?: boolean | { oauthProxy?: boolean };
   /** Defaults to `process.argv.slice(2)`. */
   argv?: string[];
   /** Defaults to `process.exit`. Injectable so this is testable. */
@@ -810,7 +815,121 @@ export async function runBillingDoctor(opts: RunDoctorOptions = {}): Promise<voi
     accountExit = 1;
   }
 
-  // Either failing fails the run: a good account with a broken catalogue is still
-  // broken, and it is the half that never shows up in Stripe.
-  return exit(accountExit || planExit);
+  // WorkOS last, and in its own try: it is a different vendor with a different key,
+  // so a WorkOS outage must not read as a Stripe problem.
+  let workosExit = 0;
+  if (opts.workos) {
+    const w = typeof opts.workos === "object" ? opts.workos : {};
+    try {
+      const workos = formatDoctorResult(await checkWorkOSSetup(w));
+      log(workos.text);
+      workosExit = workos.exitCode;
+    } catch (e) {
+      log(`✗ WorkOS: ${e instanceof Error ? e.message : String(e)}`);
+      workosExit = 1;
+    }
+  }
+
+  // Any of the three failing fails the run: a good Stripe account with a broken
+  // catalogue is still broken, and so is one whose WorkOS half cannot sign anybody in.
+  return exit(accountExit || planExit || workosExit);
+}
+
+// ── WorkOS ──────────────────────────────────────────────────────────────────
+//
+// `checkBillingSetup` audits Stripe thoroughly and WorkOS not at all, which left
+// half the substrate unchecked: WorkOS is where orgs, memberships and the `sk_`
+// API keys live, and it is assumed by every adapter this library ships.
+//
+// The failures worth catching are the ones that produce a 500 at request time
+// rather than an error at boot, because the credentials are read lazily (they have
+// to be — constructing at import time throws when a key is unset and takes the
+// app's boot with it). So an environment can look perfectly healthy until the
+// first person tries to sign in.
+//
+// `REFRESH_TOKEN_SECRET` is the sharpest of them and the reason this exists. The
+// OAuth proxy refuses to sign a refresh token without it — deliberately, because
+// it used to fall back to `WORKOS_CLIENT_ID`, a PUBLIC identifier, so anyone who
+// knew it could forge a 30-day token. The consequence of the safe behaviour is a
+// `server_error` from the token endpoint, which reads as "MCP is broken" rather
+// than "one variable is unset". Measured on a real deployment: absent from both
+// `.env.example` and `.env.local` while `oauthProxy: true` was set, so no agent
+// could connect and nothing said why.
+export async function checkWorkOSSetup(opts: {
+  /** True when the app mounts the MCP OAuth proxy (`createBilling({ oauthProxy })`).
+   *  Only then is `REFRESH_TOKEN_SECRET` required. */
+  oauthProxy?: boolean;
+} = {}): Promise<DoctorResult> {
+  const checks: Check[] = [];
+
+  const apiKey = process.env.WORKOS_API_KEY;
+  const clientId = process.env.WORKOS_CLIENT_ID;
+
+  if (!apiKey) {
+    checks.push({
+      level: "error",
+      title: "WORKOS_API_KEY",
+      detail: "not set",
+      fix: "Set it from WorkOS → API Keys. Every adapter here reads it lazily, so the app boots fine and then 500s on the first org lookup",
+    });
+  }
+  if (!clientId) {
+    checks.push({
+      level: "error",
+      title: "WORKOS_CLIENT_ID",
+      detail: "not set",
+      fix: "Set it from WorkOS → Configuration. AuthKit and the OAuth proxy both need it",
+    });
+  }
+
+  // Live-vs-test is a WorkOS ENVIRONMENT, and the key names it: a staging key in
+  // production points every org and API key at the wrong environment, silently.
+  if (apiKey) {
+    const staging = apiKey.startsWith("sk_test");
+    checks.push({
+      level: "ok",
+      title: "WorkOS environment",
+      detail: staging ? "test/staging key" : "production key",
+    });
+  }
+
+  // One real call, so a key that is present but revoked or from another
+  // environment fails here instead of on a customer's first request.
+  if (apiKey) {
+    try {
+      const orgs = await getWorkOS().organizations.listOrganizations({ limit: 1 });
+      checks.push({
+        level: "ok",
+        title: "WorkOS API key",
+        detail: `usable (${orgs.data.length ? "organizations exist" : "no organizations yet"})`,
+      });
+    } catch (e) {
+      checks.push({
+        level: "error",
+        title: "WorkOS API key",
+        detail: e instanceof Error ? e.message : String(e),
+        fix: "The key is set but WorkOS rejected it — revoked, or from a different environment",
+      });
+    }
+  }
+
+  if (opts.oauthProxy) {
+    checks.push(
+      process.env.REFRESH_TOKEN_SECRET
+        ? { level: "ok", title: "REFRESH_TOKEN_SECRET", detail: "set" }
+        : {
+            level: "error",
+            title: "REFRESH_TOKEN_SECRET",
+            detail: "not set, but the OAuth proxy is mounted",
+            fix: "Set it to any long random string (`openssl rand -hex 32`). Without it the token endpoint returns server_error and no MCP client can connect. There is no fallback on purpose: it used to fall back to WORKOS_CLIENT_ID, which is public, so the secret was forgeable",
+          },
+    );
+  }
+
+  return {
+    // WorkOS has no `livemode` of its own; the key names the environment.
+    livemode: Boolean(apiKey) && !apiKey!.startsWith("sk_test"),
+    checks,
+    healthy: !checks.some((c) => c.level === "error"),
+  };
 }

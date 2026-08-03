@@ -205,13 +205,30 @@ export async function ensureStripeCustomer(
  * Without `currency`, or when it matches the customer's own, the scalar is
  * correct and is used directly — one API call, as before.
  */
+/**
+ * The customer object, or null if it is deleted.
+ *
+ * Exists so the two reads that both want it — the wallet balance and the spend
+ * controls — can share ONE retrieve. They are issued together on the hot path of
+ * every metered call, and measured under load `/v1/customers/:id` was the single
+ * largest consumer of the account's request budget, because each did its own.
+ */
+export async function retrieveBillingCustomer(
+  stripeCustomerId: string,
+): Promise<Stripe.Customer | null> {
+  const customer = await getStripe().customers.retrieve(stripeCustomerId);
+  return customer.deleted ? null : (customer as Stripe.Customer);
+}
+
 export async function getCreditBalance(
   stripeCustomerId: string,
   currency?: string,
+  /** An already-retrieved customer, to avoid a second fetch of the same object. */
+  prefetched?: Stripe.Customer | null,
 ): Promise<number> {
   const stripe = getStripe();
-  const customer = await stripe.customers.retrieve(stripeCustomerId);
-  if (customer.deleted) return 0;
+  const customer = prefetched ?? (await stripe.customers.retrieve(stripeCustomerId));
+  if (!customer || ("deleted" in customer && customer.deleted)) return 0;
 
   const want = currency?.toLowerCase();
   // Negation is the whole conversion (a negative Stripe balance IS credit), and
@@ -586,9 +603,15 @@ export function spendControlsOf(metadata: Stripe.Metadata | null | undefined): S
   };
 }
 
-export async function getSpendControls(stripeCustomerId: string): Promise<SpendControls> {
-  const customer = await getStripe().customers.retrieve(stripeCustomerId);
-  if (customer.deleted) return { limitCredits: null, alertCredits: [] };
+export async function getSpendControls(
+  stripeCustomerId: string,
+  /** An already-retrieved customer, to avoid a second fetch of the same object. */
+  prefetched?: Stripe.Customer | null,
+): Promise<SpendControls> {
+  const customer = prefetched ?? (await getStripe().customers.retrieve(stripeCustomerId));
+  if (!customer || ("deleted" in customer && customer.deleted)) {
+    return { limitCredits: null, alertCredits: [] };
+  }
   return spendControlsOf(customer.metadata);
 }
 

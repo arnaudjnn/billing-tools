@@ -182,3 +182,42 @@ test("the doctor runs last, so it sees what was just provisioned", async () => {
   assert.ok(result.doctor.checks.some((c) => c.title === "Stripe account"));
   assert.ok(result.doctor.checks.some((c) => c.title === "Plans config" || c.title === "Usage ledger"));
 });
+
+// ── The closing verification must never eat the report ───────────────────────
+//
+// `setupBilling` provisions and THEN verifies. The verification talks to Stripe, so
+// it can fail outright rather than report a failing check — and it used to throw
+// straight out of `setupBilling`.
+//
+// That is the worst place for a throw in this file: the webhook step immediately
+// before it may have just minted a signing secret, and Stripe never shows one again.
+// A closing check that discards the one value the caller cannot recover is strictly
+// worse than no closing check. The report now always comes back, with the failure
+// as a check inside it.
+test("a Stripe failure in the closing doctor is reported, not thrown", async () => {
+  // A client whose every call rejects — an invalid key, a revoked one, no network.
+  // The suite installs a WORKING fake, so an invalid env var alone would never reach
+  // Stripe; the failure has to come from the client.
+  __setStripeForTests({
+    accounts: {
+      retrieve: async () => {
+        throw new Error("Invalid API Key provided: sk_test_broken");
+      },
+    },
+  });
+
+  const result = await setupBilling({
+    config: CONFIG,
+    // Nothing else able to throw first: this asserts the closing doctor's path.
+    meter: false,
+  });
+
+  assert.equal(result.healthy, false, "an unusable client must not read as healthy");
+  assert.ok(
+    result.doctor.checks.some((c) => c.level === "error"),
+    "the failure should appear as a check inside the report",
+  );
+  // And the report still renders — that is the thing worth protecting, because the
+  // webhook step just above may have minted a secret Stripe will never show again.
+  assert.match(formatSetupReport(result), /ATTENTION NEEDED/);
+});

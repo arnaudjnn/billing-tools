@@ -1,5 +1,6 @@
 import {
   checkBillingSetup,
+  checkWorkOSSetup,
   checkPlansConfig,
   formatDoctorResult,
   type Check,
@@ -78,6 +79,19 @@ export interface SetupOptions {
   };
   /** Create the usage meter eagerly. Default true. */
   meter?: boolean;
+  /**
+   * Also audit WorkOS in the closing report.
+   *
+   * Nothing here PROVISIONS WorkOS — an environment's redirect URIs, AuthKit
+   * settings and role slugs are Dashboard configuration this library never
+   * touches, and orgs and keys are created lazily on demand. But a setup run that
+   * says "healthy" while WorkOS has no usable key is telling half the truth, and
+   * WorkOS is where the orgs, memberships and `sk_` keys live.
+   *
+   * Pass `{ oauthProxy: true }` when the app mounts the MCP OAuth proxy, which is
+   * what makes `REFRESH_TOKEN_SECRET` required.
+   */
+  workos?: boolean | { oauthProxy?: boolean };
 }
 
 /**
@@ -199,18 +213,63 @@ export async function setupBilling(opts: SetupOptions): Promise<SetupResult> {
     );
   }
 
-  // Verify, don't assume. Runs last so it sees what the steps above just did.
-  const account = await checkBillingSetup({
-    config: opts.config,
-    webhookUrl: opts.webhookUrl,
-  });
+  // Verify, don't assume. Runs last so it sees what the steps above just did — and
+  // in a try, because it TALKS TO STRIPE and can fail outright (invalid key, no
+  // network) rather than report a failing check.
+  //
+  // Letting that throw out of `setupBilling` was a real defect, and the worst kind:
+  // the webhook step above may just have minted a signing secret, and Stripe never
+  // shows it again. A closing verification that discards the one value the caller
+  // cannot recover is strictly worse than no verification. So the report always
+  // comes back, with the failure as a check inside it.
+  let account: DoctorResult;
+  try {
+    account = await checkBillingSetup({
+      config: opts.config,
+      webhookUrl: opts.webhookUrl,
+    });
+  } catch (e) {
+    account = {
+      livemode: !(process.env.STRIPE_SECRET_KEY ?? "").startsWith("sk_test"),
+      checks: [
+        {
+          level: "error",
+          title: "Stripe",
+          detail: e instanceof Error ? e.message : String(e),
+          fix: "check STRIPE_SECRET_KEY, and that this machine can reach api.stripe.com",
+        },
+      ],
+      healthy: false,
+    };
+  }
   const plans = opts.plans
     ? checkPlansConfig(opts.plans, { hasCheckout: true })
     : { livemode: account.livemode, checks: [], healthy: true };
+  // In its own try: WorkOS is a different vendor with a different key, so its
+  // being down must not read as a Stripe problem — or take the report with it.
+  let workos: DoctorResult = { livemode: account.livemode, checks: [], healthy: true };
+  if (opts.workos) {
+    const w = typeof opts.workos === "object" ? opts.workos : {};
+    try {
+      workos = await checkWorkOSSetup(w);
+    } catch (e) {
+      workos = {
+        livemode: account.livemode,
+        checks: [
+          {
+            level: "error",
+            title: "WorkOS",
+            detail: e instanceof Error ? e.message : String(e),
+          },
+        ],
+        healthy: false,
+      };
+    }
+  }
   const doctor: DoctorResult = {
     livemode: account.livemode,
-    checks: [...account.checks, ...plans.checks],
-    healthy: account.healthy && plans.healthy,
+    checks: [...account.checks, ...plans.checks, ...workos.checks],
+    healthy: account.healthy && plans.healthy && workos.healthy,
   };
 
   return {

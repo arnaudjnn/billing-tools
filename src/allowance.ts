@@ -1,4 +1,9 @@
-import { getBillingCustomerId, getCreditBalance, getSpendControls } from "./billing.js";
+import {
+  getBillingCustomerId,
+  getCreditBalance,
+  getSpendControls,
+  retrieveBillingCustomer,
+} from "./billing.js";
 import { formatMessage, resolveMessages, type PartialMessages } from "./i18n.js";
 import {
   capCovers,
@@ -186,9 +191,18 @@ export async function resolveAllowance(
   // metadata — the SAME object `getCreditBalance` retrieves below, so a caller
   // that needs both pays one round trip, and it joins the parallel round with
   // every other limit rather than adding a step to the meter's hot path.
+  // ONE retrieve for the two reads that both want this object. Measured under
+  // load, `/v1/customers/:id` was the largest single consumer of the account's
+  // request budget because the wallet balance and the spend ceiling each fetched
+  // it — and unlike the ledger reads they are not cacheable, since money must not
+  // be served stale. Shared here rather than memoised anywhere, so the freshness
+  // is unchanged and only the duplicate goes.
+  const needsCustomer = !input.skipWallet || !input.skipSpendLimit;
+  const customer = needsCustomer ? await retrieveBillingCustomer(customerId) : null;
+
   const spendReads: Promise<LimitState[]> = input.skipSpendLimit
     ? Promise.resolve([])
-    : getSpendControls(customerId).then(({ limitCredits }) => {
+    : getSpendControls(customerId, customer).then(({ limitCredits }) => {
         if (!limitCredits) return [];
         // A CALENDAR month, deliberately, and not the plan cycle: the customer set
         // a "monthly" ceiling, and an annual subscriber's cycle would make that one
@@ -216,7 +230,7 @@ export async function resolveAllowance(
       });
 
   const [wallet, poolUsed, packUsed, extra, limits, spendLimits] = await Promise.all([
-    input.skipWallet ? Promise.resolve(0) : getCreditBalance(customerId, config.currency),
+    input.skipWallet ? Promise.resolve(0) : getCreditBalance(customerId, config.currency, customer),
     poolSize == null
       ? Promise.resolve(0)
       : ledger.total({ orgId: input.orgId, customerId, start: cycle.start, end: cycle.end ?? undefined }),
