@@ -1,3 +1,15 @@
+# [4.1.0](https://github.com/arnaudjnn/billing-tools/compare/v4.0.0...v4.1.0) (2026-08-03)
+
+
+### Features
+
+* **doctor:** audit WorkOS, and stop setupBilling from discarding its own report ([2f8f42d](https://github.com/arnaudjnn/billing-tools/commit/2f8f42d23175576c8bb33b49c80e62729ba662ee))
+
+
+### Performance Improvements
+
+* **allowance:** one customer retrieve, not two — and a load test that found it ([2d70f90](https://github.com/arnaudjnn/billing-tools/commit/2d70f9081b5f957716842add806a17bf5b0e38b0))
+
 # [4.0.0](https://github.com/arnaudjnn/billing-tools/compare/v3.2.0...v4.0.0) (2026-08-03)
 
 
