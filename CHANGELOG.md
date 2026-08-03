@@ -1,3 +1,46 @@
+# [8.0.0](https://github.com/arnaudjnn/billing-tools/compare/v7.0.0...v8.0.0) (2026-08-03)
+
+
+* feat!: refuse a knowingly-approximate US tax rate instead of applying it ([0b8bbd6](https://github.com/arnaudjnn/billing-tools/commit/0b8bbd65dc9269ba9de73f3e904497f77282457c))
+
+
+### BREAKING CHANGES
+
+* under `mode: "local"`, a US-destination charge now throws
+`ApproximateTaxError` unless `config.tax.allowApproximate: true`.
+
+`sales-tax` carries ONE rate per US state. US sales tax is destination-based
+across 13 000+ jurisdictions — counties, cities and special districts stack on the
+state rate — and SaaS is taxable in some states and not others. Illinois reads
+6.25% where a Chicago buyer owes ~10.25%. So the number was not slightly rough; it
+was four points short, on every invoice, silently.
+
+Under-collection is the one direction that is not recoverable. Charge too much and
+a customer asks for it back; charge too little and the difference is yours at
+audit, with interest, long after they are gone. That is the same reasoning already
+applied to an unverifiable VAT number, where this library charges rather than
+exempts — extended to the case where the RATE, not the exemption, is the guess.
+
+`TaxDecision.approximate` marks it (US only), `taxRatesFor` refuses to mint from
+it, `taxFor` threads the opt-out, and `checkBillingSetup` warns at deploy time
+when the origin is US without it — the only place the choice can usefully be
+raised, since at charge time it has already been made and on an invoice it is
+invisible.
+
+This is not a gap a dependency can close, which is why the guard is the answer.
+Checked against npm: `taxjar` is a client for a paid API, `washington-state-sales-tax`
+covers one state, `eu-vat-rates-data` is EU-only, `@medusajs/tax` is plumbing.
+Nothing ships accurate US local rates, because the data is a licensed product —
+Avalara and TaxJar sell exactly it. EU VAT is tractable for the opposite reason:
+27 countries, one published rate each.
+
+Coverage: the refusal, the flag and the EU non-regression are unit-tested. The
+doctor's warning branch is not — `doctor.test.mjs` exercises `checkPlansConfig`
+only, and a full Stripe fake for `checkBillingSetup` was more than the branch
+warranted.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
 # [7.0.0](https://github.com/arnaudjnn/billing-tools/compare/v6.0.0...v7.0.0) (2026-08-03)
 
 
