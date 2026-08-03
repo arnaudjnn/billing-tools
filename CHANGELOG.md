@@ -1,3 +1,48 @@
+# [9.0.0](https://github.com/arnaudjnn/billing-tools/compare/v8.0.1...v9.0.0) (2026-08-03)
+
+
+* feat!: replace sales-tax with eu-vat-rates-data, and refuse what we cannot rate ([54c188c](https://github.com/arnaudjnn/billing-tools/commit/54c188c63f4d4e05658b52b008e64adfeccb0787))
+
+
+### BREAKING CHANGES
+
+* the `sales-tax` dependency is gone. Rate coverage is now the 45
+European countries `eu-vat-rates-data` tracks daily from the European Commission's
+TEDB. Any destination outside them — including the US, Canada, Australia, Japan —
+resolves as `approximate` and is REFUSED by `taxRatesFor` unless
+`config.tax.allowApproximate` is set. Use `mode: "stripe"` for those.
+
+Three things got better and one got smaller.
+
+Better: the rates are authoritative and fresh. `sales-tax` shipped a static JSON
+published whenever someone cut a release; this is date-versioned from the EC's own
+database. It also carries EU MEMBERSHIP, so reverse charge is now three stated
+conditions — both in the EU, different countries, a VAT number that stands up —
+instead of a library's opinion we took on trust. And `vat_abbr` gives the country's
+own word for the tax, so an Italian invoice says IVA and a French one TVA without
+the app supplying a map.
+
+VIES is now called directly (~25 lines) rather than through the old dependency,
+with the same safe direction kept and now written down: format-checked locally
+first so a shared public service is only asked about numbers that could be real,
+4s timeout because it sits on a checkout path, and an unverifiable number is NOT
+an exemption. A wrongly charged customer asks for it back; a wrongly exempted one
+leaves you owing the VAT.
+
+Smaller: `sales-tax` carried a rate for 86 non-European countries and this does
+not. That is the point rather than a regression — a number with no authority
+behind it invoices confidently and under-collects silently, which is the one
+direction that is not recoverable. The US guard added in 0b8bbd6 now covers all of
+them on the same footing, and the decision no longer carries a misleading rate at
+all: it is 0% + `approximate`, so there is no number to leak past the flag if a
+caller forgets to check it.
+
+Verified live: FR→FR 20% TVA, FR→IT 22% IVA, FR→NO 25% MVA, FR→GB 20%, IT→IT does
+not reverse-charge (no border), FR→DE with a real VAT number reverse-charges to 0%
+while a bogus one charges 19%, and FR→US / FR→CA refuse.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
 ## [8.0.1](https://github.com/arnaudjnn/billing-tools/compare/v8.0.0...v8.0.1) (2026-08-03)
 
 
