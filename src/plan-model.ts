@@ -83,6 +83,13 @@ export interface SeatTypeDisplay {
   label: Localized;
   /** One muted line on what the seat buys. */
   usage?: Localized;
+  /**
+   * Short form for a badge or a chip: "Standard", where `label` is "Standard
+   * seat". A pricing card has room for the noun; the pill on a usage screen that
+   * says which seat you hold does not, and truncating `label` there is the app
+   * guessing at where the word ends.
+   */
+  badge?: Localized;
 }
 
 export interface PlanDisplay {
@@ -115,6 +122,9 @@ export interface PlanDisplay {
 }
 
 // ── Axis 1: what Stripe SELLS ───────────────────────────────────────────────
+
+/** The seat type a member is assumed to hold when nothing says otherwise. */
+export const DEFAULT_SEAT_TYPE = "standard";
 
 export interface SeatTypeSpec {
   /** Per-seat recurring price. 0 = free (no Stripe price is minted). */
@@ -409,6 +419,19 @@ export interface PlanSpec {
   sale: Sale;
   limits?: PlanLimits;
   display?: PlanDisplay;
+  /**
+   * The seat a member occupies on a plan that does NOT sell seats.
+   *
+   * A free or flat plan still seats people — they just aren't line items — and a
+   * screen that badges "which seat do I hold" had nothing to show for them, while
+   * the meter quietly filed them under `standard` (a seat type such a plan does
+   * not even declare). Naming it here makes that seat sayable: `{ key: "solo",
+   * display: { badge: "Solo" } }`.
+   *
+   * Ignored when `sells.kind === "seats"` — there the SOLD seat types are the
+   * seat types, and a second answer would be a second source of truth.
+   */
+  seat?: { key?: string; display?: SeatTypeDisplay };
 }
 
 // ── The legacy shape, unchanged ─────────────────────────────────────────────
@@ -498,6 +521,11 @@ export interface PlanModel {
   intervals: readonly BillingInterval[];
   /** Empty for flat and free plans. Config order. */
   seatTypes: readonly NormalSeatType[];
+  /**
+   * The implicit seat of a plan that sells none, normalised. Null when the plan
+   * sells seats (they are in `seatTypes`) or when the config didn't name one.
+   */
+  seat: { key: string; display: SeatTypeDisplay | null } | null;
   /** Flat-plan price, or null. */
   price: IntervalPrice | null;
   /** True when the config used the pre-0.54 shape, so the doctor can say so. */
@@ -555,6 +583,10 @@ export function normalizePlan(key: string, spec: PlanDef | PlanSpec): PlanModel 
       display: spec.display ?? null,
       intervals: soldIntervals(declared, price, seatTypes),
       seatTypes,
+      seat:
+        spec.sells.kind === "seats" || !spec.seat
+          ? null
+          : { key: spec.seat.key ?? DEFAULT_SEAT_TYPE, display: spec.seat.display ?? null },
       price,
       legacy: false,
     };
@@ -597,6 +629,8 @@ export function normalizePlan(key: string, spec: PlanDef | PlanSpec): PlanModel 
     display: null,
     intervals: soldIntervals(undefined, sells.kind === "flat" ? spec.price : null, seatTypes),
     seatTypes,
+    // The legacy shape cannot name a seat, the same way it cannot name a rate limit.
+    seat: null,
     price: sells.kind === "flat" ? spec.price : null,
     legacy: true,
   };

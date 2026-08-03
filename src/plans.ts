@@ -59,6 +59,7 @@ export type {
   LedgerCoverage,
 } from "./plan-model.js";
 export {
+  DEFAULT_SEAT_TYPE,
   definePlans,
   isLegacyPlan,
   normalizePlan,

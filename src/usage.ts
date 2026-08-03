@@ -1,7 +1,15 @@
 import { getBillingCustomerId } from "./billing.js";
 import { resolveAllowance, type AllowanceState, type LimitState } from "./allowance.js";
+import { resolveLocalized, type LocaleOptions } from "./i18n.js";
 import { getSeatType } from "./seats.js";
-import type { CycleWindow, Every, PlanCatalog } from "./plan-model.js";
+import {
+  DEFAULT_SEAT_TYPE,
+  planModel,
+  type CycleWindow,
+  type Every,
+  type PlanCatalog,
+  type PlanModel,
+} from "./plan-model.js";
 import { stripeBalanceUsageLedger, type UsageLedger } from "./usage-ledger.js";
 import type { BillingAdapter, ResolvedConfig } from "./types.js";
 
@@ -25,6 +33,18 @@ export interface UsageWindow extends LimitState {
   resetsAt: number | null;
 }
 
+/** Which seat the caller holds, and the plan's own word for it. */
+export interface UsageSeat {
+  /** Seat type key: a sold seat type, the plan's implicit seat, or `api`. */
+  type: string;
+  /**
+   * `display.badge`, else `display.label`, resolved for the requested locale —
+   * null when the config gave that seat no display at all. The badge form wins
+   * because this is the pill on a usage screen, not a pricing card.
+   */
+  label: string | null;
+}
+
 export interface UsageSummary {
   plan: string | null;
   /** The billing cycle the cap is measured over. */
@@ -35,6 +55,12 @@ export interface UsageSummary {
   pool: UsageWindow | null;
   /** The caller's seat pack, when the plan caps per seat and a caller was given. */
   pack: (UsageWindow & { seatType: string; extra: number }) | null;
+  /**
+   * The caller's seat, when a caller was given. Present even on a plan that caps
+   * nothing per seat — you hold a seat on a free plan too, and `pack` is about
+   * an allowance, not about who you are.
+   */
+  seat: UsageSeat | null;
   /** Prepaid balance, in the configured currency. */
   wallet: number;
   /** Epoch ms this was read. What a "last updated" line shows. */
@@ -82,6 +108,27 @@ export interface UsageSummaryInput {
   caller?: { kind: "user" | "api"; id?: string; seatType?: string };
   ledger?: UsageLedger;
   now?: number;
+  /** Which language to resolve `seat.label` in. The only string this returns. */
+  locale?: LocaleOptions;
+}
+
+/**
+ * How a plan presents one seat type: a sold seat type first, then the implicit
+ * seat of a plan that sells none. Exported because a members list wants the same
+ * pill as a usage screen, and reimplementing this lookup is how the two drift.
+ */
+export function resolveSeat(
+  model: PlanModel | null,
+  type: string,
+  locale?: LocaleOptions,
+): UsageSeat {
+  const display =
+    model?.seatTypes.find((s) => s.key === type)?.display ??
+    (model?.seat?.key === type ? model.seat.display : null);
+  return {
+    type,
+    label: display ? (resolveLocalized(display.badge ?? display.label, locale) ?? null) : null,
+  };
 }
 
 /**
@@ -101,12 +148,16 @@ export async function usageSummary(
 
   // A member's seat decides which pack and which seat-scoped limits apply, so
   // resolve it here rather than making every page do it.
+  const model = planModel(input.plans, input.plan ?? null);
   let caller = input.caller;
   if (caller && !caller.seatType) {
+    // Nobody assigned them one: the plan's own implicit seat if it named one,
+    // else the historical default. A plan that SELLS seats has no implicit seat
+    // (`model.seat` is null there), because an unassigned member is a data gap
+    // and guessing at a sold seat type would hand out an allowance.
+    const assigned = caller.id ? await getSeatType(adapter, input.orgId, caller.id) : null;
     const seatType =
-      caller.kind === "api"
-        ? "api"
-        : ((caller.id && (await getSeatType(adapter, input.orgId, caller.id))) || "standard");
+      caller.kind === "api" ? "api" : assigned || model?.seat?.key || DEFAULT_SEAT_TYPE;
     caller = { ...caller, seatType };
   }
 
@@ -136,6 +187,7 @@ export async function usageSummary(
           extra: state.pack.extra,
         }
       : null,
+    seat: caller?.seatType ? resolveSeat(model, caller.seatType, input.locale) : null,
     wallet: state.wallet,
     at,
   };
@@ -229,7 +281,10 @@ export async function memberUsage(
       return {
         id: m.id,
         kind,
-        seatType: summary.pack?.seatType ?? (kind === "api" ? "api" : "standard"),
+        // From the resolved seat, not from the pack: a POOLED plan has no pack
+        // and reported every member as `standard`, a seat type such a plan does
+        // not even declare.
+        seatType: summary.seat?.type ?? (kind === "api" ? "api" : DEFAULT_SEAT_TYPE),
         pack: summary.pack ? { ...summary.pack, extra: summary.pack.extra } : null,
         windows: summary.windows.filter((w) => w.scope === "caller"),
         usedInCycle,

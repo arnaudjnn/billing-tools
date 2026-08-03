@@ -240,9 +240,11 @@ export {
 export {
   usageSummary,
   memberUsage,
+  resolveSeat,
   type UsageSummary,
   type UsageSummaryInput,
   type UsageWindow,
+  type UsageSeat,
   type MemberUsage,
 } from "./usage.js";
 // Counting usage separately from moving money — the seam an included window needs.
