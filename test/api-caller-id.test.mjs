@@ -17,7 +17,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 
 import { createApiMeterGuard } from "../dist/metering.js";
-import { scopesFor } from "../dist/usage-counters.js";
+import { scopesFor } from "../dist/usage-scopes.js";
 
 /** Captures what the guard hands the meter. */
 function spyMeter() {

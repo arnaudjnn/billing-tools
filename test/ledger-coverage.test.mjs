@@ -24,13 +24,13 @@ import { __setStripeForTests } from "../dist/billing.js";
 import {
   defaultUsageLedger,
   invalidateMeters,
-  postgresUsageLedger,
   stripeBalanceUsageLedger,
   stripeMeterUsageLedger,
   stripeUsageLedger,
 } from "../dist/usage-ledger.js";
 import { coverageNeededBy, ledgerGaps, normalizePlans } from "../dist/plan-model.js";
 import { checkPlansConfig } from "../dist/doctor.js";
+import { stripeScopeUsageLedger } from "../dist/usage-scopes.js";
 import { createMeter } from "../dist/metering.js";
 
 const POOLED = {
@@ -116,17 +116,18 @@ test("the meter covers org-wide included usage and nothing per caller", () => {
   });
 });
 
-test("a store covers both; the composite inherits each axis from the leg that answers it", () => {
-  assert.deepEqual(postgresUsageLedger({ query: async () => ({ rows: [] }) }).covers, {
-    orgIncluded: true,
+test("the composite inherits each axis from the leg that answers it", () => {
+  // The scope ledger is the per-caller leg that closes the second axis — and it
+  // does it in Stripe, which is why no store ships here any more.
+  assert.deepEqual(stripeScopeUsageLedger().covers, {
+    orgIncluded: false,
     callerIncluded: true,
   });
   assert.deepEqual(stripeUsageLedger().covers, { orgIncluded: true, callerIncluded: false });
-  assert.deepEqual(
-    stripeUsageLedger({ perCaller: postgresUsageLedger({ query: async () => ({ rows: [] }) }) })
-      .covers,
-    { orgIncluded: true, callerIncluded: true },
-  );
+  assert.deepEqual(stripeUsageLedger({ perCaller: stripeScopeUsageLedger() }).covers, {
+    orgIncluded: true,
+    callerIncluded: true,
+  });
 });
 
 test("a leg that declares nothing makes the composite silent rather than guessing", () => {
@@ -340,4 +341,63 @@ test("a failed resolve backs off instead of re-listing on every metered call", a
     invalidateMeters();
   }
   assert.equal(lists, 1, "one attempt, then back off");
+});
+
+// ── The rule vs the reads it is supposed to describe ────────────────────────
+//
+// `coverageNeededBy` used to ask one question — is any limit `scope: "caller"` —
+// and the reads `resolveAllowance` issues answer a different one. It was wrong in
+// BOTH directions, which is why these are pinned together: one rejected a config
+// that needs no store, the other accepted one that cannot be counted at all.
+
+test("an org-scoped limit narrowed by callerKind still needs per-caller counting", () => {
+  // `scope` defaults to "org", so the old rule filed this under orgIncluded. But
+  // allowance.ts issues `{callerKind:"user"}` for it — a per-caller read — and the
+  // usage behind it is POOL-funded, so the balance leg returns 0 for ever. The
+  // limit silently never applies, which looks like generosity rather than a fault.
+  const model = normalizePlans({
+    p: {
+      sells: { kind: "flat", price: { monthly: 1000, yearly: 10000 } },
+      grant: { kind: "none" },
+      cap: { kind: "pool", credits: 1000, onExhausted: "wallet" },
+      limits: { rate: [{ every: "hour", credits: 600, callerKind: "user" }] },
+      sale: "self_serve",
+    },
+  })[0];
+  assert.equal(coverageNeededBy(model).callerIncluded, true);
+  assert.deepEqual(
+    ledgerGaps([model], stripeUsageLedger().covers).caller.map((m) => m.key),
+    ["p"],
+  );
+});
+
+test("a caller-scoped limit over wallet-only usage needs NO store", () => {
+  // `covers: "users"` excludes a machine caller from the included window, so every
+  // API credit moves money and the debit records it per caller, exactly and with
+  // no lag. Demanding a store here rejected a config Stripe already answers.
+  const model = normalizePlans({
+    p: {
+      sells: {
+        kind: "seats",
+        seatTypes: { standard: { price: { monthly: 2000, yearly: 20000 }, includedCredits: 1000 } },
+      },
+      grant: { kind: "none" },
+      cap: { kind: "pool", perSeat: "included", covers: "users", onExhausted: "wallet" },
+      replenish: { purchase: {} },
+      limits: { rate: [{ every: "hour", credits: 600, scope: "caller", callerKind: "api" }] },
+      sale: "self_serve",
+    },
+  })[0];
+  assert.equal(coverageNeededBy(model).callerIncluded, false);
+  assert.deepEqual(ledgerGaps([model], stripeUsageLedger().covers).caller, []);
+});
+
+test("a per-seat cap still needs it, and the scope ledger provides it", () => {
+  const model = normalizePlans(PER_MEMBER)[0];
+  assert.equal(coverageNeededBy(model).callerIncluded, true);
+  // The composite with the Stripe-backed per-caller leg closes the gap with no
+  // database anywhere.
+  const covers = stripeUsageLedger({ perCaller: stripeScopeUsageLedger() }).covers;
+  assert.deepEqual(covers, { orgIncluded: true, callerIncluded: true });
+  assert.deepEqual(ledgerGaps([model], covers).caller, []);
 });

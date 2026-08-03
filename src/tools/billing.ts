@@ -1,7 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { BillingAdapter, ResolvedConfig } from "../types.js";
-import { enforceAccess } from "../auth.js";
+import { enforceAccess, enforceAdmin } from "../auth.js";
+import { ALL_TOOL_CAPABILITIES, type ToolCapabilities } from "../plan-model.js";
 import { taxFor } from "../tax.js";
 import {
   ensureStripeCustomer,
@@ -9,6 +10,8 @@ import {
   getCreditBalance,
   getAutoReloadSettings,
   setAutoReloadSettings,
+  getSpendControls,
+  setSpendControls,
   createCreditCheckoutSession,
   quoteCreditPurchase,
   createBillingPortalSession,
@@ -21,6 +24,12 @@ const NO_STRIPE = {
   isError: true as const,
   content: [{ type: "text" as const, text: "Billing is not configured (STRIPE_SECRET_KEY unset)." }],
 };
+
+// Same shape management.ts and subscription.ts use, so a refusal reads identically
+// whichever module raised it.
+function err(text: string) {
+  return { isError: true as const, content: [{ type: "text" as const, text }] };
+}
 
 /**
  * Per-org top-up settings, resolved at call time.
@@ -44,6 +53,7 @@ export function registerBillingOnlyTools(
   config: ResolvedConfig,
   toolCosts: Record<string, number>,
   topUp: TopUpToolOptions = {},
+  caps: ToolCapabilities = ALL_TOOL_CAPABILITIES,
 ) {
   // Resolve (or lazily create) the org's Stripe customer.
   const customerId = async (orgId: string): Promise<string> => {
@@ -94,32 +104,170 @@ export function registerBillingOnlyTools(
     },
   );
 
-  server.tool(
-    "preview_credit_purchase",
-    `What a credit purchase will cost, before buying: credits, tax and total.
+  // Only when some plan actually sells top-ups (`replenish.purchase`). A
+  // wallet-less catalogue that advertised buy_credits sent an agent to a
+  // Checkout Session for an allowance the plan cannot replenish.
+  if (caps.purchase) {
+    server.tool(
+      "preview_credit_purchase",
+      `What a credit purchase will cost, before buying: credits, tax and total.
 Quoted from the same Stripe tax rates buy_credits will charge, so the two agree.`,
-    {
-      amount: z.number().min(5).max(200000).describe("Amount in your currency to quote (e.g. 10 = 1000 credits)"),
-    },
-    async ({ amount }) => {
+      {
+        amount: z.number().min(5).max(200000).describe("Amount in your currency to quote (e.g. 10 = 1000 credits)"),
+      },
+      async ({ amount }) => {
+        const auth = await enforceAccess(adapter);
+        if ("isError" in auth) return auth;
+        if (!stripeConfigured()) return NO_STRIPE;
+        // The quote must read the SAME rates the purchase will carry, or the dialog
+        // shows a total the card is not charged.
+        const { taxRates } = await topUpTax(auth.orgId);
+        const quote = await quoteCreditPurchase(amount, taxRates ?? []);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                {
+                  credits: quote.credits,
+                  subtotal: quote.subtotal,
+                  tax: quote.tax,
+                  total: quote.total,
+                  tax_percent: quote.taxPercent,
+                  currency: config.currency,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      },
+    );
+
+    server.tool(
+      "buy_credits",
+      `Purchase credits via Stripe Checkout. Returns a payment URL.
+1 unit of currency = 100 credits. Minimum 5, maximum 200,000. Your card is saved for auto-reload.`,
+      {
+        amount: z.number().min(5).max(200000).describe("Amount in your currency to purchase (e.g. 10 = 1000 credits)"),
+      },
+      async ({ amount }) => {
+        const auth = await enforceAccess(adapter);
+        if ("isError" in auth) return auth;
+        if (!stripeConfigured()) return NO_STRIPE;
+        const cid = await customerId(auth.orgId);
+        const url = await createCreditCheckoutSession(cid, auth.orgId, amount, config, {
+          ...(await topUpTax(auth.orgId, cid)),
+          successUrl: topUp.successUrl,
+          cancelUrl: topUp.cancelUrl,
+        });
+        const credits = Math.round(amount * 100);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                {
+                  status: "checkout_created",
+                  checkout_url: url,
+                  amount,
+                  credits,
+                  message: `Open this URL to purchase ${credits} credits.`,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      },
+    );
+  }
+
+  // Gated the same way, on `replenish.autoReload`.
+  if (caps.autoReload) {
+    server.tool(
+      "set_auto_reload",
+      `Configure automatic credit reload. When your balance drops to or below the threshold
+after a tool call, your saved card is charged to bring the balance back to reload_to.
+Requires a saved card (use buy_credits first).`,
+      {
+        enabled: z.boolean().describe("Enable or disable auto-reload"),
+        threshold: z.number().min(0).describe("Balance threshold that triggers reload"),
+        reload_to: z.number().min(1).describe("Target balance after reload"),
+      },
+      async ({ enabled, threshold, reload_to }) => {
+        const auth = await enforceAccess(adapter);
+        if ("isError" in auth) return auth;
+        if (!stripeConfigured()) return NO_STRIPE;
+        if (reload_to <= threshold) {
+          return {
+            isError: true,
+            content: [{ type: "text" as const, text: "reload_to must be greater than threshold." }],
+          };
+        }
+        const cid = await customerId(auth.orgId);
+        await setAutoReloadSettings(cid, threshold, reload_to, enabled);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                {
+                  status: "ok",
+                  auto_reload: { enabled, threshold, reload_to },
+                  message: enabled
+                    ? `Auto-reload enabled: at <=${threshold} credits, recharge to ${reload_to}.`
+                    : "Auto-reload disabled.",
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      },
+    );
+  }
+
+  // ── The customer's own ceiling ─────────────────────────────────────────────
+  //
+  // Ungated, and on purpose. A spend limit FUNDS nothing and only refuses, so it
+  // needs no `replenish` and no plan: a free workspace can cap its own consumption
+  // exactly like a subscribed one. All it needs is the Stripe customer the limit
+  // lives on.
+  //
+  // These exist because the parity rule was broken here, in the direction it was
+  // written to catch: `getSpendControls` / `setSpendControls` were a library
+  // function and a billing screen and nothing else. The cost was specific, not
+  // theoretical — `describeDenial` answers `spend_limit_reached` by telling the
+  // caller this is the one limit they can raise themselves, which is useless advice
+  // to an agent with no tool to raise it with.
+  server.tool(
+    "get_spend_controls",
+    `Your workspace's own monthly spending ceiling and the alert thresholds set on it.
+This is the limit YOU control, distinct from the plan's rate limits. For how much of
+it is already used and when it resets, call get_usage_limits (the ceiling appears
+there as a window with kind "spend").`,
+    {},
+    async () => {
       const auth = await enforceAccess(adapter);
       if ("isError" in auth) return auth;
       if (!stripeConfigured()) return NO_STRIPE;
-      // The quote must read the SAME rates the purchase will carry, or the dialog
-      // shows a total the card is not charged.
-      const { taxRates } = await topUpTax(auth.orgId);
-      const quote = await quoteCreditPurchase(amount, taxRates ?? []);
+      const controls = await getSpendControls(await customerId(auth.orgId));
       return {
         content: [
           {
             type: "text" as const,
             text: JSON.stringify(
               {
-                credits: quote.credits,
-                subtotal: quote.subtotal,
-                tax: quote.tax,
-                total: quote.total,
-                tax_percent: quote.taxPercent,
+                // Named `_credits` like the metadata keys they come from, because a
+                // bare `limit` next to `buy_credits` (which takes CURRENCY) is the
+                // one ambiguity worth spending two words to remove.
+                limit_credits: controls.limitCredits,
+                alert_credits: controls.alertCredits,
+                window: "calendar_month",
                 currency: config.currency,
               },
               null,
@@ -132,66 +280,56 @@ Quoted from the same Stripe tax rates buy_credits will charge, so the two agree.
   );
 
   server.tool(
-    "buy_credits",
-    `Purchase credits via Stripe Checkout. Returns a payment URL.
-1 unit of currency = 100 credits. Minimum 5, maximum 200,000. Your card is saved for auto-reload.`,
+    "set_spend_controls",
+    `Set your workspace's monthly spending ceiling, in CREDITS, and/or the thresholds to
+be warned at. Pass only the field you want to change; omitting one leaves it alone.
+Pass limit_credits: 0 to remove the ceiling entirely, and alert_credits: [] to clear
+every threshold. The window is the calendar month, even on an annual plan.`,
     {
-      amount: z.number().min(5).max(200000).describe("Amount in your currency to purchase (e.g. 10 = 1000 credits)"),
+      // 0 is the clear, and `null` is deliberately NOT accepted: `dispatchTool`
+      // strips null/undefined arguments before validation (dispatch.ts), so a
+      // nullable field would be dropped on the REST and CLI paths and read as
+      // "leave it alone" — the caller's clear would silently not happen, while the
+      // same call over raw MCP worked. One spelling that behaves identically on
+      // every surface beats two where one quietly doesn't.
+      limit_credits: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe("Credits allowed per calendar month. 0 removes the ceiling"),
+      alert_credits: z
+        .array(z.number().int().min(1))
+        .optional()
+        .describe("Credit thresholds to warn at, any order. [] clears them"),
     },
-    async ({ amount }) => {
-      const auth = await enforceAccess(adapter);
+    async ({ limit_credits, alert_credits }) => {
+      // The ceiling governs what the whole workspace may consume, so raising it is
+      // an owner action wherever the caller is a known person — the same reasoning
+      // as assign_seat_type. With only an org key in play there is no principal and
+      // this allows, so a headless agent is unaffected.
+      const auth = await enforceAdmin(adapter, "set_spend_controls");
       if ("isError" in auth) return auth;
       if (!stripeConfigured()) return NO_STRIPE;
-      const cid = await customerId(auth.orgId);
-      const url = await createCreditCheckoutSession(cid, auth.orgId, amount, config, {
-        ...(await topUpTax(auth.orgId, cid)),
-        successUrl: topUp.successUrl,
-        cancelUrl: topUp.cancelUrl,
-      });
-      const credits = Math.round(amount * 100);
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: JSON.stringify(
-              {
-                status: "checkout_created",
-                checkout_url: url,
-                amount,
-                credits,
-                message: `Open this URL to purchase ${credits} credits.`,
-              },
-              null,
-              2,
-            ),
-          },
-        ],
-      };
-    },
-  );
-
-  server.tool(
-    "set_auto_reload",
-    `Configure automatic credit reload. When your balance drops to or below the threshold
-after a tool call, your saved card is charged to bring the balance back to reload_to.
-Requires a saved card (use buy_credits first).`,
-    {
-      enabled: z.boolean().describe("Enable or disable auto-reload"),
-      threshold: z.number().min(0).describe("Balance threshold that triggers reload"),
-      reload_to: z.number().min(1).describe("Target balance after reload"),
-    },
-    async ({ enabled, threshold, reload_to }) => {
-      const auth = await enforceAccess(adapter);
-      if ("isError" in auth) return auth;
-      if (!stripeConfigured()) return NO_STRIPE;
-      if (reload_to <= threshold) {
-        return {
-          isError: true,
-          content: [{ type: "text" as const, text: "reload_to must be greater than threshold." }],
-        };
+      if (limit_credits === undefined && alert_credits === undefined) {
+        return err("Pass limit_credits and/or alert_credits — there is nothing to change.");
       }
+      // Built key-by-key because `setSpendControls` distinguishes an ABSENT field
+      // ("leave it") from a null one ("clear it") with `in`. Spreading both
+      // unconditionally would clear whichever the caller did not mention.
+      const input: { limitCredits?: number | null; alertCredits?: number[] } = {};
+      // 0 arrives as 0 and `setSpendControls` stores it as "" — the Stripe metadata
+      // clear — never as "0", which would read back as a ceiling of zero and refuse
+      // every call in the workspace.
+      if (limit_credits !== undefined) input.limitCredits = limit_credits;
+      if (alert_credits !== undefined) input.alertCredits = alert_credits;
+
       const cid = await customerId(auth.orgId);
-      await setAutoReloadSettings(cid, threshold, reload_to, enabled);
+      await setSpendControls(cid, input);
+      // Read back rather than echoing the request: 0 is stored as a cleared key and
+      // the thresholds come back sorted and de-junked, so what the caller asked for
+      // is not always what is now in force.
+      const controls = await getSpendControls(cid);
       return {
         content: [
           {
@@ -199,10 +337,13 @@ Requires a saved card (use buy_credits first).`,
             text: JSON.stringify(
               {
                 status: "ok",
-                auto_reload: { enabled, threshold, reload_to },
-                message: enabled
-                  ? `Auto-reload enabled: at <=${threshold} credits, recharge to ${reload_to}.`
-                  : "Auto-reload disabled.",
+                limit_credits: controls.limitCredits,
+                alert_credits: controls.alertCredits,
+                window: "calendar_month",
+                message:
+                  controls.limitCredits === null
+                    ? "No monthly spending ceiling."
+                    : `Ceiling: ${controls.limitCredits} credits per calendar month.`,
               },
               null,
               2,

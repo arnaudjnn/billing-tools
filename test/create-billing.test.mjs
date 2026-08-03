@@ -15,11 +15,15 @@ import { test } from "vitest";
 
 import { createBilling } from "../dist/create-billing.js";
 
+// `replenish.purchase` is what registers `buy_credits` — the tool surface is
+// derived from the catalogue (see toolCapabilities), so a plan with no way to be
+// topped up gets no top-up tool.
 const PLANS = {
   hobby: { sells: { kind: "nothing" }, cap: { kind: "pool", credits: 1000 }, sale: "free" },
   pro: {
     sells: { kind: "flat", price: { monthly: 1800, yearly: 18000 } },
     cap: { kind: "pool", credits: 5000 },
+    replenish: { purchase: {} },
     sale: "self_serve",
   },
 };

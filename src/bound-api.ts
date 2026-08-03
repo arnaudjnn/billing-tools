@@ -1,0 +1,259 @@
+// The library's org-scoped functions, with the wiring already applied.
+//
+// ── Why this exists ─────────────────────────────────────────────────────────
+//
+// 37 functions in this library take `(adapter, …)`, and several also want
+// `config`, `plans`, the ledger and a plan resolver. `createBilling` already holds
+// every one of those values — so every consumer was re-binding them by hand.
+// Measured on the first two: scartoffie hand-wrote 39 wrappers, 39 of its 54
+// exports, and they bound nothing else:
+//
+//     export function workspacePaymentMethods(orgId) { return listPaymentMethods(adapter, orgId) }
+//     export function listWorkspaceSeats(orgId)      { return listSeatAssignments(adapter, orgId) }
+//     export function workspaceInvoices(orgId, n)    { return listOrgInvoices(adapter, orgId, n) }
+//
+// ~40 files of mechanical binding before a line of product code, per app, and the
+// same 40 again for the next one.
+//
+// The subtler reason is correctness, not volume. A hand-written wrapper is a place
+// to put logic, and the logic that ends up there is exactly the logic that must not
+// be duplicated: which cycle key a grant is filed under, which plan the meter
+// thinks the org is on, which ledger a usage read goes to. A consumer that files a
+// top-up against a calendar month while the meter reads the subscription period
+// grants nothing, silently — that defect has happened, and it happened in a
+// wrapper. Binding once here removes the place it can happen.
+//
+// ── What is NOT here ────────────────────────────────────────────────────────
+//
+// Functions taking a Stripe customer id rather than an org (`getCreditBalance`,
+// `setAutoReloadSettings`, `quoteCreditPurchase`, …). They are not org-scoped, so
+// there is nothing to bind, and `api.customerId(orgId)` is the one line that gets
+// you from one to the other. Importing them from the root is already the short way.
+
+import { enforceAccess, enforceAdmin, enforceCredits, isInternalOrg } from "./auth.js";
+import {
+  ensureStripeCustomer,
+  getBillingCustomerId,
+  getOrgInvoice,
+  getOrgSubscription,
+  listOrgInvoices,
+  orgInvoicePdfUrl,
+} from "./billing.js";
+import { getBillingProfile, updateBillingProfile } from "./billing-profile.js";
+import { listCustomerTaxIds, setCustomerTaxId } from "./tax-ids.js";
+import {
+  createCardSetupCheckoutSession,
+  createCardSetupIntent,
+  detachPaymentMethod,
+  listPaymentMethods,
+  setDefaultPaymentMethod,
+} from "./payment-methods.js";
+import { assignSeatType, getSeatType, listSeatAssignments } from "./seats.js";
+import { cancelPlan, changePlan, previewPlanChange } from "./subscription.js";
+import {
+  approveTopUp,
+  denyTopUp,
+  extraAllowance,
+  grantExtraAllowance,
+  grantTopUp,
+  listTopUpRequests,
+  requestTopUp,
+} from "./topup.js";
+import { currentCycle, resolveAllowance } from "./allowance.js";
+import { memberUsage, usageSummary } from "./usage.js";
+import type { PlanCatalog } from "./plans.js";
+import type { UsageLedger } from "./usage-ledger.js";
+import type { BillingAdapter, ResolvedConfig } from "./types.js";
+
+/** What `createBilling` already resolved, and what everything below closes over. */
+export interface BoundApiDeps {
+  adapter: BillingAdapter;
+  config: ResolvedConfig;
+  plans?: PlanCatalog;
+  ledger?: UsageLedger;
+  /** How to find the org's current plan key. The meter's resolver, so a usage read
+   *  and the gate that refused a call agree about which plan is in force. */
+  resolvePlan?: (orgId: string) => Promise<string | null>;
+}
+
+type Caller = { kind: "user" | "api"; id?: string; seatType?: string };
+
+export function createBoundApi(deps: BoundApiDeps) {
+  const { adapter, config, ledger } = deps;
+  const plans = deps.plans ?? {};
+
+  // One definition of "which plan is this org on", used by every plan-aware call
+  // below. Falls back to the adapter's own subscription record, which is what
+  // `registerBillingTools` does — so the bound API and the tools cannot disagree.
+  const planOf = async (orgId: string): Promise<string | null> =>
+    deps.resolvePlan
+      ? await deps.resolvePlan(orgId)
+      : ((await adapter.getSubscription?.(orgId))?.plan ?? null);
+
+  return {
+    /** The org's Stripe customer, created on first use. */
+    customerId: (orgId: string, email?: string) =>
+      ensureStripeCustomer(adapter, orgId, email, config),
+    /** The org's Stripe customer if it already has one, else null — no creation. */
+    customerIdIfAny: (orgId: string) => getBillingCustomerId(adapter, orgId),
+    /** Unmetered internal org (a domain in `config.internalDomains`). */
+    isInternal: (orgId: string) => isInternalOrg(adapter, orgId, config.internalDomains),
+
+    /** Which plan the org is on, by the same resolver the meter uses. */
+    plan: planOf,
+
+    profile: {
+      get: (orgId: string) => getBillingProfile(adapter, orgId),
+      update: (orgId: string, patch: Parameters<typeof updateBillingProfile>[2]) =>
+        updateBillingProfile(adapter, orgId, patch),
+    },
+
+    taxIds: {
+      list: (orgId: string) => listCustomerTaxIds(adapter, orgId),
+      set: (orgId: string, input: Parameters<typeof setCustomerTaxId>[2]) =>
+        setCustomerTaxId(adapter, orgId, input),
+    },
+
+    cards: {
+      list: (orgId: string) => listPaymentMethods(adapter, orgId),
+      setDefault: (orgId: string, paymentMethodId: string) =>
+        setDefaultPaymentMethod(adapter, orgId, paymentMethodId),
+      remove: (orgId: string, paymentMethodId: string) =>
+        detachPaymentMethod(adapter, orgId, paymentMethodId),
+      setupIntent: (orgId: string, opts: Parameters<typeof createCardSetupIntent>[2]) =>
+        createCardSetupIntent(adapter, orgId, opts),
+      setupCheckout: (
+        orgId: string,
+        opts: Parameters<typeof createCardSetupCheckoutSession>[2],
+      ) => createCardSetupCheckoutSession(adapter, orgId, opts),
+    },
+
+    invoices: {
+      list: (orgId: string, limit?: number) => listOrgInvoices(adapter, orgId, limit),
+      get: (orgId: string, invoiceId: string) => getOrgInvoice(adapter, orgId, invoiceId),
+      pdfUrl: (orgId: string, invoiceId: string) => orgInvoicePdfUrl(adapter, orgId, invoiceId),
+    },
+
+    subscription: {
+      get: (orgId: string) => getOrgSubscription(adapter, orgId),
+      // `plans`, `config` and `currency` bound; the caller supplies only the move.
+      change: (
+        orgId: string,
+        to: Parameters<typeof changePlan>[2]["to"],
+        opts: Omit<Parameters<typeof changePlan>[2], "plans" | "to" | "config" | "currency"> = {},
+      ) => changePlan(adapter, orgId, { ...opts, plans, to, config, currency: config.currency }),
+      /** Quote a change. Pass the SAME `timing`/`proration` you will pass to
+       *  `change`, or you are quoting a policy the app does not apply. */
+      preview: (
+        orgId: string,
+        to: Parameters<typeof previewPlanChange>[2]["to"],
+        opts: Omit<Parameters<typeof previewPlanChange>[2], "plans" | "to" | "currency"> = {},
+      ) => previewPlanChange(adapter, orgId, { ...opts, plans, to, currency: config.currency }),
+      cancel: (
+        orgId: string,
+        opts: Omit<Parameters<typeof cancelPlan>[2], "plans" | "currency"> = {},
+      ) => cancelPlan(adapter, orgId, { ...opts, plans, currency: config.currency }),
+    },
+
+    seats: {
+      list: (orgId: string) => listSeatAssignments(adapter, orgId),
+      get: (orgId: string, memberId: string) => getSeatType(adapter, orgId, memberId),
+      assign: (orgId: string, memberId: string, seatType: string | null) =>
+        assignSeatType(adapter, orgId, memberId, seatType),
+    },
+
+    usage: {
+      /** Every window that applies, plus pool/pack/wallet. `plan` and `ledger` bound. */
+      summary: (
+        orgId: string,
+        opts: { caller?: Caller; locale?: Parameters<typeof usageSummary>[2]["locale"]; now?: number } = {},
+      ) =>
+        planOf(orgId).then((plan) =>
+          usageSummary(adapter, config, { ...opts, orgId, plans, plan, ledger }),
+        ),
+      /** Per-member breakdown for an admin view. N ledger reads — cache it. */
+      byMember: (
+        orgId: string,
+        members: Parameters<typeof memberUsage>[2]["members"],
+        opts: { now?: number } = {},
+      ) =>
+        planOf(orgId).then((plan) =>
+          memberUsage(adapter, config, { ...opts, orgId, plans, plan, members, ledger }),
+        ),
+      /** The raw allowance state the meter gates on. */
+      allowance: (
+        orgId: string,
+        opts: Omit<Parameters<typeof resolveAllowance>[2], "orgId" | "plans" | "plan" | "ledger"> = {},
+      ) =>
+        planOf(orgId).then((plan) =>
+          resolveAllowance(adapter, config, { ...opts, orgId, plans, plan, ledger }),
+        ),
+      /**
+       * The cycle key anything filed against a cycle must use.
+       *
+       * Exposed because getting it wrong is silent: a grant written under a
+       * calendar month that the meter reads as a subscription period grants
+       * nothing, and nothing errors.
+       */
+      cycle: (orgId: string, opts: { now?: number } = {}) =>
+        planOf(orgId).then((plan) => currentCycle(adapter, { ...opts, orgId, plans, plan })),
+    },
+
+    topUps: {
+      list: (orgId: string) => listTopUpRequests(adapter, orgId),
+      /**
+       * File a request. The cycle is resolved here rather than taken from the
+       * caller, which is the whole point — see `usage.cycle`.
+       */
+      request: async (
+        orgId: string,
+        req: { memberId: string; amount: number; id?: string; cycle?: string },
+      ) => {
+        const cycle = req.cycle ?? (await currentCycle(adapter, { orgId, plans, plan: await planOf(orgId) })).key;
+        const id = req.id ?? crypto.randomUUID();
+        await requestTopUp(adapter, orgId, {
+          id,
+          memberId: req.memberId,
+          amount: req.amount,
+          cycle,
+          createdAt: new Date().toISOString(),
+        });
+        return { id, cycle };
+      },
+      approve: (orgId: string, requestId: string) => approveTopUp(adapter, orgId, requestId),
+      deny: (orgId: string, requestId: string) => denyTopUp(adapter, orgId, requestId),
+      /** Grant outright, in credits, against a cycle you name. */
+      grant: (orgId: string, input: Parameters<typeof grantTopUp>[2]) =>
+        grantTopUp(adapter, orgId, input),
+      /** Grant as a percentage of that member's own seat pack (default 25%). */
+      grantExtra: (
+        orgId: string,
+        memberId: string,
+        opts: { percent?: number; grantedBy?: string; id?: string } = {},
+      ) =>
+        planOf(orgId).then((plan) =>
+          grantExtraAllowance(adapter, { ...opts, orgId, plans, plan, memberId }),
+        ),
+      /** Extra already granted to a member for a cycle. */
+      granted: (orgId: string, memberId: string, cycle: string) =>
+        extraAllowance(adapter, orgId, memberId, cycle),
+    },
+
+    /**
+     * The gates, for a surface that is not an MCP tool.
+     *
+     * A server action has a session rather than an API key, so it wraps the call in
+     * `runWithPrincipal` and these read the same AsyncLocalStorage the tools do —
+     * which is why they must come from the same module instance, and why binding
+     * them here rather than re-importing is the safe way round.
+     */
+    auth: {
+      access: () => enforceAccess(adapter),
+      admin: (action: string) => enforceAdmin(adapter, action),
+      credits: (orgId: string, toolName: string, cost: number) =>
+        enforceCredits(adapter, config, orgId, toolName, cost),
+    },
+  };
+}
+
+export type BillingApi = ReturnType<typeof createBoundApi>;

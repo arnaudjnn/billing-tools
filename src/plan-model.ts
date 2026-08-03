@@ -661,6 +661,67 @@ export function plansWhere(
 export const selfServePlans = (plans: PlanCatalog): string[] =>
   plansWhere(plans, (p) => p.sale === "self_serve" && p.sells.kind !== "nothing");
 
+// ── What the catalogue implies about the TOOL surface ───────────────────────
+
+/**
+ * Which groups of billing tools a catalogue can actually satisfy.
+ *
+ * Every precondition here is already declared on the plan, so registration can
+ * read it instead of taking a boolean per group. The failure this closes: an app
+ * whose plans sell no seats and accept no top-up REQUESTS still registered
+ * `list_seats`, `assign_seat_type` and the five top-up tools — seven tools that
+ * answered `seat_types: []`, refused with "(none configured)", or queued a grant
+ * against an allowance the plan does not have. An agent cannot tell a tool that
+ * will always fail from one it is holding wrong, so a dead tool is not merely
+ * wasted context; it is a false advertisement of what the product does.
+ *
+ * The union across plans is deliberate: a tool must exist for a caller on ANY
+ * plan to discover it, and the per-call decision still belongs to the engine
+ * (`enforceAccess`, then that org's own plan). This says what the catalogue can
+ * ever need, not what today's caller may do.
+ */
+export interface ToolCapabilities {
+  /** `buy_credits`, `preview_credit_purchase` — any plan sells top-ups. */
+  purchase: boolean;
+  /** `set_auto_reload` — any plan offers threshold-triggered reloading. */
+  autoReload: boolean;
+  /** The five top-up tools — any plan lets a member ask and an owner approve. */
+  request: boolean;
+  /** `list_seats`, `assign_seat_type` — any plan sells seats to assign. */
+  seats: boolean;
+  /** `change_plan` and friends — any plan can be bought without a salesperson. */
+  lifecycle: boolean;
+  /** `get_usage`, `get_usage_limits` — any plan includes or paces usage. */
+  usage: boolean;
+}
+
+/** Every group on. What a consumer that passes no catalogue keeps getting. */
+export const ALL_TOOL_CAPABILITIES: ToolCapabilities = {
+  purchase: true,
+  autoReload: true,
+  request: true,
+  seats: true,
+  lifecycle: true,
+  usage: true,
+};
+
+export function toolCapabilities(plans: PlanCatalog): ToolCapabilities {
+  const models = normalizePlans(plans);
+  const any = (predicate: (m: PlanModel) => boolean) => models.some(predicate);
+  return {
+    purchase: any((m) => Boolean(m.replenish.purchase)),
+    autoReload: any((m) => Boolean(m.replenish.autoReload)),
+    request: any((m) => Boolean(m.replenish.request)),
+    seats: any((m) => m.sells.kind === "seats"),
+    lifecycle: any((m) => m.sale === "self_serve"),
+    // A `wallet` cap includes nothing and so has no window to report — but a rate
+    // limit is a window too, and it is the one refusal a caller can wait out, so
+    // a plan that paces an uncapped wallet still needs the usage tools to say
+    // when. Enterprise (`cap: wallet` + a weekly limit) is exactly that shape.
+    usage: any((m) => m.cap.kind !== "wallet" || m.limits.rate.length > 0),
+  };
+}
+
 // ── Baskets ─────────────────────────────────────────────────────────────────
 
 export type Quantities = Record<string, number>;
@@ -1019,15 +1080,47 @@ export type LedgerCoverage = {
   callerIncluded: boolean;
 };
 
-/** Every window a ledger must be able to count for this plan to be enforceable.
- *  A `cap: wallet` plan needs neither: nothing is included, so every call moves
- *  money and the debits are their own record. */
+/**
+ * Every window a ledger must be able to count for this plan to be enforceable.
+ * A `cap: wallet` plan needs neither: nothing is included, so every call moves
+ * money and the debits are their own record.
+ *
+ * The `callerIncluded` half asks TWO questions, because it used to ask one and
+ * was wrong in both directions against the reads `resolveAllowance` actually
+ * issues (`allowance.ts`):
+ *
+ *   1. is the read CALLER-FILTERED? `scope: "caller"` is not the only way — an
+ *      org-scoped limit carrying `callerKind` is summed across the workspace but
+ *      still filtered to that kind, so it is issued as `{callerKind}` and routed
+ *      to the per-caller leg. Asking only about `scope` filed it under
+ *      `orgIncluded`, so it passed every check and then read 0 forever: a limit
+ *      that never applies, which looks like generosity rather than a fault.
+ *
+ *   2. can the usage behind it be INCLUDED? A caller-filtered read over usage the
+ *      wallet always funds is answered exactly, and with no lag, by the debits —
+ *      no store required. That is the case for every `cap: wallet` plan, and for
+ *      an `api` caller under `cap.covers: "users"`, which excludes machines from
+ *      the included window and funds them from the wallet on their first call.
+ *      Asking only about `scope` rejected those configs, demanding a store for a
+ *      question Stripe already answers.
+ */
 export function coverageNeededBy(model: PlanModel): LedgerCoverage {
+  const included = (kind: "user" | "api" | undefined): boolean => {
+    if (model.cap.kind === "wallet") return false;
+    // `covers: "users"` skips the window entirely for a machine caller, so its
+    // usage is wallet-funded from the first call. With no `callerKind` the limit
+    // reaches people too, and theirs is included.
+    if (kind === "api" && !capCovers(model, { kind: "api" })) return false;
+    return true;
+  };
   return {
     orgIncluded:
       model.cap.kind === "pool" || model.limits.rate.some((l) => (l.scope ?? "org") === "org"),
     callerIncluded:
-      model.cap.kind === "per_seat" || model.limits.rate.some((l) => l.scope === "caller"),
+      model.cap.kind === "per_seat" ||
+      model.limits.rate.some(
+        (l) => ((l.scope ?? "org") === "caller" || l.callerKind != null) && included(l.callerKind),
+      ),
   };
 }
 

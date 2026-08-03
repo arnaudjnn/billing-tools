@@ -103,7 +103,7 @@ So you do the one thing only you can do (**build great tools**) and monetize the
 ### 🌍 Framework and platform agnostic
 - ⚡ **Web-standard handlers:** everything returns `Request` to `Response`; mount in Next.js, Hono, Bun, Deno, or Cloudflare Workers.
 - 🧱 **No framework imports:** runtime deps are just `stripe` + `@workos-inc/node`.
-- 🗄️ **Bring your own DB:** no `pg` dependency; you pass a `query` executor (any Postgres-compatible driver).
+- 🗄️ **No database, at all:** usage — including per-member included allowances — is counted in Stripe. No `pg`, no Redis, no table to migrate.
 - 🔌 **Pluggable storage adapter:** WorkOS-only, or WorkOS + your DB mirror, behind one interface.
 - ☁️ **No lock-in:** runs on any Node host (Railway / Render / Fly / Vercel / self-host).
 

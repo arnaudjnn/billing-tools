@@ -18,15 +18,9 @@ import type { ClaimStore } from "./agent-auth/claim-store.js";
 import { createMachinePaymentHandler, createPaymentMd, type MachinePaymentOptions } from "./machine-payment/index.js";
 import { createOAuthProxy, type OAuthProxyOptions } from "./oauth-proxy/index.js";
 import { createMeter, createApiMeterGuard } from "./metering.js";
-import { counterUsageLedger, type UsageCounterStore } from "./usage-counters.js";
-import {
-  defaultUsageLedger,
-  postgresUsageLedger,
-  stripeUsageLedger,
-  type SqlClient,
-  type UsageLedger,
-} from "./usage-ledger.js";
+import { defaultUsageLedger, type UsageLedger } from "./usage-ledger.js";
 import type { PlanCatalog } from "./plans.js";
+import { createBoundApi } from "./bound-api.js";
 
 // One-call composition helper. Instead of wiring the five factories by hand in
 // a per-app "composition root", pass your adapter + config (and optionally
@@ -112,47 +106,16 @@ export interface CreateBillingOptions {
      * windows are all org-scoped — `cap: pool`, `cap: wallet`, `scope: "org"`
      * limits — needs no store at all.
      *
-     * Pass `db` (or one of your own) when a window is both INCLUDED and
-     * PER-MEMBER: a seat pack, or a `scope: "caller"` limit. Nothing in Stripe can
-     * count that pair, and without a store it reads 0 forever.
+     * When a window is both INCLUDED and PER-MEMBER — a seat pack, or a
+     * `scope: "caller"` limit — the default cannot see it, and it reads 0 forever.
+     * Pass `stripeUsageLedger({ perCaller: stripeScopeUsageLedger() })`, which
+     * counts that pair in Stripe too, with no store: each usage scope gets a Stripe
+     * Customer of its own, which is the only second grouping key Stripe offers.
+     * It is opt-in rather than default because creating those customers is a side
+     * effect a consumer should choose. `checkPlansConfig` names the plans that
+     * need it, and `createMeter` warns at boot.
      */
     ledger?: UsageLedger;
-    /**
-     * A Postgres-compatible client, used as the composite's PER-CALLER leg.
-     *
-     * Given one, per-member windows are counted in `usage_events` via
-     * `postgresUsageLedger` — exact, per-caller, and able to see INCLUDED usage,
-     * which is the pair no Stripe primitive offers. Org-wide windows still go to
-     * the Stripe meter, so they are answered without scanning those rows.
-     *
-     * Run `ensureUsageLedgerTable(db)` once from your migrations first.
-     *
-     * `ledger` wins if both are given, for a consumer with their own store, and
-     * `counters` below wins over this — it answers the same questions without the
-     * per-call row.
-     */
-    db?: SqlClient;
-    /**
-     * A COUNTER store for the per-caller leg — the scale-correct choice, and the
-     * one that does not need SQL.
-     *
-     * `db` above keeps one row per metered call and answers a window by aggregating
-     * a range of them on the hot path. Counters keep one row per (org, scope, hour),
-     * so a caller making a thousand calls in an hour writes ONE row and every read
-     * is a point lookup: the store stops growing with traffic, and the read stops
-     * scaling with it. At the volumes a plan actually declares — an Enterprise
-     * window of 200 000 credits a week — that is the difference between a bounded
-     * working set and a partitioning project.
-     *
-     * `sqlUsageCounters(pool)` uses the database you already have;
-     * `redisUsageCounters(client)` needs no SQL at all (`redis`, `ioredis`,
-     * `@upstash/redis` and Vercel KV all satisfy the duck type). Run
-     * `ensureUsageCountersTable(pool)` from your migrations for the SQL one.
-     *
-     * What it gives up: per-action history. A counter cannot say WHICH actions made
-     * up a total — pass `db` instead if you want that trail.
-     */
-    counters?: UsageCounterStore;
   };
 }
 
@@ -255,24 +218,20 @@ export function createBilling(opts: CreateBillingOptions) {
       })
     : undefined;
 
-  // The ledger, resolved once: an explicit one wins, then a database as the
-  // per-caller leg, then the composite on its own.
+  // The ledger, resolved once: an explicit one wins, otherwise the composite.
   //
   // The composite is the default because it counts every ORG-wide window in
   // Stripe — included usage too, one request per window at any volume — so a
-  // config whose windows are all org-scoped needs no database at all. That was
+  // config whose windows are all org-scoped needs nothing else. That was
   // previously impossible: the old default was the debits themselves, so an
   // included call counted as 0 and every window read 0%.
-  const ledger =
-    opts.meter?.ledger ??
-    (opts.meter?.counters
-      ? // Counters answer a per-member window with a point read instead of a range
-        // aggregate, so they are the scale-correct per-caller leg. Org-wide windows
-        // still go to the Stripe meter, which needs no store at any volume.
-        stripeUsageLedger({ perCaller: counterUsageLedger(opts.meter.counters) })
-      : opts.meter?.db
-        ? stripeUsageLedger({ perCaller: postgresUsageLedger(opts.meter.db) })
-        : defaultUsageLedger());
+  //
+  // A per-MEMBER included window (a seat pack, a `scope: "caller"` limit) is the
+  // one case the default cannot see, and the answer is `ledger` above with
+  // `stripeScopeUsageLedger()` as the per-caller leg — still no store. There is
+  // no longer a `db` or `counters` shortcut: they existed only for that case, and
+  // a database is no longer the way to solve it.
+  const ledger = opts.meter?.ledger ?? defaultUsageLedger();
 
   // What the wired ledger cannot count is warned about by `createMeter` below,
   // which every metered call goes through whichever constructor composed the app —
@@ -300,9 +259,23 @@ export function createBilling(opts: CreateBillingOptions) {
     ? createApiMeterGuard(opts.adapter, meter, { realm: opts.realm })
     : undefined;
 
+  // Every org-scoped library function, with adapter/config/plans/ledger/resolvePlan
+  // already applied. This is what removes the ~40 hand-written pass-throughs each
+  // consumer used to need before writing any product code — and, more importantly,
+  // removes the place where a wrapper could file a grant against the wrong cycle.
+  const api = createBoundApi({
+    adapter: opts.adapter,
+    config: resolved,
+    plans: opts.plans,
+    ledger,
+    resolvePlan: opts.resolvePlan ?? opts.meter?.resolvePlan,
+  });
+
   return {
     adapter: opts.adapter,
     config: resolved,
+    /** The bound, org-scoped API: `api.invoices.list(orgId)`, `api.usage.summary(orgId)`, … */
+    api,
     register,
     dispatcher,
     /** MCP transport: mount `export const { GET, POST } = mcp` in app/[transport]/route.ts. */

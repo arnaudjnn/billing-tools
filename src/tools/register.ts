@@ -7,6 +7,11 @@ import { registerManagementTools } from "./management.js";
 import { registerProfileTools } from "./profile.js";
 import { registerSubscriptionTools, type SubscriptionToolOptions } from "./subscription.js";
 import { ensurePlans, normalizePlans, poolSizeOf, type PlanCatalog } from "../plans.js";
+import {
+  ALL_TOOL_CAPABILITIES,
+  toolCapabilities,
+  type ToolCapabilities,
+} from "../plan-model.js";
 
 // Keys whose values must never hit the logs (magic-auth codes, API keys, etc.).
 const SENSITIVE_KEY_RE =
@@ -77,6 +82,17 @@ export interface RegisterBillingToolsOptions {
   /** Tax and return URLs for `buy_credits`. Supply `taxRates` on any account that
    *  charges tax on its subscriptions: without it a top-up invoices at 0%. */
   topUp?: TopUpToolOptions;
+  /**
+   * Per-group overrides for the surface derived from `plans`.
+   *
+   * The derivation is the default because the catalogue already declares every
+   * precondition (see `toolCapabilities`), and a tool no plan can satisfy is a
+   * false advertisement rather than merely wasted context. This is the escape
+   * hatch for the one case the catalogue cannot express: a group the app wants
+   * registered for a plan it has not shipped yet, or one it wants withheld
+   * because its own UI owns the flow. An explicit value always wins.
+   */
+  capabilities?: Partial<ToolCapabilities>;
 }
 
 // Register the billing-tools surface (auth/key management + credit billing) on
@@ -84,18 +100,35 @@ export interface RegisterBillingToolsOptions {
 export function registerBillingTools(server: McpServer, opts: RegisterBillingToolsOptions) {
   const config = resolveConfig(opts.config);
   if (opts.installLogging !== false) installInputLogging(server);
+  // No catalogue means no declaration to read, so every group registers — which is
+  // what every consumer got before this derivation existed, and what an app with
+  // no plans (pure pay-as-you-go) still wants. `undefined` is "the caller did not
+  // say", never "nothing applies"; the same distinction `checkPlansConfig` draws
+  // for its `usageLedger` option, and for the same reason: inventing a `false`
+  // here would silently delete tools from a working deployment.
+  const caps: ToolCapabilities = {
+    ...(opts.plans ? toolCapabilities(opts.plans) : ALL_TOOL_CAPABILITIES),
+    ...opts.capabilities,
+  };
   registerKeyTools(server, opts.adapter, config);
-  registerBillingOnlyTools(server, opts.adapter, config, opts.toolCosts ?? {}, opts.topUp ?? {});
-  registerManagementTools(server, opts.adapter, config, {
-    plans: opts.plans,
-    resolvePlan: opts.resolvePlan,
-  });
+  registerBillingOnlyTools(server, opts.adapter, config, opts.toolCosts ?? {}, opts.topUp ?? {}, caps);
+  registerManagementTools(
+    server,
+    opts.adapter,
+    config,
+    { plans: opts.plans, resolvePlan: opts.resolvePlan },
+    caps,
+  );
   if (opts.profileTools !== false) registerProfileTools(server, opts.adapter);
   if (opts.plans) {
+    // `list_plans` and `get_plan` are READS and always register: "what is on offer"
+    // and "what am I on" are answerable on any catalogue, including one that is
+    // entirely quote-only. Only the four tools that CHANGE a subscription need a
+    // plan a customer can actually move to without a salesperson.
     registerPlanTools(server, opts.plans, opts.defaultPlan, config.currency);
     if (opts.subscriptionTools !== false) {
       const sub = typeof opts.subscriptionTools === "object" ? opts.subscriptionTools : {};
-      registerSubscriptionTools(server, opts.adapter, config, { ...sub, plans: opts.plans });
+      registerSubscriptionTools(server, opts.adapter, config, { ...sub, plans: opts.plans }, caps);
     }
   }
 }
@@ -164,10 +197,20 @@ export const BILLING_TOOL_NAMES = [
   "buy_credits",
   "preview_credit_purchase",
   "set_auto_reload",
+  // The customer's own monthly ceiling. Ungated: it funds nothing and only refuses,
+  // so it needs no plan — and it was UI-only until this audit, which is the parity
+  // rule's own failure mode.
+  "get_spend_controls",
+  "set_spend_controls",
   "get_billing_portal",
   "list_invoices",
   "view_invoice",
   "download_invoice",
+  // The catalogue read (registerPlanTools). It was registered but NOT advertised
+  // here — exactly the drift the list exists to prevent, and invisible because the
+  // surface test only checked that everything advertised was registered. It now
+  // checks both directions.
+  "list_plans",
   // Workspace-management tools (registerManagementTools).
   "get_usage",
   "get_usage_limits",

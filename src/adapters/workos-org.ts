@@ -1,7 +1,6 @@
 import { DomainDataState, OrganizationDomainState, type WorkOS } from "@workos-inc/node";
 import type { BillingAdapter, BillingUser, ApiKeyInfo } from "../types.js";
 import { getWorkOS } from "../workos.js";
-import { lookupCompany } from "../util/clearout.js";
 
 // Built-in adapter: WorkOS is the source of truth. Workspace = WorkOS
 // Organization, API keys = WorkOS Organization API Keys, Stripe customer id =
@@ -37,6 +36,25 @@ export interface WorkOSOrgAdapterOptions {
    *  membership). Omit to use the default (company-domain org + verified
    *  domain + membership). */
   ensureOrg?: (user: BillingUser) => Promise<{ orgId: string }>;
+  /**
+   * Optional company enrichment for an auto-created org's name and logo, from the
+   * new user's email domain.
+   *
+   * **Off by default, and that default is the point.** This used to call
+   * api.clearout.io unconditionally, which meant every deployment using this
+   * adapter sent its customers' email domains to an unrelated third party — on the
+   * critical path of creating a workspace, with no env var to notice it by, no way
+   * to switch it off, and nothing in the docs saying it happened. A nicer org name
+   * is not worth doing that silently on someone else's behalf.
+   *
+   * Opt in with the shipped helper, which is the same call made explicit:
+   *
+   *     new WorkOSOrgAdapter({ enrichOrg: lookupCompany })
+   *
+   * Or pass your own, resolving from records you already hold. Without it the org
+   * is named after the domain — "acme.com" rather than "Acme".
+   */
+  enrichOrg?: (domain: string) => Promise<{ name?: string; logoUrl?: string } | null>;
 }
 
 // Two lookups this adapter repeats on nearly every call, both settled for the
@@ -68,6 +86,7 @@ export class WorkOSOrgAdapter implements BillingAdapter {
   private clientId?: string;
   private map?: WorkOSOrgMap;
   private ensureOrg?: (user: BillingUser) => Promise<{ orgId: string }>;
+  private enrichOrg?: (domain: string) => Promise<{ name?: string; logoUrl?: string } | null>;
   private widCache = new Map<string, string>();
   private customerCache = new Map<string, string>();
 
@@ -76,6 +95,7 @@ export class WorkOSOrgAdapter implements BillingAdapter {
     this.clientId = opts.clientId;
     this.map = opts.map;
     this.ensureOrg = opts.ensureOrg;
+    this.enrichOrg = opts.enrichOrg;
   }
 
   // The shared, lazily-memoized client (see workos.ts). With no explicit creds
@@ -157,7 +177,8 @@ export class WorkOSOrgAdapter implements BillingAdapter {
     if (memberships.data.length > 0) return { orgId: memberships.data[0].organizationId };
 
     const domain = user.email.split("@")[1];
-    const company = await lookupCompany(domain);
+    // No enricher configured means no outbound call: the domain is the name.
+    const company = this.enrichOrg ? await this.enrichOrg(domain) : null;
     const org = await this.workos.organizations.createOrganization({
       name: company?.name || domain,
       domainData: [{ domain, state: DomainDataState.Verified }],

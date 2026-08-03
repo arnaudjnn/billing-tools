@@ -11,6 +11,7 @@ import {
   PlanChangeError,
 } from "../subscription.js";
 import { normalizePlans, type PlanCatalog } from "../plans.js";
+import { ALL_TOOL_CAPABILITIES, type ToolCapabilities } from "../plan-model.js";
 import type { BillingAdapter, ResolvedConfig } from "../types.js";
 
 // The subscription lifecycle, as tools.
@@ -57,6 +58,7 @@ export function registerSubscriptionTools(
   adapter: BillingAdapter,
   config: ResolvedConfig,
   opts: SubscriptionToolOptions,
+  caps: ToolCapabilities = ALL_TOOL_CAPABILITIES,
 ) {
   const seatsSchema = z
     .record(z.string(), z.number().int().min(0))
@@ -65,132 +67,138 @@ export function registerSubscriptionTools(
 
   const rates = async (orgId: string) => (opts.taxRates ? await opts.taxRates(orgId) : undefined);
 
-  server.tool(
-    "preview_plan_change",
-    `What moving to a plan would cost, WITHOUT making the change.
+  // The three tools that CHANGE a subscription need a plan a customer can move to
+  // without a salesperson. On a catalogue that is entirely free + quote-only there
+  // is no such move, and `change_plan` could only ever refuse — while `get_plan`
+  // below stays a useful read on any catalogue.
+  if (caps.lifecycle) {
+    server.tool(
+      "preview_plan_change",
+      `What moving to a plan would cost, WITHOUT making the change.
 
 Returns four numbers, and they mean different things: \`due_now\` is charged today
 (zero unless proration is invoice_now), \`next_invoice_total\` is what the NEXT
 invoice comes to including any deferred difference, \`recurring_total\` is the
 steady-state price after that, and \`credit_applied\` is the unused part of the
-current plan credited back. On a mid-cycle upgrade the next invoice is LARGER
+  current plan credited back. On a mid-cycle upgrade the next invoice is LARGER
 than the plan price — quote it together with \`next_invoice_at\` so the customer
-is told rather than surprised.
+  is told rather than surprised.
 
 Quote this before change_plan, with the same \`proration\`: both come from the
 same arithmetic, so the number shown is the number charged.`,
-    {
-      plan: z.string().describe("Target plan key, from list_plans"),
-      interval: z.enum(["monthly", "yearly"]).optional(),
-      seats: seatsSchema,
-      timing: z
-        .enum(["auto", "now", "period_end"])
-        .optional()
-        .describe("Default `auto`: upgrades apply now, downgrades at the period end"),
-      proration: z
-        .enum(["next_invoice", "invoice_now", "none"])
-        .optional()
-        .describe("Must match what you pass to change_plan — it decides whether the difference is billed today"),
-    },
-    async ({ plan, interval, seats, timing, proration }) => {
-      const auth = await enforceAdmin(adapter, "preview_plan_change");
-      if ("isError" in auth) return auth;
-      if (!stripeConfigured()) return err("Billing is not configured (STRIPE_SECRET_KEY unset).");
-      try {
-        const p = await previewPlanChange(adapter, auth.orgId, {
-          plans: opts.plans,
-          to: { plan, interval, seats },
-          currency: config.currency,
-          timing,
-          proration,
-          taxRates: await rates(auth.orgId),
-        });
-        return json({
-          outcome: p.kind,
-          currency: p.currency,
-          due_now: p.dueNow,
-          next_invoice_total: p.nextInvoiceTotal,
-          recurring_total: p.recurringTotal,
-          credit_applied: p.credit,
-          effective_at: p.effectiveAt,
-          next_invoice_at: p.nextInvoiceAt,
-          lines: p.lines,
-        });
-      } catch (e) {
-        return toolError(e);
-      }
-    },
-  );
+      {
+        plan: z.string().describe("Target plan key, from list_plans"),
+        interval: z.enum(["monthly", "yearly"]).optional(),
+        seats: seatsSchema,
+        timing: z
+          .enum(["auto", "now", "period_end"])
+          .optional()
+          .describe("Default `auto`: upgrades apply now, downgrades at the period end"),
+        proration: z
+          .enum(["next_invoice", "invoice_now", "none"])
+          .optional()
+          .describe("Must match what you pass to change_plan — it decides whether the difference is billed today"),
+      },
+      async ({ plan, interval, seats, timing, proration }) => {
+        const auth = await enforceAdmin(adapter, "preview_plan_change");
+        if ("isError" in auth) return auth;
+        if (!stripeConfigured()) return err("Billing is not configured (STRIPE_SECRET_KEY unset).");
+        try {
+          const p = await previewPlanChange(adapter, auth.orgId, {
+            plans: opts.plans,
+            to: { plan, interval, seats },
+            currency: config.currency,
+            timing,
+            proration,
+            taxRates: await rates(auth.orgId),
+          });
+          return json({
+            outcome: p.kind,
+            currency: p.currency,
+            due_now: p.dueNow,
+            next_invoice_total: p.nextInvoiceTotal,
+            recurring_total: p.recurringTotal,
+            credit_applied: p.credit,
+            effective_at: p.effectiveAt,
+            next_invoice_at: p.nextInvoiceAt,
+            lines: p.lines,
+          });
+        } catch (e) {
+          return toolError(e);
+        }
+      },
+    );
 
-  server.tool(
-    "change_plan",
-    `Move this workspace to another plan — up, down, or off. One entry point for all
-three: an upgrade applies immediately and is prorated, a downgrade is scheduled for
-the end of the paid period (no refund, nothing lost early), and moving to the free
-plan cancels at the period end. Moving back to the current plan while a cancellation
+    server.tool(
+      "change_plan",
+      `Move this workspace to another plan — up, down, or off. One entry point for all
+  three: an upgrade applies immediately and is prorated, a downgrade is scheduled for
+  the end of the paid period (no refund, nothing lost early), and moving to the free
+  plan cancels at the period end. Moving back to the current plan while a cancellation
 is pending resumes it. Preview the cost first with preview_plan_change.`,
-    {
-      plan: z.string().describe("Target plan key, from list_plans"),
-      interval: z.enum(["monthly", "yearly"]).optional(),
-      seats: seatsSchema,
-      timing: z
-        .enum(["auto", "now", "period_end"])
-        .optional()
-        .describe("Default `auto`: upgrades now, downgrades at the period end"),
-      proration: z
-        .enum(["next_invoice", "invoice_now", "none"])
-        .optional()
-        .describe("Default `next_invoice`: the prorated difference lands on the next invoice"),
-    },
-    async ({ plan, interval, seats, timing, proration }) => {
-      const auth = await enforceAdmin(adapter, "change_plan");
-      if ("isError" in auth) return auth;
-      if (!stripeConfigured()) return err("Billing is not configured (STRIPE_SECRET_KEY unset).");
-      try {
-        const r = await changePlan(adapter, auth.orgId, {
-          plans: opts.plans,
-          to: { plan, interval, seats },
-          config,
-          currency: config.currency,
-          timing,
-          proration,
-          returnUrl: opts.returnUrl,
-          taxRates: await rates(auth.orgId),
-        });
-        return json({
-          outcome: r.kind,
-          plan: r.plan,
-          status: r.status,
-          effective_at: r.effectiveAt,
-          subscription_id: r.subscriptionId,
-          // Only on the first-purchase path: there is nothing to change yet, so
-          // the caller has to send someone through Checkout.
-          ...(r.kind === "checkout" ? { checkout_client_secret: r.clientSecret, checkout_session_id: r.sessionId } : {}),
-        });
-      } catch (e) {
-        return toolError(e);
-      }
-    },
-  );
+      {
+        plan: z.string().describe("Target plan key, from list_plans"),
+        interval: z.enum(["monthly", "yearly"]).optional(),
+        seats: seatsSchema,
+        timing: z
+          .enum(["auto", "now", "period_end"])
+          .optional()
+          .describe("Default `auto`: upgrades now, downgrades at the period end"),
+        proration: z
+          .enum(["next_invoice", "invoice_now", "none"])
+          .optional()
+          .describe("Default `next_invoice`: the prorated difference lands on the next invoice"),
+      },
+      async ({ plan, interval, seats, timing, proration }) => {
+        const auth = await enforceAdmin(adapter, "change_plan");
+        if ("isError" in auth) return auth;
+        if (!stripeConfigured()) return err("Billing is not configured (STRIPE_SECRET_KEY unset).");
+        try {
+          const r = await changePlan(adapter, auth.orgId, {
+            plans: opts.plans,
+            to: { plan, interval, seats },
+            config,
+            currency: config.currency,
+            timing,
+            proration,
+            returnUrl: opts.returnUrl,
+            taxRates: await rates(auth.orgId),
+          });
+          return json({
+            outcome: r.kind,
+            plan: r.plan,
+            status: r.status,
+            effective_at: r.effectiveAt,
+            subscription_id: r.subscriptionId,
+            // Only on the first-purchase path: there is nothing to change yet, so
+            // the caller has to send someone through Checkout.
+            ...(r.kind === "checkout" ? { checkout_client_secret: r.clientSecret, checkout_session_id: r.sessionId } : {}),
+          });
+        } catch (e) {
+          return toolError(e);
+        }
+      },
+    );
 
-  server.tool(
-    "cancel_plan",
-    `Cancel the subscription at the end of the period already paid for. Nothing is
-refunded and nothing is lost today — the workspace drops to the free plan when the
+    server.tool(
+      "cancel_plan",
+      `Cancel the subscription at the end of the period already paid for. Nothing is
+  refunded and nothing is lost today — the workspace drops to the free plan when the
 period ends. Reverse it before then with change_plan back to the current plan.`,
-    {},
-    async () => {
-      const auth = await enforceAdmin(adapter, "cancel_plan");
-      if ("isError" in auth) return auth;
-      if (!stripeConfigured()) return err("Billing is not configured (STRIPE_SECRET_KEY unset).");
-      try {
-        const r = await cancelPlan(adapter, auth.orgId, { plans: opts.plans, currency: config.currency });
-        return json({ outcome: r.kind, plan: r.plan, status: r.status, effective_at: r.effectiveAt });
-      } catch (e) {
-        return toolError(e);
-      }
-    },
-  );
+      {},
+      async () => {
+        const auth = await enforceAdmin(adapter, "cancel_plan");
+        if ("isError" in auth) return auth;
+        if (!stripeConfigured()) return err("Billing is not configured (STRIPE_SECRET_KEY unset).");
+        try {
+          const r = await cancelPlan(adapter, auth.orgId, { plans: opts.plans, currency: config.currency });
+          return json({ outcome: r.kind, plan: r.plan, status: r.status, effective_at: r.effectiveAt });
+        } catch (e) {
+          return toolError(e);
+        }
+      },
+    );
+  }
 
   server.tool(
     "get_plan",

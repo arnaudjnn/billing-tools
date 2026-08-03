@@ -16,7 +16,7 @@ src/
 ├── routes/         Next route factories: rest (GET/POST), mcp (mcp-handler), webhook (Stripe)
 ├── cli/            registerBillingCommands(program, {configDir, envPrefix, defaultUrl})
 ├── adapters/workos-org.ts   WorkOSOrgAdapter — built-in store (WorkOS orgs + org API keys + org metadata)
-└── util/clearout.ts         lookupCompany(domain) enrichment
+└── util/clearout.ts         lookupCompany(domain) enrichment — OPT-IN, see below
 ```
 
 ## The adapter (the whole storage seam)
@@ -40,6 +40,8 @@ export interface BillingAdapter {
 **The rule: WorkOS is the source of truth.** `orgId` is always the app's own org handle; the adapter maps it to WorkOS internally. Two patterns, both keeping WorkOS canonical:
 
 - **Pattern A — WorkOS-only** (shipped `WorkOSOrgAdapter`): `orgId` *is* the WorkOS org id. Orgs, org API keys (`sk_`), and `stripeCustomerId` live in WorkOS; no other storage. Import from `@arnaudjnn/billing-tools/adapters/workos-org`. Used by **gtm-tools**.
+
+  **Company enrichment is opt-in, and used to not be.** `ensureOrgForUser` names an auto-created org after the new user's email domain. It used to call `api.clearout.io` first, unconditionally — so every deployment using this adapter forwarded its customers' email domains to an unrelated third party, on the path that creates a workspace, with no env var to notice it by, no way to switch it off, and nothing here saying it happened. A nicer org name is not worth doing that silently on someone else's behalf. Pass `enrichOrg` to opt in — `new WorkOSOrgAdapter({ enrichOrg: lookupCompany })` is the same call made explicit, or supply your own resolver. Without it an org is named `acme.com` rather than `Acme`. `lookupCompany` also now carries a 3s `AbortSignal.timeout`: it is on the signup path, and "never throws" did not cover "never returns".
 - **Pattern B — WorkOS + DB mirror**: the app has its own row (e.g. a `ws_…` workspace) 1:1 with a WorkOS org via a `workos_org_id` column **and** `org.externalId = <local id>` (self-healing reverse map). `orgId` stays the local id; the adapter resolves `local id ↔ org` on every call. Memberships + invitations are WorkOS-native (org memberships + invitations, RBAC role slugs — no DB mirror tables), API keys are WorkOS org keys, and billing is the native `org.stripeCustomerId` + subscription state in org metadata. The DB keeps only what WorkOS can't hold (avatars, secondary emails, local prefs). Used by **scartoffie**. The app supplies only WHERE the pointer lives — `createWorkOSOrgMirror({ readPointer, writePointer, reversePointer?, nameFor? })` returns the adapter's `map` plus `ensureOrg` / `renameOrg` / `deleteOrg` / `ensureMembership` / `membershipId`, so the reconcile-on-read, the idempotent `externalId` create and the reverse map are written once here rather than in every mirror app (the package stays free of a `pg` dependency because the two pointer functions are the whole seam).
 
 **`@workos-inc/node` v10.** The shipped `WorkOSOrgAdapter` targets **v10** (the package depends on `^10.7.0`). Org API-key methods live on `apiKeys.*`: `createOrganizationApiKey` / `createValidation` (owner org on `.apiKey.owner.id`) / `listOrganizationApiKeys` (an `AutoPaginatable`) / `deleteApiKey` (hard delete). Org `externalId` + native `stripeCustomerId` are v10 fields. (Historical note: v8 kept these on `organizations.*` — irrelevant now, both consumers run v10.)
@@ -64,13 +66,70 @@ Deliberate exceptions (already SDK-first everywhere else — don't "fix" these):
 
 ## The tool surface, and the parity rule
 
-**31 tools.** Keys (3) · wallet (4) · invoices (4) · usage (2) · seats (2) · top-ups (5) · plans (1) · billing account (6) · lifecycle (4).
-
-**The rule: anything the app's own UI can do, an API / CLI / MCP caller can do too.** REST and MCP get this structurally — `createDispatcher` monkey-patches `server.tool`, so every registered tool is an endpoint with no extra wiring — and `test/surface.test.mjs` asserts the tools exist and that `BILLING_TOOL_NAMES` matches what registration actually produces. The CLI is hand-written and covers 30/31 (`buy --quote` is `preview_credit_purchase`); `get_api_key` is the exception, because the `auth` command already performs that flow.
+**The rule: anything the app's own UI can do, an API / CLI / MCP caller can do too.** REST and MCP get this structurally — `createDispatcher` monkey-patches `server.tool`, so every registered tool is an endpoint with no extra wiring — and `test/surface.test.mjs` asserts the tools exist and that `BILLING_TOOL_NAMES` matches what registration actually produces. The CLI is hand-written, and it is the one surface that can silently fall behind — so `test/conventions.test.mjs` asserts it reaches **every** tool. Coverage is per tool, not per command: `get_api_key` has no command of its own because `auth` performs that flow, `preview_credit_purchase` is `buy --quote`, and `set_spend_controls` is `spend limit` / `spend alerts`.
 
 This was NOT true before the audit: plan changes, payment methods, the billing profile and the tax id existed as library functions and as app UI and as nothing else. When adding a capability, register the tool in the same change — a function reachable only from a React component is the failure mode this rule exists to prevent.
 
-`registerBillingTools` gates two groups: `profileTools` (default on) and `subscriptionTools` (default on when `plans` is set), so an app that keeps plan changes in its own UI can pass `false`.
+### The 33 tools
+
+`BILLING_TOOL_NAMES` (`tools/register.ts`) is the canonical list — what the library **can** register. The **needs** column is what makes each one register, and it is not documentation: `toolCapabilities(plans)` computes it and `registerBillingTools` reads it, so the table and the code cannot disagree.
+
+(The list held 30 of the 33 until this audit. `list_plans` was registered and not advertised, because `test/surface.test.mjs` only checked that everything advertised was registered — the "or hides one that is" half of its own comment. It now asserts both directions and the count.)
+
+| tool | group | what it does | needs |
+|---|---|---|---|
+| `get_api_key` | keys | Provisions or retrieves the workspace's API key | — |
+| `list_api_keys` | keys | Lists the keys, obfuscated — never the full value | — |
+| `revoke_api_key` | keys | Hard-deletes one key by id | — |
+| `get_credit_balance` | wallet | Balance + per-tool costs + auto-reload state | — |
+| `preview_credit_purchase` | wallet | Credits / tax / total before buying, from the rates the charge will carry | `replenish.purchase` |
+| `buy_credits` | wallet | Checkout Session for a top-up; saves the card | `replenish.purchase` |
+| `set_auto_reload` | wallet | Threshold + target for the automatic card charge | `replenish.autoReload` |
+| `get_spend_controls` | wallet | The customer's own monthly ceiling + alert thresholds | Stripe customer |
+| `set_spend_controls` | wallet | Sets either; `0` clears the ceiling (admin) | Stripe customer |
+| `list_invoices` | invoices | Recent invoices: amount, date, status, PDF links | Stripe customer |
+| `view_invoice` | invoices | One invoice + a hosted browser link | Stripe customer |
+| `download_invoice` | invoices | Direct PDF link (drafts and receipts have none) | Stripe customer |
+| `get_billing_portal` | invoices | Short-lived Stripe Billing Portal URL — the no-code self-serve surface | Stripe customer |
+| `get_usage` | usage | Credits spent this cycle, filterable by caller or a day window | — |
+| `get_usage_limits` | usage | Every window that applies now: used, remaining, `resets_at` | a `cap` or a `limits.rate` |
+| `list_seats` | seats | Per-member seat-type assignments + the types on offer | `sells: seats` **+** org metadata |
+| `assign_seat_type` | seats | Puts a member on a seat type (admin) | `sells: seats` **+** org metadata |
+| `list_top_up_requests` | top-ups | The queue, pending and settled | `replenish.request` **+** org metadata |
+| `request_top_up` | top-ups | A member asks for extra allowance this cycle | `replenish.request` **+** org metadata |
+| `approve_top_up` | top-ups | Owner grants a pending ask (admin) | `replenish.request` **+** org metadata |
+| `grant_top_up` | top-ups | Owner grants unasked, as a % of that seat's pack (admin) | `replenish.request` **+** org metadata |
+| `deny_top_up` | top-ups | Owner refuses a pending ask (admin) | `replenish.request` **+** org metadata |
+| `list_plans` | plans | The catalogue + live Stripe prices, provisioning them on first call | `plans` |
+| `get_plan` | lifecycle | What this workspace is on, what is scheduled, which moves exist | `plans` |
+| `preview_plan_change` | lifecycle | `due_now` / `next_invoice_total` / `recurring_total` / `credit_applied` | `plans` **+** a `self_serve` plan |
+| `change_plan` | lifecycle | Up, down or off — one entry point | `plans` **+** a `self_serve` plan |
+| `cancel_plan` | lifecycle | Cancel at the end of the period already paid for | `plans` **+** a `self_serve` plan |
+| `get_billing_profile` | account | Invoice recipient, company name, billing address | Stripe customer |
+| `set_billing_profile` | account | Patches those fields | Stripe customer |
+| `set_tax_id` | account | The VAT number printed on invoices | Stripe customer |
+| `list_payment_methods` | account | Saved cards + which is default | Stripe customer |
+| `set_default_payment_method` | account | Chooses what future charges bill to | Stripe customer |
+| `remove_payment_method` | account | Detaches a card (refuses the default while another exists) | Stripe customer |
+
+### The surface is DERIVED, because a dead tool is a false statement
+
+`registerBillingTools` resolves `toolCapabilities(opts.plans)` and registers a group only where some plan declares it. The same catalogue that already drives Stripe prices, the meter and every pricing surface now decides the tool surface too.
+
+**Why, concretely.** gtm-tools sells two flat plans with an org-wide pool, no seat types and no `replenish.request` — and registered all 33 tools anyway. `list_seats` answered `seat_types: []`; `assign_seat_type` refused everything with `"(none configured)"`; `request_top_up` queued an ask against an allowance the plan does not grant, for an owner to rubber-stamp. **An agent cannot distinguish a tool that always fails from one it is holding wrong**, so those seven were not merely wasted context — they described a product that does not exist. Its surface is now 26; scartoffie, which declares seats and requests, keeps all 33.
+
+| | gtm-tools | scartoffie |
+|---|---|---|
+| catalogue | `sells: flat`, `cap: pool`, `purchase` + `autoReload` | `nothing`/`seats`/`seats`, `pool` + `per_seat` + `wallet`, `purchase` + `autoReload` + `request` |
+| seats (2) | – | ✓ |
+| top-ups (5) | – | ✓ |
+| everything else (26) | ✓ | ✓ |
+
+Reads are never gated on a write's precondition: `list_plans` and `get_plan` register on any catalogue including a wholly quote-only one, `get_usage` on any at all, and `get_usage_limits` wherever a plan has a window — a rate limit counts, because it is the one refusal a caller can wait out. `caps` is also independent of the adapter's `getOrgMetadata`/`setOrgMetadata` check; the catalogue says whether a group can ever be *needed*, the adapter whether the answer can be *stored*, and neither implies the other.
+
+**No catalogue means no declaration to read, so everything registers.** `undefined` is "the caller did not say", never "nothing applies" — the same distinction `checkPlansConfig` draws for its `usageLedger` option, and for the same reason: inventing a `false` would silently delete tools from a working deployment. `capabilities: { request: true }` is the per-group override for a plan not shipped yet, and `profileTools` / `subscriptionTools` still turn their groups off for an app whose own UI owns the flow.
+
+**Rejected: merging the redundant pairs.** `preview_credit_purchase`→`buy_credits{quote}`, `preview_plan_change`→`change_plan{dry_run}`, `view_invoice`+`download_invoice`→`get_invoice{pdf}`, `approve_top_up`+`deny_top_up`→`resolve_top_up{decision}` would take the canonical 33 to 26. Not done: it breaks both apps and the CLI for a saving that gating already beats per deployment, and a preview that shares its code path with the charge (`previewPlanChange` shares `desiredPrices`/`diffItems` with `changePlan`) is safer as a separate tool than as a boolean an agent can forget to set — a forgotten `dry_run: true` moves money.
 
 ## Changing plan mid-cycle — what the customer is charged
 
@@ -125,61 +184,65 @@ Enumerating a per-member record needs `adapter.listMemberIds` (`WorkOSOrgAdapter
 
 Anything that files something against a billing cycle must key it with `currentCycle(adapter, {orgId, plans, plan})`, the same window the meter reads. This is not stylistic: `request_top_up` used to write a calendar month while the meter read the subscription period, so for **every org with a subscription** an approved top-up granted nothing, with no error anywhere. There is now exactly ONE key — `extraAllowance` reads the cycle it is given and nothing else, so a grant is visible under the window the meter is in or it is not visible at all. Do not reintroduce a second key to read as a fallback: the reason the defect was invisible is that a miss looked like "no grant" rather than an error.
 
-## Counting usage — the composite counts it in Stripe (`src/usage-ledger.ts`)
+## Counting usage — all of it in Stripe, no store anywhere (`src/usage-ledger.ts`, `src/usage-scopes.ts`)
 
-Usage counting is separate from moving money, behind one seam: `UsageLedger` (`record` + `total`). Four implementations ship, and **which one is wrong depends on the QUERY, not on the config** — which is why the default is a composite that routes:
+Usage counting is separate from moving money, behind one seam: `UsageLedger` (`record` + `total`). **Nothing here needs a database.** Four implementations ship, and **which one is wrong depends on the QUERY, not on the config** — which is why the default is a composite that routes:
 
-| | sees INCLUDED usage | per-member | needs a DB |
+| | sees INCLUDED usage | per-member | needs a store |
 |---|---|---|---|
-| **`stripeUsageLedger()`** (default) | yes | org-wide + wallet-funded | **no** |
+| **`stripeUsageLedger()`** (default) | yes | org-wide + wallet-funded | no |
 | `stripeBalanceUsageLedger()` | **no** | yes | no |
 | `stripeMeterUsageLedger()` | yes | **no** | no |
-| `postgresUsageLedger(db)` | yes | yes | yes |
+| `stripeScopeUsageLedger()` | yes | yes | no |
 
 `stripeUsageLedger` dispatches on whether the query carries a caller filter:
 
-- **an ORG-wide window** (`cap: pool`, `scope: "org"` limits, the spend limit) → the **Stripe meter**. It sees every call, included ones too, and a summary is ONE request for any window width. This is the leg that removes a database: a 200 000-credit weekly window costs the same read as a 400-credit one.
+- **an ORG-wide window** (`cap: pool`, `scope: "org"` limits, the spend limit) → the **Stripe meter**. It sees every call, included ones too, and a summary is ONE request for any window width: a 200 000-credit weekly window costs the same read as a 400-credit one.
 - **a PER-CALLER window** (a seat pack, `scope: "caller"` limits) → **balance transactions**, which carry the caller on their metadata. Exact and per-member, but they only exist where money moved.
 
-Every metered call is one `record`; every window is one `total`. The rule at the call site is **`record` always, `deductCredits` only when the wallet funded it** — an included call must be counted (or its cap can't be enforced) but must not be charged. The composite's `record` writes the meter event *and* forwards to the per-caller leg (a no-op for balance transactions, the write for a store); it never moves money, because `deductCredits` owns that.
+Every metered call is one `record`; every window is one `total`. The rule at the call site is **`record` always, `deductCredits` only when the wallet funded it** — an included call must be counted (or its cap can't be enforced) but must not be charged. The composite's `record` writes the meter event *and* forwards to the per-caller leg; it never moves money, because `deductCredits` owns that.
 
-**So a store is needed for exactly one thing: a window that is both INCLUDED and PER-MEMBER.** Nothing in Stripe can count that pair — a balance transaction carries the caller but only exists where money moved, and a meter summary sees every call but cannot be filtered by one.
+### The pair that used to need a database, and no longer does
 
-**A ledger declares what it can count, and ONE rule reads that declaration.** `UsageLedger.covers` is a `LedgerCoverage` (`orgIncluded` / `callerIncluded`); `coverageNeededBy(model)` says what a plan requires and `ledgerGaps(models, covers)` returns the plans that don't fit, split by axis because the two have different fixes (an org-wide gap is closed by the meter, with no store; a per-caller one needs a store). `createMeter` warns at boot through `warnLedgerGaps`, and `checkPlansConfig(plans, { usageLedger })` makes the same finding an **error** — a warning in a deploy log is missable and a month of unenforced caps is not recoverable. Pass the ledger's own `covers` there; the old `boolean` still means "a per-member store is wired". (Omit it and the check is skipped — undefined means "the caller did not say", not "nothing is wired". A ledger that declares no `covers`, i.e. a consumer's own, is silent for the same reason: an invented `false` would fail a config that is perfectly wired.)
+A window that is both **INCLUDED and PER-MEMBER** (`cap: per_seat`, a `scope: "caller"` limit) is the one question neither Stripe leg above can answer. This library used to ship three stores for it — `postgresUsageLedger`, `counterUsageLedger` with `sqlUsageCounters` / `redisUsageCounters`, and the `meter.db` / `meter.counters` shortcuts. **They are gone.** `stripeUsageLedger({ perCaller: stripeScopeUsageLedger() })` answers it out of Stripe.
+
+**The insight is that a Customer is just a key.** Measured against the API: `listEventSummaries` *requires* `customer` and offers only `value_grouping_window` (hour/day) — no dimension group-by; `/v1/billing/analytics/meter_usage` is not available; there is no read API for raw meter events; a zero-amount balance transaction is rejected outright (*"The transaction's `amount` must be non-zero"*); WorkOS has no atomic increment anywhere. So Stripe exposes exactly **one** grouping key for usage, and the only ways to a second dimension are more customers or more meters. `stripeScopeUsageLedger` gives each scope (`k:<kind>`, `u:<memberId>`) a Stripe Customer of its own.
+
+**The funding split is what keeps the lag off the limits that care.** Meter summaries lag aggregation by **~40–60 s** (measured three times: 40 s, 48 s, 58 s). Harmless against a monthly seat pack; unacceptable against a `600/hour` limit on an API key, which a script would blow through unseen. So the leg splits on `UsageEvent.funded`, which every record already carries:
+
+| usage | counted by | lag |
+|---|---|---|
+| **wallet-funded**, per caller | balance transactions (`deductCredits` already writes `caller_id`) | **none** |
+| **included** (pool/pack), per caller | the scope meter | ~60 s |
+
+The two sets are disjoint by construction — an event has exactly one funding source — so `total` is a plain sum with no double count, and it reproduces what the deleted SQL counters did, which also counted every event whatever funded it.
+
+**The scope customer is DERIVED, never allocated.** `scopeOf` / `scopesFor` produce the same string on the write and the read path; a read that computed a different one would look up a customer nobody writes to and report 0 for that member for ever. Resolution is `customers.search` on the scope, then `customers.create` under an idempotency key derived from it. The two cover each other exactly: the search index is eventually consistent (measured — a fresh customer was still missing after 20 s), and the idempotency key dedupes concurrent and repeated creates for 24 h (measured — both returned the same id). There is no window where both miss, so two instances cannot split one member's usage across two customers. *(Rejected alternative: one meter per seat SLOT with the org staying the customer — fewer objects, 110 meters created with no ceiling, but it needs an allocation registry and a recycled slot silently inherits the previous member's usage.)*
+
+**It is not the default**, because creating Customer objects is a side effect a consumer should choose rather than discover. `warnLedgerGaps` at boot and `checkPlansConfig` both name the plans that need it. The cost is real and worth stating: one Stripe Customer per active member per org, marked `bt_kind: "usage_counter"` — the doctor's customer-currency check skips them.
+
+**The write is FASTER than the org write it sits beside.** Every scope goes in one `v2.billing.meterEventStream` request: measured **129 ms** warm against **204 ms** for the single v1 meter event this library already sends, and the two legs run in `Promise.all`, so per-call wall-clock is unchanged. Reads are one summary — **~210 ms flat at any window width**.
+
+`scripts/e2e-scope-ledger.mjs` proves it end to end against a sandbox: two members and two API keys in one org, exact on all six scopes.
+
+### The rule that reads all of this
+
+**A ledger declares what it can count, and ONE rule reads that declaration.** `UsageLedger.covers` is a `LedgerCoverage` (`orgIncluded` / `callerIncluded`); `coverageNeededBy(model)` says what a plan requires and `ledgerGaps(models, covers)` returns the plans that don't fit, split by axis. `createMeter` warns at boot through `warnLedgerGaps`, and `checkPlansConfig(plans, { usageLedger })` makes the same finding an **error** — a warning in a deploy log is missable and a month of unenforced caps is not recoverable. Pass the ledger's own `covers`; the old `boolean` still means "the per-caller axis is covered". (Omit it and the check is skipped — undefined means "the caller did not say", not "nothing is wired". A ledger that declares no `covers` is silent for the same reason: an invented `false` would fail a config that is perfectly wired.)
+
+**`coverageNeededBy` asks TWO questions about the caller axis, because asking one was wrong in BOTH directions.** It used to test only `scope === "caller"`, and the reads `resolveAllowance` actually issues disagreed:
+
+- **false negative** — an *org*-scoped limit carrying `callerKind` is issued as a `{callerKind}` filter, i.e. a per-caller read, yet was filed under `orgIncluded`. It passed every check and then read 0 for ever: a limit that never applies, which looks like generosity rather than a fault.
+- **false positive** — a `scope: "caller"` limit over usage the wallet always funds (any `cap: wallet` plan, or an `api` caller under `cap.covers: "users"`) is answered exactly by the debits, with no lag. Demanding a store there rejected configs Stripe already handled.
+
+So the axis is needed when the read is caller-filtered (`scope: "caller"` **or** a `callerKind`) **and** the usage behind it can be included. Both cases are pinned in `test/ledger-coverage.test.mjs`.
 
 **The rule is written once because the two copies had already drifted.** The boot warning and the doctor both used to ask only about PER-MEMBER windows, so a POOLED plan metered by a wallet-only ledger passed every check while counting nothing — and `createMeter` defaulted to `stripeBalanceUsageLedger()` while `createBilling` defaulted to the composite, so which entry point composed the app silently decided whether included usage was counted at all. There is now one default (`defaultUsageLedger()`, read by both) and one rule.
 
-**A pool costs nothing to count.** `cap: pool` — including `perSeat`, below — plus org-scoped limits is a config that runs with **no store at all, at any volume**. That was impossible before: the old default was the debits themselves, so an included call counted as 0 and every window read 0% forever.
+**A pool costs nothing to count.** `cap: pool` — including `perSeat`, below — plus org-scoped limits runs on the bare composite at any volume. That was impossible before: the old default was the debits themselves, so an included call counted as 0 and every window read 0% forever.
 
-**`orgWide` is a seam too**, and the one most likely to move: Stripe's Meter Usage Analytics API answers the same question grouped by a dimension (`caller_id`), so when it leaves preview it belongs there — and the per-caller leg can point at it too, at which point the store disappears entirely.
+**`orgWide` is a seam too**, and the one most likely to move: Stripe's Meter Usage Analytics API answers the same question grouped by a dimension (`caller_id`), so if it becomes generally available it belongs there — and the per-caller leg could point at it too, at which point the scope customers disappear. Metronome (a Stripe product) already exposes exactly that shape (`POST /v1/usage/groups`, arbitrary `group_key`), but it is a separate vendor, a separate contract and 0.8% of billing volume, so it stays out.
 
-**Pairing a store with the composite beats the store alone.** `stripeUsageLedger({ perCaller: postgresUsageLedger(db) })` — which is what `meter.db` now builds — keeps exact per-member figures while answering every org-wide window from Stripe, so those reads stop scanning rows.
-
-## Counters, not events, when the per-member store has to scale (`src/usage-counters.ts`)
-
-`meter.counters` is the scale-correct per-caller leg, and the only one that needs no SQL.
-
-**Why.** Every read here is `sum(cost) where org, [start, end), caller?` over a FIXED, UTC-aligned window. `usage_events` answers that by aggregating a range on the hot path of every metered call, over a table that grows by one row per call forever — at an Enterprise window of 200 000 credits a week, millions of rows a month whose only purpose is to be summed back into a handful of integers. `usage_counters` keeps **one row per (org, scope, hour)**: a caller making a thousand calls in an hour writes ONE row, every read is a point lookup, and the row count is bounded by time rather than traffic.
-
-**Why hourly buckets rather than a counter per declared window.** A counter keyed by the plan's own windows would be smaller, but `record` would have to know which windows exist — and a window it failed to bump is usage counted by nothing, which reads 0% and refuses no one. Bucketing at a fixed grain means `record` needs no plan knowledge: it bumps the bucket the event falls in, `total` sums the buckets its window covers, and a window added to the config later is answerable retroactively. An hour is the grain because `every: "hour"` is the tightest window the model can express; a month is then at most 744 keys in ONE batched read.
-
-**The contract is that both paths derive the same scope string** (`scopesFor` on write, `scopeOf` on read → `org` / `k:<kind>` / `u:<memberId>`). A read that computed a different one would look up a counter nobody writes and report 0 forever — the same silent-generosity failure the coverage rule exists to catch. One event increments every scope it belongs to, so an org-wide read and a per-member read both see it.
-
-**Backends.** `sqlUsageCounters(pool)` (one `unnest` upsert per call, `used = used + excluded.used` as the atomic increment, `ANY($1)` on the primary key to read) reuses the database you already have; `redisUsageCounters(client)` needs none (`redis`, `ioredis`, `@upstash/redis`, Vercel KV all satisfy the duck type — `incrby` + `mget` + optional `pexpireat`); `memoryUsageCounters()` is for tests and single-process dev only, since separate instances would each allow a full window. `ensureUsageCountersTable` / `USAGE_COUNTERS` / `pruneUsageCounters` mirror the event-log helpers.
-
-**Atomic increment is the requirement that decides where this can live.** Redis and Postgres have one; Stripe and WorkOS metadata do not, which is why counters cannot go there — two concurrent metered calls would both read `n`, both write `n+1`, and one call would vanish.
-
-**What counters give up: the audit trail.** They cannot say WHICH actions made up a total, or when inside the hour. `postgresUsageLedger` keeps that and stays right for a consumer who wants per-action history — both satisfy the same seam, so a deployment can write to both. Clamping is deliberate too: a window wider than `maxKeysPerRead` reads the most RECENT slice, under-reporting rather than over-granting, because refusing early is recoverable and handing out unpaid-for allowance is not.
-
-```ts
-createBilling({ adapter, config, plans, meter: { rateCard, db: pool } })
-// once, from your migrations:
-await ensureUsageLedgerTable(pool)   // or paste USAGE_EVENTS into your own tool
-```
-
-`db` is duck-typed — anything with `query(sql, params) → { rows }`, which `pg`'s Pool/Client and Neon's driver already satisfy — so **this library depends on no database driver**. `ledger` still wins if you bring your own store.
-
-**Why a table at all for the per-member case, when everything else here is Stripe-backed.** Because no metadata store can do it, and each was checked: Stripe customer metadata holds 50 keys, WorkOS organization metadata holds **10** (keys ≤40 chars, values ≤**600**, ASCII), and *neither has an atomic increment* — counting would be read-modify-write, so two concurrent metered calls both read `n` and both write `n+1` and one disappears (Stripe idempotency keys explicitly do not cover concurrent conflicting requests). Stripe Billing Meters can't help either: `listEventSummaries` takes only customer + meter + time window + an hour/day bucket, with no dimensions and no group-by, so a per-member question returns the whole org. A meter per member is unbounded against an account-level cap, and zero-amount balance transactions would write junk into the customer's *money* ledger — the history that backs invoices. Metadata is for a handful of stable attributes; usage is an append-only event stream. Hence one row, one index-covered `SUM`.
+**What no store means you give up: the audit trail.** Nothing here can say WHICH actions made up a total. `UsageLedger` is still a seam, so a consumer who wants per-action history brings their own `ledger` — the library simply no longer ships one, or the database driver it would need.
 
 ## Spend controls — the customer's own ceiling (`getSpendControls`)
 
@@ -194,7 +257,11 @@ Two things are deliberately distinct from a rate limit:
 
 The window is the **calendar month**, even for an annual subscriber: "monthly" is what the customer set, and the plan cycle would make that window a year wide. A cleared limit writes `""` (the Stripe metadata clear) and never `"0"`, which would read back as a ceiling of zero and refuse every call in the workspace; junk metadata means "no ceiling" for the same reason.
 
-**The ceiling sees exactly what your ledger sees.** On the default ledger it counts wallet-funded calls only — correct for a wallet-only product, and blind to included usage otherwise. That is the same reason to pass `meter.db` as above.
+**The ceiling sees exactly what your ledger sees.** It is an org-wide window, so on the default composite it is answered by the Stripe meter and sees every call, included ones too.
+
+**`get_spend_controls` / `set_spend_controls` exist because this was the one capability still breaking the parity rule.** The ceiling was a library function and a billing screen and nothing else — the same shape as the pre-audit gap the rule was written for. It matters more here than elsewhere: `describeDenial` answers `spend_limit_reached` by telling the caller this is the one limit they can raise *themselves*, which is useless advice to an agent that has no tool to raise it with. Both are **ungated** — a ceiling funds nothing and only refuses, so it needs no `replenish` and no plan, and a free workspace caps itself exactly like a subscribed one. `set_spend_controls` is `enforceAdmin`, like `assign_seat_type`, because the ceiling governs what the whole workspace may consume.
+
+**`0` is the clear, and `null` is deliberately not accepted.** `dispatchTool` strips null and undefined arguments before validation (`dispatch.ts`), so a nullable field would be dropped on the REST and CLI paths and read as "leave it alone" — the caller's clear would silently not happen, while the identical call over raw MCP worked. One spelling that behaves the same on every surface beats two where one quietly doesn't; passing `null` now fails loudly with "nothing to change". Read-back is for the same reason: `0` is stored as `""`, thresholds come back sorted and de-junked, so what was asked for is not always what is now in force.
 
 ## Tax — the library calculates it, Stripe Tax is opt-in
 
@@ -253,6 +320,32 @@ Wallets are in because they are not another way to pay: Apple Pay and Google Pay
 - **Webhook** `app/api/stripe/webhook/route.ts`: `createStripeWebhookHandler()` (grants credits on `checkout.session.completed`; raw body — exclude from any session middleware).
 - Register tools once: `registerBillingTools(server, { adapter, toolCosts, config })`.
 
+## Entry points — the root barrel is not the only way in
+
+The root re-exports 45 modules, so `import { planModel } from "@arnaudjnn/billing-tools"` in a Server Component resolves the MCP SDK, mcp-handler, authkit-nextjs, Stripe, WorkOS and sales-tax to answer a question about a plain object. Import from the narrowest entry that has what you need:
+
+| entry | for | reaches |
+|---|---|---|
+| `/plans` | the catalogue + its arithmetic + the adapter/config types | **nothing** |
+| `/pricing` | `derivePlanViews`, `deriveCompareTable`, the markdown renderers | **nothing** |
+| `/agent-auth` | auth.md, MPP, the OAuth proxy | WorkOS, Stripe, sales-tax |
+| `/routes` | the three Next route factories + `ensureWebhookEndpoint` | MCP SDK, mcp-handler, Stripe, zod |
+| `/tools` | `registerBillingTools`, `createDispatcher` | MCP SDK, WorkOS, Stripe, zod |
+| `/ui`, `/ui/authkit` | the React checkout components | React, Stripe.js, authkit |
+| `/cli` | the customer CLI commands + config store | node builtins only |
+| `/dev` | `startLocalWebhooks` (the Stripe CLI fetcher) | node builtins only |
+| `.` | everything, incl. `createBilling`, the Stripe/WorkOS engines, the doctor | all of it |
+
+`test/conventions.test.mjs` pins each set **exactly, in both directions** — a leaf that grows a dependency has stopped being one, and a leaf that loses an export means consumers now import from two places.
+
+Two things that look like dependencies and are not. **`commander` is nowhere**, including in the root: `cli/commands.ts` imports `Command` as a *type*, which tsc erases, so the customer CLI never cost a runtime dependency. **`pg` is nowhere** either, and now there is nothing that could want it: the SQL and Redis usage stores were deleted once `stripeScopeUsageLedger` could answer the one question they existed for. The package touches no database at all.
+
+`createBilling` stays at the root on purpose: it composes the tools, all three routes, agent-auth and MPP, so it needs the whole graph — and being one module also guarantees the single instance its shared AsyncLocalStorage depends on. Same for `checkPlansConfig`, which reads Stripe from `doctor.ts`; it is a deploy-time call, not one a page makes.
+
+**The root now DERIVES the pure half instead of re-listing it.** `src/index.ts` used to hand-list all 89 names of the plan model, the storage seam and i18n; it is one `export * from "./entries/plans.js"` line. A hand-maintained list of names is a list that drifts, and this repo has the receipt: `list_plans` was registered and left out of `BILLING_TOOL_NAMES` for exactly that reason. Only the Stripe-touching half of `plans.ts` (`ensurePlans`, `migrateSubscriptions`, the price lookups) is still listed, because the leaf is pure and those are not.
+
+The hazard `export *` introduces is the mirror image of a missing name: TypeScript drops, silently, any name two `export *`s both provide. `plan-model` and `checkout` each export a `Quantities` — the barrel keeps checkout's under its own name and plan-model's as `PlanQuantities`, which works only because an explicit export beats `export *`. `test/conventions.test.mjs` asserts every runtime name the leaf provides is reachable from the barrel, and that both `Quantities` survive. Collapsing the blocks changed the surface by exactly two names (`INTERVALS`, `DEFAULT_SEAT_TYPE`) and removed none — verified by diffing the resolved export set before and after.
+
 ## CLI
 
 Two different CLIs, for two different people. **`registerBillingCommands(program, { configDir: "~/.myapp", envPrefix: "MYAPP", defaultUrl })`** is the CUSTOMER's: it adds `auth`, `keys list|revoke`, `balance`, `buy`, `invoices`, talks to the app's REST API with an org API key, and persists to `<configDir>/config.json` (chmod 600).
@@ -310,7 +403,7 @@ Counting therefore has to be separable from charging: `src/usage-ledger.ts` is t
 
 The window comes from the SUBSCRIPTION period, not the calendar month: an annual package measured monthly resets twelve times. Calendar month remains the fallback for an org with no subscription.
 
-**`cap: { kind: "pool", perSeat: N }` is the rung between a flat pool and `per_seat`, and choosing it is an infrastructure decision as much as a commercial one.** "1 000 credits per seat per month" is what a pricing page says. `per_seat` additionally **enforces** it member by member — which is a stricter product than most teams sell, and the *only* cap shape that needs a per-member counter to gate, i.e. the only one that needs a store (see the ledger section). Pooled, the same promise is ONE org-wide window: `perSeat × seats`, shared, countable by a single Stripe meter summary at any volume with no store anywhere. The trade is fairness — one member can draw the team's share — so say `per_seat` when that matters and pool when it doesn't.
+**`cap: { kind: "pool", perSeat: N }` is the rung between a flat pool and `per_seat`, and choosing it is an infrastructure decision as much as a commercial one.** "1 000 credits per seat per month" is what a pricing page says. `per_seat` additionally **enforces** it member by member — which is a stricter product than most teams sell, and the only cap shape that needs a per-member counter to gate. That used to mean a database; it now means `stripeScopeUsageLedger` as the per-caller leg (see the ledger section), which costs a Stripe Customer per active member and ~60 s of lag on that window. Pooled, the same promise is ONE org-wide window: `perSeat × seats`, shared, answered by a single meter summary at any volume with nothing extra at all. The trade is fairness — one member can draw the team's share — so say `per_seat` when that matters and pool when it doesn't.
 
 Seats are the **purchased** quantity (`getSubscription().seats`, recorded by the sync from the subscription's summed item quantities), falling back to the active member count, then to 1. Purchased rather than active deliberately: a workspace that bought ten seats and filled six paid for ten, and sizing on members would quietly hand them a smaller package than the page promised. `poolSizeOf(model, seats)` takes the count as an argument and defaults it to 1, so a caller that forgets it under-reports rather than over-grants — and a pricing surface with no org in hand gets the per-seat unit to display. Mutually exclusive with `cap.credits` (`checkPlansConfig` errors: `perSeat` wins, so the flat number would silently do nothing), and warned when the plan `sells: nothing` — there is no purchased quantity to multiply.
 

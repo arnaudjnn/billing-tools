@@ -267,6 +267,40 @@ function registerPlanCommands(program: Command, requireConfig: () => ApiClientCo
       print(await callTool(requireConfig(), "set_auto_reload", { enabled: false, threshold: 0, reload_to: 1 })),
     );
 
+  // The customer's OWN ceiling, as opposed to the plan's rate limits — which is why
+  // it sits under its own noun rather than inside `usage`: `usage limits` reports
+  // what the product allows, `spend` sets what you allow yourself.
+  //
+  // Named `spend` and NOT `limit`, deliberately: `usage limits` already exists, and
+  // two commands differing by a single letter is a footgun no description fixes.
+  const spend = program
+    .command("spend")
+    .description("Your own monthly spending ceiling, and the thresholds to be warned at");
+  spend
+    .command("show", { isDefault: true })
+    .description("Show the ceiling and alert thresholds")
+    .action(async () => print(await callTool(requireConfig(), "get_spend_controls")));
+  spend
+    .command("limit <credits>")
+    .description("Allow at most <credits> per calendar month. Pass 0 to remove the ceiling")
+    .action(async (credits: string) =>
+      print(
+        await callTool(requireConfig(), "set_spend_controls", {
+          limit_credits: parseInt(credits, 10),
+        }),
+      ),
+    );
+  spend
+    .command("alerts [credits...]")
+    .description("Warn at these credit thresholds. Pass none to clear them")
+    .action(async (credits: string[]) =>
+      print(
+        await callTool(requireConfig(), "set_spend_controls", {
+          alert_credits: credits.map((c) => parseInt(c, 10)),
+        }),
+      ),
+    );
+
   // ── The billing account ───────────────────────────────────────────────────
   const profile = program
     .command("profile")

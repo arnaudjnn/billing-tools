@@ -57,6 +57,7 @@ export type {
   Every,
   RateLimit,
   LedgerCoverage,
+  ToolCapabilities,
 } from "./plan-model.js";
 export {
   DEFAULT_SEAT_TYPE,
@@ -67,6 +68,8 @@ export {
   planModel,
   plansWhere,
   selfServePlans,
+  toolCapabilities,
+  ALL_TOOL_CAPABILITIES,
   defaultBasket,
   validateBasket,
   describeBasketProblem,

@@ -6,6 +6,7 @@ import {
   type LedgerCoverage,
   type PlanCatalog,
 } from "./plan-model.js";
+import { USAGE_SCOPE_KIND } from "./usage-scopes.js";
 import { BILLING_WEBHOOK_EVENTS } from "./webhook-setup.js";
 import { taxModeOf, type TaxMode } from "./tax.js";
 import type { BillingConfig } from "./types.js";
@@ -251,6 +252,11 @@ export async function checkBillingSetup(opts: {
     const reloadNoCard: string[] = [];
     let seen = 0;
     for await (const customer of stripe.customers.list({ limit: 100 })) {
+      // A per-caller usage scope is a COUNTER wearing a customer's shape
+      // (`stripeScopeUsageLedger`): it buys nothing, is never invoiced and has no
+      // currency to be pinned to. Counting them would dilute the ratio below and
+      // could exhaust the 500-customer sample without looking at a real one.
+      if (customer.metadata?.bt_kind === USAGE_SCOPE_KIND) continue;
       seen++;
       if (customer.currency && customer.currency !== want) {
         if (sample.length < 5) sample.push(`${customer.id} (${customer.currency})`);

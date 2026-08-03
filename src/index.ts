@@ -1,16 +1,13 @@
 // billing-tools — make your Stripe + WorkOS app ready to get paid.
 
-// Types + config
-export type {
-  BillingAdapter,
-  BillingUser,
-  ApiKeyInfo,
-  BillingConfig,
-  ResolvedConfig,
-  ToolResult,
-  ToolErrorResult,
-} from "./types.js";
-export { resolveConfig, internalDomainsFromEnv } from "./types.js";
+// The whole PURE half of the library, in one line: the plan model and its five
+// axes, the storage seam (`BillingAdapter`, `BillingConfig`, `resolveConfig`) and
+// the i18n helpers. It is re-exported wholesale from the `/plans` leaf rather than
+// re-listed here, because a hand-maintained list of 89 names is a list that drifts
+// — `list_plans` sat in `BILLING_TOOL_NAMES`-adjacent limbo for exactly that
+// reason, registered and unadvertised. The leaf is curated, so `export *` widens
+// nothing that was not already intended public.
+export * from "./entries/plans.js";
 
 // Auth engine
 export {
@@ -79,6 +76,8 @@ export {
 
 // Declarative plans (auto-provision Stripe products/prices from config)
 export {
+  // The Stripe-touching half of the catalogue: minting prices, reading them back,
+  // and repricing live subscribers. The pure model comes from the leaf above.
   ensurePlans,
   resolvePlanPrices,
   invalidatePlanPrices,
@@ -89,66 +88,16 @@ export {
   seatLimit,
   seatTypeLimit,
   planSale,
-  // The plan model: five independent axes (what it sells, what it credits, what
-  // it includes, how it's replenished, whether it can be bought) + presentation.
-  // The legacy PlanDef keeps working — `normalizePlans` maps it.
-  definePlans,
-  isLegacyPlan,
-  normalizePlan,
-  normalizePlans,
-  planModel,
-  plansWhere,
-  selfServePlans,
-  defaultBasket,
-  validateBasket,
-  describeBasketProblem,
-  grantFor,
-  poolSizeOf,
-  poolIsPerSeat,
-  packSizeOf,
-  exhaustedPolicy,
-  capCovers,
-  cycleWindowFor,
-  rateWindowFor,
-  rateLimitsOf,
-  ledgerGaps,
-  coverageNeededBy,
   includedCredits,
   includedCreditsByType,
   lookupKeyFor,
   DEFAULT_SEAT_TYPES,
-  type PlanDef,
-  type SeatTypeDef,
-  type PlansConfig,
-  type BillingInterval,
   type EnsuredPrice,
   type PlanPrices,
   type MigratedSubscription,
   type MigrateSubscriptionsResult,
-  type PlanCatalog,
-  type PlanSpec,
-  type PlanModel,
-  type LedgerCoverage,
-  type PlanDisplay,
-  type PlanLimits,
-  type SeatTypeSpec,
-  type SeatTypeDisplay,
-  type NormalSeatType,
-  type Sells,
-  type Grant,
-  type Cap,
-  type CapWindow,
-  type CapCovers,
-  type Every,
-  type RateLimit,
-  type Exhausted,
-  type Replenish,
-  type Sale,
-  type Money,
-  type IntervalPrice,
+  // Aliased because checkout.ts exports a `Quantities` of its own.
   type Quantities as PlanQuantities,
-  type BasketProblem,
-  type CycleWindow,
 } from "./plans.js";
 
 // The subscription lifecycle: one entry point for up, down and off. Before this,
@@ -159,7 +108,14 @@ export {
   cancelPlan,
   planActions,
   planRank,
+  // The READ side of the same arithmetic, and it was missing from this barrel:
+  // `preview_plan_change` used it internally, so an agent could quote a change and
+  // a server action could not. That is the parity rule inverted — a confirm dialog
+  // saying "nothing is charged today" with no way to say what the NEXT invoice comes
+  // to is the surprise `nextInvoiceAt` + `nextInvoiceTotal` exist to remove.
+  previewPlanChange,
   PlanChangeError,
+  type PlanChangePreview,
   type PlanChangeResult,
   type PlanChangeKind,
   type PlanChangeTiming,
@@ -167,21 +123,6 @@ export {
   type ProrationPolicy,
   type PlanActions,
 } from "./subscription.js";
-
-// i18n: the config's display text can be one string or one per locale, and the
-// handful of words the LIBRARY supplies default to English and are overridable.
-export {
-  resolveLocalized,
-  resolveLocalizedList,
-  resolveMessages,
-  formatMessage,
-  DEFAULT_MESSAGES,
-  type Localized,
-  type LocalizedList,
-  type LocaleOptions,
-  type Messages,
-  type PartialMessages,
-} from "./i18n.js";
 
 // Pricing view models: the plan config turned into what a surface renders. Also
 // available as the leaf entry point `@arnaudjnn/billing-tools/pricing`, which
@@ -250,11 +191,6 @@ export {
 // Counting usage separately from moving money — the seam an included window needs.
 export {
   stripeBalanceUsageLedger,
-  postgresUsageLedger,
-  ensureUsageLedgerTable,
-  USAGE_EVENTS,
-  USAGE_EVENTS_DDL,
-  type SqlClient,
   stripeMeterUsageLedger,
   stripeUsageLedger,
   defaultUsageLedger,
@@ -268,28 +204,27 @@ export {
   type FundingSource,
 } from "./usage-ledger.js";
 
-// Counters instead of events: one row per (org, scope, hour) rather than per call,
-// so a per-member window is a point read and the store stops growing with traffic.
-// Works without SQL — a Redis/KV client satisfies the same seam.
+// The per-caller leg, and the reason this library ships no store at all any more:
+// one Stripe Customer per usage SCOPE, so the one window Stripe supposedly cannot
+// count — INCLUDED and PER-MEMBER — is counted by Stripe after all. Wallet-funded
+// usage still comes from the debits, which is why a caller-scoped rate limit keeps
+// its zero lag while a seat pack tolerates the meter's.
+//
+// The Postgres and Redis backends that used to fill this gap
+// (`postgresUsageLedger`, `counterUsageLedger`, `sqlUsageCounters`,
+// `redisUsageCounters`, and the `meter.db` / `meter.counters` shortcuts) are GONE.
+// They existed for exactly this question, and a database is no longer the answer
+// to it. Bring your own `ledger` if you want the per-action history a store keeps.
 export {
-  counterUsageLedger,
-  sqlUsageCounters,
-  redisUsageCounters,
-  memoryUsageCounters,
-  ensureUsageCountersTable,
-  pruneUsageCounters,
-  USAGE_COUNTERS,
-  USAGE_COUNTERS_DDL,
-  BUCKET_MS,
-  bucketOf,
+  stripeScopeUsageLedger,
+  invalidateUsageScopes,
   scopeOf,
   scopesFor,
-  counterKey,
-  type UsageCounterStore,
-  type CounterLedgerOptions,
-  type SqlCounterClient,
-  type RedisCounterClient,
-} from "./usage-counters.js";
+  SCOPE_METER_EVENT,
+  USAGE_SCOPE_KIND,
+  USAGE_SCOPE_KEY,
+  type ScopeLedgerOptions,
+} from "./usage-scopes.js";
 
 // Per-execution metering engine (prepaid balance; per-seat packs or a global
 // pool; usage summed from Stripe balance-transaction metadata — no new backend).
@@ -383,6 +318,12 @@ export { createDispatcher, ToolValidationError, type RegisterFn } from "./dispat
 
 // One-call composition helper (mount every surface from one config)
 export { createBilling, type CreateBillingOptions } from "./create-billing.js";
+// The org-scoped API with adapter/config/plans/ledger already applied — what
+// `createBilling().api` returns. Exported standalone for a consumer composing the
+// factories by hand: 37 functions here take the adapter first, and re-binding them
+// per app is ~40 files of mechanical wrappers AND the one place a grant can be
+// filed against the wrong cycle.
+export { createBoundApi, type BillingApi, type BoundApiDeps } from "./bound-api.js";
 
 // auth.md — agent self-registration protocol (framework-agnostic handlers)
 export {

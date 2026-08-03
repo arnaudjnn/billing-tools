@@ -40,6 +40,26 @@
       "import": "./dist/adapters/workos-org.js",
       "default": "./dist/adapters/workos-org.js"
     },
+    "./plans": {
+      "types": "./dist/entries/plans.d.ts",
+      "import": "./dist/entries/plans.js",
+      "default": "./dist/entries/plans.js"
+    },
+    "./tools": {
+      "types": "./dist/entries/tools.d.ts",
+      "import": "./dist/entries/tools.js",
+      "default": "./dist/entries/tools.js"
+    },
+    "./routes": {
+      "types": "./dist/entries/routes.d.ts",
+      "import": "./dist/entries/routes.js",
+      "default": "./dist/entries/routes.js"
+    },
+    "./agent-auth": {
+      "types": "./dist/entries/agent-auth.d.ts",
+      "import": "./dist/entries/agent-auth.js",
+      "default": "./dist/entries/agent-auth.js"
+    },
     "./cli": {
       "types": "./dist/cli/index.d.ts",
       "import": "./dist/cli/index.js",

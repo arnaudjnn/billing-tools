@@ -205,3 +205,95 @@ test("junk metadata never blocks a workspace", () => {
   assert.equal(spendControlsOf(undefined).limitCredits, null);
   assert.deepEqual(spendControlsOf({ spend_alert_credits: "5, x, 1" }).alertCredits, [1, 5]);
 });
+
+// ── Reachable by an agent, not only by the billing screen ────────────────────
+//
+// The ceiling was a library function and a React card and nothing else, which is
+// the parity rule's own failure mode. It matters here more than most: the refusal
+// above tells the caller this is the one limit they can raise THEMSELVES, and that
+// is useless advice to an agent with no tool to raise it with.
+
+test("get_spend_controls / set_spend_controls round-trip through the tools", async () => {
+  const { createDispatcher } = await import("../dist/dispatch.js");
+  const { registerBillingTools } = await import("../dist/tools/register.js");
+  const { runWithAuth } = await import("../dist/auth.js");
+
+  const updates = [];
+  let metadata = { spend_limit_credits: "", spend_alert_credits: "" };
+  __setStripeForTests({
+    customers: {
+      async retrieve() {
+        return { deleted: false, balance: 0, currency: "eur", metadata };
+      },
+      async update(_id, params) {
+        updates.push(params);
+        // Reflect the write, so the tool's read-back sees what it stored — the
+        // whole point of reading back rather than echoing the request.
+        metadata = { ...metadata, ...params.metadata };
+        return { id: _id };
+      },
+    },
+  });
+
+  const toolAdapter = {
+    ...adapter,
+    async validateApiKey() {
+      return { orgId: "org_1" };
+    },
+    async getOrgDomains() {
+      return [];
+    },
+  };
+  const d = createDispatcher((server) => {
+    registerBillingTools(server, {
+      adapter: toolAdapter,
+      config: { ...config, currency: "eur" },
+      installLogging: false,
+    });
+  });
+  // dispatchTool already unwraps the envelope and parses the JSON body — the same
+  // path the REST route and the CLI take, which is why the clear below is 0 and not
+  // null: it strips null arguments before validation.
+  const call = (name, args) => runWithAuth("Bearer sk_x", () => d.dispatchTool(name, args));
+
+  // No plans passed at all: the ceiling still works, because it funds nothing.
+  assert.deepEqual(await call("get_spend_controls", {}), {
+    limit_credits: null,
+    alert_credits: [],
+    window: "calendar_month",
+    currency: "eur",
+  });
+
+  const set = await call("set_spend_controls", { limit_credits: 5000, alert_credits: [4000, 1000] });
+  assert.equal(set.limit_credits, 5000);
+  assert.deepEqual(set.alert_credits, [1000, 4000], "sorted ascending on the way back");
+
+  // Only the field passed is written — `setSpendControls` distinguishes an absent
+  // field from a null one, and the tool has to preserve that or it silently clears
+  // whichever the caller did not mention.
+  await call("set_spend_controls", { alert_credits: [2000] });
+  assert.equal("spend_limit_credits" in updates.at(-1).metadata, false);
+  assert.equal((await call("get_spend_controls", {})).limit_credits, 5000);
+
+  // 0 removes the ceiling, and is stored as "" — never as "0", which would read
+  // back as a ceiling of zero and refuse every call in the workspace.
+  const cleared = await call("set_spend_controls", { limit_credits: 0 });
+  assert.equal(cleared.limit_credits, null);
+  assert.equal(updates.at(-1).metadata.spend_limit_credits, "");
+
+  // A call that changes nothing is refused rather than silently succeeding. The
+  // dispatcher turns an isError result into a throw.
+  await assert.rejects(
+    () => call("set_spend_controls", {}),
+    /nothing to change/,
+    "an empty write must not report success",
+  );
+
+  // And the trap the `null` spelling would have been: stripped in transit, so it
+  // would have read as "leave it alone" while the caller believed they had cleared.
+  await assert.rejects(
+    () => call("set_spend_controls", { limit_credits: null }),
+    /nothing to change/,
+    "null is stripped by dispatch, so it must be loud rather than a silent no-op",
+  );
+});

@@ -191,9 +191,10 @@ export interface MeterConfig<R extends Record<string, number> = Record<string, n
    * ORG-wide window on a Stripe meter (included usage too, one request at any
    * volume) and per-CALLER windows from balance-transaction metadata.
    *
-   * Pass one only for the pair the composite can't do without a store: a window
-   * that is both INCLUDED and PER-MEMBER (`cap: per_seat`, a `scope: "caller"`
-   * limit) — `stripeUsageLedger({ perCaller: postgresUsageLedger(db) })`.
+   * Pass one for the pair the bare composite can't see: a window that is both
+   * INCLUDED and PER-MEMBER (`cap: per_seat`, a `scope: "caller"` limit) —
+   * `stripeUsageLedger({ perCaller: stripeScopeUsageLedger() })`, which counts it
+   * in Stripe too rather than in a database.
    */
   ledger?: UsageLedger
 }
