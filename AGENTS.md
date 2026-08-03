@@ -111,7 +111,9 @@ WorkOS org metadata is **10 keys, keys ≤40 chars, values ≤600, ASCII**; Stri
 
 Correctness and history are trimmed differently: a request queue may drop **settled** records to make room, never a pending ask, because losing history costs a UI a row while losing a grant costs the customer allowance they were promised.
 
-**Still on the org blob, same shape, same ceiling: `seatAssignments`** (`seats.ts`) packs `member → seatType` at ~43 chars per member, so it overflows at about 13. Not yet fixed.
+**`seatAssignments` (`seats.ts`) had the identical defect** — `member → seatType` at ~43 chars, overflowing at about 13, on the one plan shape whose premise is many seats — and is fixed the same way, with two differences worth knowing. A seat is **never trimmable**: dropping an entry silently downgrades a member to the default pack, so the new path does not write the legacy value at all rather than repairing it, which is what lets an already-oversized org be assigned into. And a cleared seat writes a **tombstone** (`""`) instead of deleting, because the legacy map is still read as a fallback and a plain delete would read back as the *old* seat.
+
+Enumerating a per-member record needs `adapter.listMemberIds` (`WorkOSOrgAdapter` lists active memberships; `memberCount` now derives from it). Without it `listSeatAssignments` returns what the legacy map holds — everything an adapter with no per-member store has anyway.
 
 ## Cycles — one definition (`currentCycle`)
 

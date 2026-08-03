@@ -109,6 +109,10 @@ export interface BillingAdapter {
   ): Promise<void>;
   /** Active members, for per-seat grants and seat limits. */
   memberCount?(orgId: string): Promise<number>;
+  /** Active member ids. Needed by any read that must ENUMERATE a per-member
+   *  record (`listSeatAssignments`), because a per-member store can be asked
+   *  about a member but cannot be asked who the members are. */
+  listMemberIds?(orgId: string): Promise<string[]>;
   /** Whether a user is an admin/owner of the org (gates auto-top-up + approvals). */
   isAdmin?(orgId: string, userId: string): Promise<boolean>;
 }

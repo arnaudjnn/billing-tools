@@ -236,12 +236,18 @@ export class WorkOSOrgAdapter implements BillingAdapter {
   /** Active-member count for the org (per-seat credit grants + seat limits).
    *  Auto-paginates so orgs with >100 members aren't undercounted. */
   async memberCount(orgId: string): Promise<number> {
+    return (await this.listMemberIds(orgId)).length;
+  }
+
+  /** Active member ids. What a read has to enumerate over once a per-member record
+   *  lives on the member rather than in one org value — see `seats.ts`. */
+  async listMemberIds(orgId: string): Promise<string[]> {
     const paginatable = await this.workos.userManagement.listOrganizationMemberships({
       organizationId: await this.wid(orgId),
       statuses: ["active"],
     });
     const members = await paginatable.autoPagination();
-    return members.length;
+    return members.map((m) => m.userId);
   }
 
   async getSubscription(orgId: string): Promise<{

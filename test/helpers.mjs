@@ -37,6 +37,7 @@ export function fakeAdapter({
   subscription = null,
   userMetadata = true,
   users = {},
+  members = [],
 } = {}) {
   const store = { ...metadata };
   const userStore = Object.fromEntries(Object.entries(users).map(([u, md]) => [u, { ...md }]));
@@ -54,6 +55,11 @@ export function fakeAdapter({
             else md[k] = v;
           }
           assertWithinLimits(`user ${userId} metadata`, md);
+        },
+        // Enumerating is what a per-member store cannot do on its own, so the
+        // fake supplies it the way WorkOSOrgAdapter does (from memberships).
+        async listMemberIds() {
+          return [...members];
         },
       }
     : {};
