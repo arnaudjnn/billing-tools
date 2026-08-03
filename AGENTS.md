@@ -91,6 +91,10 @@ Measured, not assumed (`scripts/e2e-proration.mjs`, test clock, Pro €18/mo →
 
 `previewPlanChange` shares `desiredPrices` and `diffItems` with `changePlan`, so the quoted number is the charged number. Pass it the **same** `proration` you will pass to `changePlan`, or you are quoting a different policy from the one you apply.
 
+**Which KEY, for an `api` caller.** `validateApiKey` may return `keyId` alongside `orgId`, and `createApiMeterGuard` passes it as `caller.id`. It used to pass the ORG id, because the seam returned nothing else — so every metered API call recorded a `caller_id` that `MeterCaller.id` documents as "API key id" and that actually held a workspace id, and the counter written under it (`u:<workspace>`) sat in the member namespace looking like a member the workspace does not have. Nothing was mis-charged: an `api` caller's windows are summed by KIND across the org, deliberately (one shared agent seat), so no gate ever read the value. What was impossible was answering "which key burned the quota", for every consumer. An adapter that cannot tell keys apart records **no** caller id rather than a wrong one — a plausible-but-wrong id is worse than a missing one, being indistinguishable downstream from a real member.
+
+Per-KEY windows remain a product decision, not a consequence: a `scope: "caller"` limit still sums every key in the org, so switching to one window per key would loosen the aggregate. The id is now recorded, so that choice is available.
+
 ## Who is calling — org vs principal (`src/auth.ts`)
 
 Every call resolves to an **org**. An org API key means exactly that: the org, with no person behind it, which is what a headless agent holds. So org-keyed calls are owner-level, deliberately and unchanged.

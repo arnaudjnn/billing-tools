@@ -26,7 +26,24 @@ export interface ApiKeyInfo {
 
 export interface BillingAdapter {
   /** Resolve a raw Bearer API key → org, or null if invalid/revoked. */
-  validateApiKey(token: string): Promise<{ orgId: string } | null>;
+  /**
+   * Resolve a raw Bearer API key → org, or null if invalid/revoked.
+   *
+   * `keyId` is WHICH key was used, and it exists because dropping it here made a
+   * documented capability impossible everywhere downstream. `MeterCaller.id` says
+   * "API key id (api) — for per-caller attribution", but this seam returned only
+   * the org, so `createApiMeterGuard` had nothing else to pass and sent the ORG id
+   * instead: every metered API call recorded a `caller_id` that claimed to name a
+   * key and named a workspace. No gate read it (an `api` caller's windows are
+   * summed by KIND across the org, deliberately), so nothing was mis-charged — but
+   * "which key burned the quota" was unanswerable for every consumer, and the
+   * counter written under it looked like a member whose id happened to be a
+   * workspace id.
+   *
+   * Optional, so an adapter that cannot tell keys apart stays source-compatible.
+   * When it is absent the meter records NO caller id rather than a wrong one.
+   */
+  validateApiKey(token: string): Promise<{ orgId: string; keyId?: string } | null>;
   /** Optional: resolve an OAuth bearer (JWT) → org id. Omit if no OAuth. */
   resolveOauthOrg?(token: string): Promise<string | null>;
   /** Verified domains for the org (used for the internal-org unmetered check). */

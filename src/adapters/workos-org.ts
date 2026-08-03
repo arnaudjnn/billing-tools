@@ -106,13 +106,16 @@ export class WorkOSOrgAdapter implements BillingAdapter {
     this.customerCache.delete(orgId);
   }
 
-  async validateApiKey(token: string): Promise<{ orgId: string } | null> {
+  async validateApiKey(token: string): Promise<{ orgId: string; keyId?: string } | null> {
     try {
       const { apiKey } = await this.workos.apiKeys.createValidation({ value: token });
       if (!apiKey) return null;
       const workosOrgId = apiKey.owner.id;
       const orgId = this.map ? await this.map.toOrgId(workosOrgId) : workosOrgId;
-      return orgId ? { orgId } : null;
+      // The validation already tells us WHICH key this was, and passing it on is
+      // what makes per-key attribution possible at all — see `validateApiKey` on
+      // the seam. It was being thrown away one line before the meter needed it.
+      return orgId ? { orgId, keyId: apiKey.id } : null;
     } catch {
       return null;
     }

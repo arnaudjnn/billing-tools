@@ -323,7 +323,13 @@ export function createApiMeterGuard<R extends Record<string, number>>(
     const auth = await adapter.validateApiKey(token)
     if (!auth) return unauthorized(realm)
     const res = await meter(auth.orgId, action, {
-      caller: { kind: "api", id: auth.orgId },
+      // The KEY, when the adapter can name it. Never the org id as a stand-in:
+      // `caller.id` means "which key", so an org id there is a value that answers
+      // a different question, and it wrote a counter under `u:<workspace>` that
+      // looked like a member. An adapter that cannot tell keys apart records no
+      // caller id at all, which is honest — the api windows are summed by KIND
+      // across the org either way, so nothing about the gate depends on it.
+      caller: { kind: "api", ...(auth.keyId ? { id: auth.keyId } : {}) },
       units: opts?.units,
     })
     if (!res.ok) return jsonResponse(402, { error: res.message ?? "Insufficient balance." })
