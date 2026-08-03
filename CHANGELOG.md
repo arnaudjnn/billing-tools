@@ -1,3 +1,10 @@
+# [2.12.0](https://github.com/arnaudjnn/billing-tools/compare/v2.11.0...v2.12.0) (2026-08-03)
+
+
+### Features
+
+* size a pooled allowance per seat type, declare ledger coverage, and make tax one declaration ([c24bdb9](https://github.com/arnaudjnn/billing-tools/commit/c24bdb9f0e893d85c68e4297e2bf3247a25b978b))
+
 # [2.11.0](https://github.com/arnaudjnn/billing-tools/compare/v2.10.2...v2.11.0) (2026-08-03)
 
 
