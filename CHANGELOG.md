@@ -1,3 +1,10 @@
+# [5.1.0](https://github.com/arnaudjnn/billing-tools/compare/v5.0.0...v5.1.0) (2026-08-03)
+
+
+### Features
+
+* **usage:** let a read say which funding sources it can contain ([6826443](https://github.com/arnaudjnn/billing-tools/commit/6826443c8f1a41a12a3f8629bd722b9a0c90514e))
+
 # [5.0.0](https://github.com/arnaudjnn/billing-tools/compare/v4.1.0...v5.0.0) (2026-08-03)
 
 
