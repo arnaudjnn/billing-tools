@@ -125,20 +125,34 @@ test("an account with no country reports none, and is not re-read", async () => 
 
 import { ApproximateTaxError, resolveTax, taxRatesFor } from "../dist/tax.js";
 
-test("a non-European destination is flagged approximate; the EU is not", async () => {
+test("a European seller exporting outside the EU is OUT OF SCOPE, not approximate", async () => {
+  // The distinction this gets wrong at its peril. A French seller supplying a
+  // digital service to a US or Canadian customer has a place of supply outside the
+  // EU, so no EU VAT arises: 0% is correct and COMPLETE. An earlier version marked
+  // every non-European destination `approximate` regardless of origin, which would
+  // have refused every export a French business made.
+  for (const country of ["US", "CA", "AU", "JP"]) {
+    const d = await resolveTax({ originCountry: "FR", country });
+    assert.equal(d.percent, 0, `${country} should attract no EU VAT`);
+    assert.equal(d.outOfScope, true, `${country} should be out of scope`);
+    assert.equal(d.approximate, undefined, `${country} must NOT be refused`);
+  }
+
+  // And it can be charged — the guard does not fire on a complete answer.
+  await assert.doesNotReject(() => taxRatesFor({ originCountry: "FR", country: "US" }));
+});
+
+test("a seller we have no regime for IS approximate", async () => {
+  // A US-established seller: we cannot compute their domestic rate either, so 0%
+  // would be a guess rather than a rule. That is the case the refusal is for.
   const us = await resolveTax({ originCountry: "US", country: "US", state: "IL" });
   assert.equal(us.approximate, true);
+  assert.equal(us.outOfScope, undefined);
   // No rate AT ALL, which is stronger than the previous behaviour: the old source
   // returned Illinois' 6.25% and relied on the flag to say "incomplete". Now there
   // is no number to leak past the flag if a caller forgets to check it.
   assert.equal(us.percent, 0);
   assert.equal(us.type, "none");
-
-  // Canada was one of 86 non-European countries the old source carried a rate for.
-  // A number with no authority behind it invoices confidently and under-collects
-  // silently, so it is refused on exactly the same footing as the US.
-  const ca = await resolveTax({ originCountry: "FR", country: "CA" });
-  assert.equal(ca.approximate, true);
 
   const it = await resolveTax({ originCountry: "FR", country: "IT" });
   assert.equal(it.approximate, undefined, "EU VAT is one published rate per country");

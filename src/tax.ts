@@ -38,6 +38,15 @@ export type TaxDecision = {
   /** e.g. 22 for 22%. Zero for reverse charge and out-of-scope sales. */
   percent: number;
   /**
+   * No tax arises, and that is a complete answer rather than a missing one.
+   *
+   * A European seller exporting a digital service outside the EU: the place of
+   * supply is the customer's country, which is outside the EU, so no EU VAT is due.
+   * Distinct from `approximate`, where 0% means "we do not know" — this one means
+   * "nothing, and here is why", which is what belongs on the invoice.
+   */
+  outOfScope?: boolean;
+  /**
    * The rate is a KNOWN UNDER-ESTIMATE, not an exact answer.
    *
    * Set for every destination outside the 45 European countries the rate dataset
@@ -87,12 +96,28 @@ export async function resolveTax(opts: {
   const origin = opts.originCountry.toUpperCase();
   const country = opts.country.toUpperCase();
 
-  // Outside Europe there is no rate here to apply. Flagged rather than returned as
-  // 0%, so `taxRatesFor` refuses instead of invoicing an untaxed sale that may not
-  // be untaxed. The US is the case that matters in practice and the message names
-  // it, but the rule is the same for every country the dataset does not cover.
+  // A destination outside the 45 covered countries. Whether 0% is the RIGHT answer
+  // or an unknown one depends entirely on where the seller is, and conflating the
+  // two was a real bug:
+  //
+  //   • A EUROPEAN seller exporting a digital service outside the EU is OUT OF
+  //     SCOPE for EU VAT — the place of supply is the customer's country, which is
+  //     not in the EU, so no EU VAT arises. 0% is correct and complete. (A separate
+  //     obligation may exist in the destination once a nexus threshold is crossed;
+  //     that is a registration question, not a rate this library can compute.)
+  //
+  //   • A seller we have NO regime for — one established outside these countries —
+  //     is different: we cannot compute their domestic rate either, so 0% is a
+  //     guess and gets refused.
   if (!isKnownCountry(country)) {
-    return { percent: 0, reverseCharge: false, country, type: "none", approximate: true };
+    const sellerCovered = isKnownCountry(origin);
+    return {
+      percent: 0,
+      reverseCharge: false,
+      country,
+      type: "none",
+      ...(sellerCovered ? { outOfScope: true } : { approximate: true }),
+    };
   }
 
   const standard = getStandardRate(country) ?? 0;
