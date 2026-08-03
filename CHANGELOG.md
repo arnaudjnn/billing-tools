@@ -1,3 +1,10 @@
+## [8.0.1](https://github.com/arnaudjnn/billing-tools/compare/v8.0.0...v8.0.1) (2026-08-03)
+
+
+### Bug Fixes
+
+* **doctor:** US tax exposure is about the CUSTOMER's country, not ours ([36c47b8](https://github.com/arnaudjnn/billing-tools/commit/36c47b852c552efe832e485c0b9cb46bb7dcc2dc))
+
 # [8.0.0](https://github.com/arnaudjnn/billing-tools/compare/v7.0.0...v8.0.0) (2026-08-03)
 
 
