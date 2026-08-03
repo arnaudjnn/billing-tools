@@ -1,3 +1,10 @@
+## [11.0.1](https://github.com/arnaudjnn/billing-tools/compare/v11.0.0...v11.0.1) (2026-08-03)
+
+
+### Bug Fixes
+
+* **usage:** report the two failure paths that load-testing found still silent ([2e914b1](https://github.com/arnaudjnn/billing-tools/commit/2e914b1a87533de5e095849e0520f40a834f4f75))
+
 # [11.0.0](https://github.com/arnaudjnn/billing-tools/compare/v10.1.0...v11.0.0) (2026-08-03)
 
 
