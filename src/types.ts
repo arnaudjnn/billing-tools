@@ -206,6 +206,24 @@ export interface BillingConfig {
      */
     allowApproximate?: boolean;
     /**
+     * Are you registered for the EU One-Stop Shop? Default true.
+     *
+     * It decides ONE case: a cross-border EU customer with no valid VAT number.
+     * Reverse charge needs a valid id, so without one the sale is taxed somewhere —
+     * registered, at the CUSTOMER's rate; not registered, at YOUR OWN, which is what
+     * the sub-€10 000 regime allows and the only rate you can remit without a
+     * foreign registration.
+     *
+     * Set `false` if you sell B2B and are not OSS-registered: an EU business that
+     * cannot produce a valid id (below its own registration threshold, a typo, or
+     * VIES unreachable — where this library charges rather than exempts) would
+     * otherwise be billed its country's VAT, which you would have collected with
+     * nowhere to pay it over.
+     *
+     * Domestic sales, valid-id reverse charge and non-EU sales are all unaffected.
+     */
+    oss?: boolean;
+    /**
      * Resolve the TaxRate ids yourself, e.g. from your own records. Wins over
      * `mode` when it returns any — the hook exists to be authoritative.
      */

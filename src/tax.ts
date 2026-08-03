@@ -92,6 +92,22 @@ export async function resolveTax(opts: {
   country: string;
   state?: string | null;
   taxNumber?: string | null;
+  /**
+   * Are you registered for the EU One-Stop Shop?
+   *
+   * It only decides ONE case: a cross-border EU customer with no valid VAT number.
+   * Reverse charge needs a valid id, so without one the sale is treated as B2C —
+   * and then OSS decides whose rate applies. Registered (the default), the
+   * CUSTOMER's; not registered, YOUR OWN, which is what the sub-€10 000 regime
+   * allows and the only rate you can actually remit without a foreign registration.
+   *
+   * Charging the customer's rate while unregistered collects VAT you have nowhere
+   * to pay over — the mirror of under-collecting, and awkward in a different way.
+   *
+   * Nothing else moves: domestic is domestic, valid-id B2B still reverse charges,
+   * and non-EU is still out of scope.
+   */
+  oss?: boolean;
 }): Promise<TaxDecision> {
   const origin = opts.originCountry.toUpperCase();
   const country = opts.country.toUpperCase();
@@ -134,14 +150,25 @@ export async function resolveTax(opts: {
   const reverseCharge =
     crossBorderEU && Boolean(opts.taxNumber) && (await isValidVatNumber(opts.taxNumber!));
 
+  // A cross-border EU sale with no valid VAT id is not reverse-chargeable, so it
+  // falls to be taxed somewhere. OSS-registered, that is the customer's country;
+  // otherwise it is yours, and yours is the only one you can remit.
+  //
+  // `oss` defaults to true because charging the customer's rate is what the rule is
+  // once you are over the threshold, and being over it is the state a growing
+  // business ends in. Opting out is the smaller, more deliberate claim.
+  const unregisteredCrossBorder = crossBorderEU && !reverseCharge && opts.oss === false;
+  const applicable = unregisteredCrossBorder ? (getStandardRate(origin) ?? 0) : standard;
+  const applicableInfo = unregisteredCrossBorder ? getRate(origin) : info;
+
   return {
-    percent: reverseCharge ? 0 : standard,
+    percent: reverseCharge ? 0 : applicable,
     reverseCharge,
     country,
     // `vat_abbr` is the country's own word for it — "IVA", "TVA", "MwSt" — which is
     // what belongs on the customer's invoice. Consumers used to hardcode a map.
-    type: info?.vat_abbr ? "vat" : "none",
-    displayName: info?.vat_abbr ?? undefined,
+    type: applicableInfo?.vat_abbr ? "vat" : "none",
+    displayName: applicableInfo?.vat_abbr ?? undefined,
   };
 }
 
@@ -410,6 +437,7 @@ export async function taxFor(
       const where = stripeCustomerId ? await customerPlaceOfSupply(stripeCustomerId) : null;
       const { rateIds } = await taxRatesFor({
         allowApproximate: tax?.allowApproximate,
+        oss: tax?.oss,
         originCountry,
         // No address on file → treat it as a domestic sale (see above).
         country: where?.country ?? originCountry,
@@ -451,6 +479,9 @@ export async function taxRatesFor(opts: {
   state?: string | null;
   taxNumber?: string | null;
   displayName?: string;
+  /** See `resolveTax`. Decides whose rate a cross-border EU sale carries when the
+   *  customer has no valid VAT id. */
+  oss?: boolean;
   /**
    * Apply a rate this library knows to be an under-estimate (US destinations).
    *

@@ -193,3 +193,58 @@ test("allowApproximate is the explicit way to accept it", async () => {
     }
   });
 });
+
+// ── OSS: whose rate a cross-border EU sale carries without a VAT id ──────────
+//
+// Reverse charge needs a VALID VAT number. Without one the sale is not
+// reverse-chargeable and has to be taxed somewhere, and which somewhere depends on
+// a registration this library cannot see:
+//
+//   OSS-registered      → the CUSTOMER's rate (the rule above €10 000)
+//   not registered      → YOUR OWN rate (what the sub-threshold regime allows, and
+//                         the only rate you can actually remit)
+//
+// Charging the customer's rate while unregistered collects VAT with nowhere to pay
+// it over — the mirror of under-collecting, awkward in a different way. It is a real
+// case for a B2B seller: a customer below its own registration threshold, a typo, or
+// VIES unreachable, where this library charges rather than exempts.
+
+test("without a valid VAT id, oss decides whose rate applies", async () => {
+  const registered = await resolveTax({ originCountry: "IT", country: "DE" });
+  assert.equal(registered.percent, 19, "OSS-registered: the customer's rate");
+  assert.equal(registered.displayName, "MwSt");
+
+  const not = await resolveTax({ originCountry: "IT", country: "DE", oss: false });
+  assert.equal(not.percent, 22, "not registered: your own rate");
+  // The NAME has to follow the rate, or the invoice says MwSt above an Italian figure.
+  assert.equal(not.displayName, "IVA");
+});
+
+test("oss defaults to registered, because that is the rule once you are over", async () => {
+  const [dflt, explicit] = await Promise.all([
+    resolveTax({ originCountry: "IT", country: "DE" }),
+    resolveTax({ originCountry: "IT", country: "DE", oss: true }),
+  ]);
+  assert.equal(dflt.percent, explicit.percent);
+});
+
+test("oss: false moves nothing else", async () => {
+  // Domestic is domestic, a valid id still reverse charges, and outside the EU is
+  // still out of scope. If any of those moved, the option would be doing too much.
+  const domestic = await resolveTax({ originCountry: "IT", country: "IT", oss: false });
+  assert.equal(domestic.percent, 22);
+  assert.equal(domestic.reverseCharge, false);
+
+  const reverse = await resolveTax({
+    originCountry: "IT",
+    country: "DE",
+    taxNumber: "DE143454214",
+    oss: false,
+  });
+  assert.equal(reverse.reverseCharge, true);
+  assert.equal(reverse.percent, 0);
+
+  const export_ = await resolveTax({ originCountry: "IT", country: "US", oss: false });
+  assert.equal(export_.outOfScope, true);
+  assert.equal(export_.percent, 0);
+});
