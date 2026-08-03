@@ -1,3 +1,10 @@
+# [3.2.0](https://github.com/arnaudjnn/billing-tools/compare/v3.1.1...v3.2.0) (2026-08-03)
+
+
+### Features
+
+* **usage:** a cache in front of the ledger, and a way to skip the unbounded read ([d545f1b](https://github.com/arnaudjnn/billing-tools/commit/d545f1bc9cf19dec8c26b8e33f43321dabef1e4b))
+
 ## [3.1.1](https://github.com/arnaudjnn/billing-tools/compare/v3.1.0...v3.1.1) (2026-08-03)
 
 
