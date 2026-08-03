@@ -1,3 +1,10 @@
+# [2.11.0](https://github.com/arnaudjnn/billing-tools/compare/v2.10.2...v2.11.0) (2026-08-03)
+
+
+### Features
+
+* **usage:** count org-wide windows in Stripe, and pool an allowance per seat ([b9a6fb1](https://github.com/arnaudjnn/billing-tools/commit/b9a6fb11183a129124588fb20e63e0d004ae1efa))
+
 ## [2.10.2](https://github.com/arnaudjnn/billing-tools/compare/v2.10.1...v2.10.2) (2026-08-03)
 
 
