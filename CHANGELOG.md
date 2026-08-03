@@ -1,3 +1,10 @@
+# [2.13.0](https://github.com/arnaudjnn/billing-tools/compare/v2.12.0...v2.13.0) (2026-08-03)
+
+
+### Features
+
+* **usage:** report the caller's seat, and let a seatless plan name one ([ca743a8](https://github.com/arnaudjnn/billing-tools/commit/ca743a830c7434d172235fcc6acdadfd2ae71e1b))
+
 # [2.12.0](https://github.com/arnaudjnn/billing-tools/compare/v2.11.0...v2.12.0) (2026-08-03)
 
 
