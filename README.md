@@ -16,6 +16,7 @@
   <img alt="WorkOS" src="https://img.shields.io/badge/WorkOS-000000.svg">
   <img alt="MCP compatible" src="https://img.shields.io/badge/MCP-compatible-16a34a.svg">
   <img alt="Framework agnostic" src="https://img.shields.io/badge/framework-agnostic-8A8A9A.svg">
+  <a href="https://github.com/arnaudjnn/billing-tools/actions/workflows/test.yml"><img alt="Tests" src="https://github.com/arnaudjnn/billing-tools/actions/workflows/test.yml/badge.svg"></a>
   <img alt="PRs welcome" src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg">
 </p>
 
@@ -328,8 +329,8 @@ registerBillingCommands(program, { configDir: "~/.acme", envPrefix: "ACME", defa
 | `currency` | `"usd"` | Stripe currency |
 | `freeCredits` | `100` | Welcome credit on first customer creation |
 | `internalDomains` | `[]` | Orgs with these **verified** WorkOS domains are unmetered (see `internalDomainsFromEnv`) |
-| `tax.origin` | unset | Where you're established (`"IT"`). Set it and every charge the library raises is taxed, calculated locally. Unset = untaxed |
-| `tax.mode` | derived | `"billing-tools"` \| `"stripe"` \| `"none"`. Overrides what `origin` implies |
+| `tax.origin` | unset | Where you're established (`"IT"`). Decides domestic vs cross-border, which is the whole question a VAT rate turns on. Unset falls back to the Stripe account's country — `mode: "none"` is how you opt out of tax entirely |
+| `tax.mode` | derived | `"local"` \| `"stripe"` \| `"none"`. Overrides what `origin` implies |
 
 ## Roadmap
 
@@ -337,7 +338,7 @@ registerBillingCommands(program, { configDir: "~/.acme", envPrefix: "ACME", defa
 
 ## Contributing
 
-Issues and PRs welcome. The engine is plain TypeScript compiled with `tsc`; `dist/` is committed (consumers install via Git). See `AGENTS.md` for the architecture, the adapter interface, the SDK-first doctrine, and the release flow.
+Issues and PRs welcome. The engine is plain TypeScript compiled with `tsc`; `dist/` is gitignored and built in CI, so it exists only in the published npm tarball. See `AGENTS.md` for the architecture, the adapter interface, the SDK-first doctrine, and the release flow.
 
 ## License
 
