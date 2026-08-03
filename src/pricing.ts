@@ -134,6 +134,16 @@ export interface PlanPriceView {
    */
   totals: Record<BillingInterval, MoneyView>;
   rows: readonly SeatRowView[];
+  /**
+   * The name of the seat a plan that sells NONE gives you (`seat.display.label`),
+   * else null.
+   *
+   * A card still has to label that plan's single seat segment, and with nothing
+   * here the app typed the words in — a string that then had to agree with what
+   * the meter and the usage screen call the same seat. `rows` stays empty: this
+   * seat is not purchasable and must never appear in a basket.
+   */
+  seatLabel: string | null;
   /** Total seats a basket must stay within, across every type. `minSeats: 2` is
    *  "a team of one is Hobby". Null max = unlimited. A seat stepper needs both,
    *  and deriving them from the rows' own min/max gets the plan-level total
@@ -370,6 +380,7 @@ export function derivePlanViews(
           minSeats: sells.kind === "seats" ? (sells.minSeats ?? 0) : 0,
           maxSeats: sells.kind === "seats" ? (sells.maxSeats ?? null) : null,
           rows,
+          seatLabel: model.seat ? (text(model.seat.display?.label) ?? model.seat.key) : null,
           pooled: model.display?.pooled
             ? {
                 title: text(model.display.pooled.title) ?? "",

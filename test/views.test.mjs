@@ -10,7 +10,7 @@ test('plan config derives the pricing surfaces', async () => {
   // scartoffie's real numbers, in the new shape, with card content on the plan.
   const PLANS = definePlans({
     hobby: { sells: { kind: "nothing" }, cap: { kind: "pool", credits: 1000, onExhausted: "block" },
-      limits: { members: 1 }, sale: "free",
+      limits: { members: 1 }, sale: "free", seat: { key: "solo", display: { label: "Posto unico" } },
       display: { name: "Hobby", order: 1, tagline: "Per iniziare", features: ["Ricerche di base"],
                  cta: { label: "Iniziate gratis" } } },
     pro: { sells: { kind: "seats", minSeats: 2, maxSeats: 100, seatTypes: {
@@ -38,6 +38,13 @@ test('plan config derives the pricing surfaces', async () => {
   ok("ordered by display.order", views.map((v) => v.key).join(",") === "hobby,pro,enterprise");
   ok("hobby is free with a pool allowance", hobby.price.kind === "free" && hobby.included.scope === "pool" && hobby.included.credits === 1000);
   ok("hobby is the current plan → cta current", hobby.cta.kind === "current");
+  // A card labels the single seat segment of a plan that sells no seats. The
+  // words come from the plan, not from the app — the same label the usage
+  // screen's seat pill shows, so the two cannot call one seat two things.
+  ok("seatless plan publishes the name of the seat it gives",
+     hobby.price.seatLabel === "Posto unico" && hobby.price.rows.length === 0, hobby.price.seatLabel);
+  ok("a plan that SELLS seats has no implicit seat label",
+     pro.price.seatLabel === null && ent.price.seatLabel === null);
   ok("pro headline = cheapest non-shared seat per month", pro.price.headline.text === "€18", pro.price.headline.text);
   ok("pro card rows exclude nothing but flag the shared seat",
      pro.price.rows.length === 3 && pro.price.rows.find((r) => r.key === "api").shared === true);
