@@ -106,29 +106,6 @@ export async function checkBillingSetup(opts: {
     detail: `${account.id} (${account.country ?? "?"}) — ${livemode ? "LIVE" : "test"} mode`,
   });
 
-  // `"local"` is genuinely as good as Stripe Tax for VAT/GST — 27 EU countries with
-  // one published rate each — and genuinely not for the US, where the rate is a
-  // stack of state + county + city + district across 13 000+ jurisdictions. Saying
-  // so at deploy time is the only place it can be said usefully: at charge time the
-  // choice has already been made, and on an invoice it is invisible.
-  if (taxMode === "local") {
-    const origin = opts.config?.tax?.origin;
-    const allowed = opts.config?.tax?.allowApproximate;
-    if (origin?.toUpperCase() === "US" && !allowed) {
-      checks.push({
-        level: "warn",
-        title: "US sales tax under local calculation",
-        detail:
-          "the origin is US and `allowApproximate` is not set, so any US-destination charge will " +
-          "THROW rather than go out under-taxed",
-        fix:
-          'Use `tax: { mode: "stripe" }` for US destinations — local rates are state-level only ' +
-          "(Illinois 6.25% vs Chicago ~10.25%), and no free dataset resolves the 13 000+ local " +
-          "jurisdictions. Set `allowApproximate: true` only if the state rate is close enough for you",
-      });
-    }
-  }
-
   if (taxMode === "local") {
     // `taxRatesFor` mints a TaxRate per (country, percent, name) on first use and
     // reuses it forever, so the account accumulates a handful. Nothing to provision,
@@ -269,6 +246,10 @@ export async function checkBillingSetup(opts: {
   // the old balance from `customer.balance` while new debits accumulate in the
   // configured currency. Nothing errors. That silence is the reason this check
   // exists: it is the one way to see a currency change half-applied.
+  // Counted during the customer sample below, so the US-exposure check costs no
+  // extra requests. Declared out here because the sample is inside `if (currency)`
+  // and the check is not.
+  let usCustomers = 0;
   if (currency) {
     const want = currency.toLowerCase();
     const sample: string[] = [];
@@ -294,6 +275,11 @@ export async function checkBillingSetup(opts: {
       if (customer.currency && customer.currency !== want) {
         if (sample.length < 5) sample.push(`${customer.id} (${customer.currency})`);
       }
+      // WHERE THE CUSTOMER IS, not where we are. Tax is owed at the place of
+      // supply, so a French seller with US customers has US exposure and a US
+      // seller with only EU customers has none — the earlier version of this check
+      // keyed off `config.tax.origin` and had it exactly backwards.
+      if (customer.address?.country?.toUpperCase() === "US") usCustomers++;
       if (customer.metadata?.auto_reload_enabled === "true" && reloadNoCard.length < 5) {
         const pms = await stripe.paymentMethods.list({ customer: customer.id, type: "card", limit: 1 });
         if (pms.data.length === 0) reloadNoCard.push(customer.id);
@@ -332,6 +318,33 @@ export async function checkBillingSetup(opts: {
               "on the old currency deliberately",
           },
     );
+  }
+
+  // ── US customers under local calculation ───────────────────────────────────
+  //
+  // Keyed on WHERE THE CUSTOMER IS, not where we are. Tax is owed at the place of
+  // supply, so a French seller with US customers has US exposure and a US seller
+  // with only EU customers has none. The first version of this check read
+  // `config.tax.origin` and had it exactly backwards — it would have stayed silent
+  // for the one deployment that needed it.
+  //
+  // It is a WARNING, not an error: whether those customers are actually taxable
+  // depends on economic-nexus thresholds per state (commonly ~$100k or 200
+  // transactions), which no local dataset knows. What the doctor can say is that
+  // the exposure exists and the rate this mode would apply is state-level only.
+  if (taxMode === "local" && usCustomers > 0 && !opts.config?.tax?.allowApproximate) {
+    checks.push({
+      level: "warn",
+      title: "US customers under local tax calculation",
+      detail:
+        `${usCustomers} customer(s) sampled have a US address, and charges to them will THROW ` +
+        "rather than go out under-taxed (state-level rates only: Illinois 6.25% vs Chicago ~10.25%)",
+      fix:
+        'Use `tax: { mode: "stripe" }` if you have crossed a state\'s economic-nexus threshold — ' +
+        "no free dataset resolves the 13 000+ US local jurisdictions. Set `allowApproximate: true` " +
+        "only if you have decided the state rate is close enough, or `mode: \"none\"` if you are not " +
+        "registered anywhere in the US",
+    });
   }
 
   // ── More than one live subscription per customer ───────────────────────────
