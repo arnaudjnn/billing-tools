@@ -247,3 +247,38 @@ test("a Stripe failure degrades to uncounted rather than throwing", async () => 
   }
   assert.equal(total, 4, "the wallet figure still stands");
 });
+
+test("wallet: null skips the balance walk — the one unbounded read here", async () => {
+  // `usageSince` pages balance transactions across the whole window, 100 per
+  // request, and an org whose API usage the wallet funds writes one transaction
+  // per call. On a plan where no per-caller window can ever be wallet-funded that
+  // walk returns nothing and still costs the requests.
+  const { calls } = fakeStripe({ summaries: { cus_u1: 30 } });
+  const walked = { calls: 0 };
+  const spyWallet = {
+    covers: { orgIncluded: false, callerIncluded: false },
+    async record() {},
+    async total() { walked.calls++; return 0 },
+  };
+
+  const withWallet = stripeScopeUsageLedger({ wallet: spyWallet });
+  await withWallet.total({ orgId: "org_1", customerId: "cus_org", start: 1, filter: { callerId: "u1" } });
+  assert.equal(walked.calls, 1, "consulted by default");
+
+  invalidateUsageScopes();
+  const without = stripeScopeUsageLedger({ wallet: null });
+  const total = await without.total({
+    orgId: "org_1", customerId: "cus_org", start: 1, filter: { callerId: "u1" },
+  });
+  assert.equal(walked.calls, 1, "not consulted again — the walk is gone");
+  // And the INCLUDED half is still counted, which is the whole point: skipping the
+  // wallet must not turn into skipping the window.
+  assert.ok(calls.summaries.length > 0, "the scope meter is still read");
+  assert.equal(typeof total, "number");
+});
+
+test("wallet: null still answers an org-scoped query with 0 rather than throwing", async () => {
+  fakeStripe();
+  const l = stripeScopeUsageLedger({ wallet: null });
+  assert.equal(await l.total({ orgId: "org_1", customerId: "cus_org", start: 1 }), 0);
+});

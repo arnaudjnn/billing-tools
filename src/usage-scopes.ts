@@ -209,9 +209,20 @@ export interface ScopeLedgerOptions {
    * Where WALLET-funded per-caller usage is read from. Defaults to the balance
    * ledger, which is exact and has no lag because the debit IS the record.
    *
-   * A seam only so a test can substitute one; there is no second right answer.
+   * **Pass `null` when no per-caller window on your plans can ever be
+   * wallet-funded**, and the walk behind it disappears. It is the most expensive
+   * read in this file and the only unbounded one: `usageSince` pages balance
+   * transactions newest-first across the whole window, 100 per request, and an
+   * org whose API usage the wallet funds writes one transaction per call — so a
+   * monthly window can cost tens of requests, on every per-member read.
+   *
+   * It is right to keep it wherever per-caller usage CAN move money: a
+   * `cap: wallet` plan, or `onExhausted: "wallet"` once a pack is spent. Dropping
+   * it there under-reports, which reads as generosity and refuses no one. When in
+   * doubt, leave it and put `cachedUsageLedger` in front instead — that bounds the
+   * cost without changing the answer.
    */
-  wallet?: UsageLedger;
+  wallet?: UsageLedger | null;
 }
 
 /**
@@ -229,7 +240,11 @@ export interface ScopeLedgerOptions {
  */
 export function stripeScopeUsageLedger(opts: ScopeLedgerOptions = {}): UsageLedger {
   const eventName = opts.eventName ?? SCOPE_METER_EVENT;
-  const wallet = opts.wallet ?? stripeBalanceUsageLedger();
+  // `undefined` is "the caller did not say" and gets the balance ledger; an
+  // explicit `null` is "no per-caller window here is ever wallet-funded", which
+  // is the one statement that makes skipping the walk correct rather than
+  // under-reporting.
+  const wallet = opts.wallet === null ? null : (opts.wallet ?? stripeBalanceUsageLedger());
 
   return {
     covers: { orgIncluded: false, callerIncluded: true } satisfies LedgerCoverage,
@@ -286,10 +301,10 @@ export function stripeScopeUsageLedger(opts: ScopeLedgerOptions = {}): UsageLedg
       // No caller filter means an org-wide window, which this leg does not answer.
       // The composite never routes one here; if something else does, the wallet
       // figure alone is the honest answer rather than a wrong one.
-      if (scope === "org") return wallet.total(query);
+      if (scope === "org") return wallet ? wallet.total(query) : 0;
 
       const [paid, included] = await Promise.all([
-        wallet.total(query),
+        wallet ? wallet.total(query) : 0,
         (async () => {
           try {
             const meter = await meterIdFor(eventName, { create: false });

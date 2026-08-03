@@ -242,6 +242,47 @@ So the axis is needed when the read is caller-filtered (`scope: "caller"` **or**
 
 **`orgWide` is a seam too**, and the one most likely to move: Stripe's Meter Usage Analytics API answers the same question grouped by a dimension (`caller_id`), so if it becomes generally available it belongs there — and the per-caller leg could point at it too, at which point the scope customers disappear. Metronome (a Stripe product) already exposes exactly that shape (`POST /v1/usage/groups`, arbitrary `group_key`), but it is a separate vendor, a separate contract and 0.8% of billing volume, so it stays out.
 
+
+### What limits this, and the one lever that moves it
+
+**The constraint is Stripe's RATE limits, not latency or storage.** Live: 100 req/s
+globally, **25 req/s per endpoint**, 20 read/s for Search. Measured on a real
+per-seat catalogue, one metered call by a member issues two `listEventSummaries`
+(the seat pack and a caller-scoped limit) plus two balance-transaction walks. Since
+every window read goes through the same endpoint, that shape tops out around **a
+dozen metered calls per second for the whole account**, whatever the traffic.
+
+**The most expensive read is the wallet leg, and it is the only unbounded one.**
+`usageSince` pages balance transactions newest-first across the window, 100 per
+request, and an org whose API usage the wallet funds writes one transaction per
+call — so a monthly window can cost tens of requests on every per-member read.
+`stripeScopeUsageLedger({ wallet: null })` removes it, and is correct only where no
+per-caller window can ever be wallet-funded (not a `cap: wallet` plan, and not one
+whose pack overflows with `onExhausted: "wallet"`). Dropping it elsewhere
+under-reports, which reads as generosity and refuses no one.
+
+**`cachedUsageLedger(ledger, { ttlMs })` is the general lever**, and it is opt-in
+because it trades the thing the meter exists for. A fixed, UTC-aligned window asked
+twice in the same second returns the same number by construction, so the reads are
+far more repetitive than the traffic; caching them collapses the per-call cost and
+coalesces a usage screen's N per-member reads into one round. The price is stated
+rather than hidden: a cached window is stale by up to `ttlMs` and the gate reads
+through it, so `overspend <= (calls/sec by one caller) x ttlMs x credits/call`.
+Size the TTL against the TIGHTEST window enforced — a `600/hour` limit tolerates
+seconds and would not tolerate a minute. `record` is never cached: a write served
+from cache is usage counted by nothing.
+
+**A per-member usage SCREEN is the other amplifier.** `memberUsage` is N summaries
+by construction (the ledger has no group-by), so a 100-seat org is ~400 requests per
+render — sixteen seconds of that endpoint's entire budget. Cache it at the page,
+not per request.
+
+**Object count.** One Stripe Customer per active member per org. Stripe holds
+millions, but anything that ITERATES customers must bound itself by objects
+examined rather than by matches found — the scopes outnumber real customers and are
+the most recently created, so they sit at the front of `customers.list`. The
+doctor's currency check does exactly that (2 000 examined).
+
 **What no store means you give up: the audit trail.** Nothing here can say WHICH actions made up a total. `UsageLedger` is still a seam, so a consumer who wants per-action history brings their own `ledger` — the library simply no longer ships one, or the database driver it would need.
 
 ## Spend controls — the customer's own ceiling (`getSpendControls`)

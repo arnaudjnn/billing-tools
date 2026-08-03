@@ -215,6 +215,12 @@ export {
 // `redisUsageCounters`, and the `meter.db` / `meter.counters` shortcuts) are GONE.
 // They existed for exactly this question, and a database is no longer the answer
 // to it. Bring your own `ledger` if you want the per-action history a store keeps.
+// A short-lived cache in front of ANY ledger. Opt-in, because a cached window is
+// a stale window and the gate reads through it — see the file for the overspend
+// bound. It is what keeps a per-seat catalogue off Stripe's 25 req/s per-endpoint
+// limit, and it collapses a usage screen's N per-member reads into one round.
+export { cachedUsageLedger, type UsageCacheOptions } from "./usage-cache.js";
+
 export {
   stripeScopeUsageLedger,
   invalidateUsageScopes,
