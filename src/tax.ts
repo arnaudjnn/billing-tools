@@ -151,18 +151,71 @@ export type TaxMode =
   | "none";
 
 /**
- * The declared mode, with the older fields folded in.
+ * The declared mode. **Nothing declared means `"billing-tools"`.**
  *
- * `origin` alone means `"billing-tools"`: naming where you are established is the
- * only thing that mode needs, so requiring a second field to say "yes, really"
- * would be ceremony. `automatic: true` remains `"stripe"`. Nothing declared is
- * `"none"` — the same silence that used to mean "untaxed", now spelled.
+ * That default is the whole point, and it used to be `"none"`. Silence meant no tax
+ * on anything the library charged — so a deployment that never thought about VAT
+ * shipped charging none of it, which is the expensive direction: over-charging is
+ * recoverable and under-collecting means owing it yourself, with interest, in every
+ * jurisdiction you sold into. "I did not configure tax" is not a statement that the
+ * sale is untaxed.
+ *
+ * The mode needs to know where you are ESTABLISHED, and that used to be why it
+ * could not default: no `origin`, no rate. It no longer has to be declared —
+ * `originFor` falls back to the Stripe account's own country, which is the country
+ * you gave Stripe when you signed up and the best available answer. So the default
+ * needs no config at all.
+ *
+ * `automatic: true` is still `"stripe"`, and `"none"` is now an explicit opt-out —
+ * correct for an account that genuinely charges no tax, and something you have to
+ * write down rather than arrive at by omission.
  */
 export function taxModeOf(tax: BillingConfig["tax"] | undefined): TaxMode {
-  if (!tax) return "none";
-  if (tax.mode) return tax.mode;
-  if (tax.automatic) return "stripe";
-  return tax.origin ? "billing-tools" : "none";
+  if (tax?.mode) return tax.mode;
+  if (tax?.automatic) return "stripe";
+  return "billing-tools";
+}
+
+// The Stripe account's country, memoised. One read per process: an account does not
+// change country, and this sits behind `taxFor` on the hot path of every metered
+// call (the auto-reload invoice is raised there).
+let accountCountry: string | null | undefined;
+
+/**
+ * Where the business is established: `config.tax.origin`, else the Stripe account's
+ * country.
+ *
+ * Explicit always wins — an account registered in one country can be established in
+ * another, and only the app knows. The fallback exists so the common case needs no
+ * config, and it NEVER throws: it is on a charge path, so a Stripe blip must cost a
+ * tax rate, not the charge.
+ */
+export async function originFor(tax: BillingConfig["tax"] | undefined): Promise<string | null> {
+  if (tax?.origin) return tax.origin;
+  if (accountCountry !== undefined) return accountCountry;
+  try {
+    const account = await getStripe().accounts.retrieve();
+    accountCountry = account.country ?? null;
+  } catch {
+    // Not cached as null on failure: a transient error should be retried, whereas a
+    // genuine "no country on the account" is settled and worth remembering.
+    return null;
+  }
+  return accountCountry;
+}
+
+/**
+ * Test seam + escape hatch after an account's country changes.
+ *
+ * Also re-arms the one-time "no origin" warning. That warning is deliberately
+ * once-per-process (it is a config error, not a per-charge one, so it must not
+ * appear on every invoice) — which makes it unobservable to any test that is not
+ * the first to trigger it. Resetting it here is what keeps the "says so once"
+ * property testable instead of only asserted in a comment.
+ */
+export function invalidateTaxOrigin(): void {
+  accountCountry = undefined;
+  warnedNoOrigin = false;
 }
 
 // A missing `origin` under the billing-tools mode is a config error, not a
@@ -198,14 +251,15 @@ export async function taxFor(
     case "none":
       return {};
     case "billing-tools": {
-      const originCountry = tax?.origin;
+      const originCountry = await originFor(tax);
       if (!originCountry) {
         if (!warnedNoOrigin) {
           warnedNoOrigin = true;
           console.warn(
-            '[billing] config.tax.mode is "billing-tools" but no `origin` country is set, so no ' +
-              "rate can be worked out (domestic vs cross-border is decided by where you are " +
-              "established). Every charge the library raises goes out untaxed until you set it.",
+            "[billing] no tax origin: `config.tax.origin` is unset and the Stripe account's " +
+              "country could not be read, so no rate can be worked out (domestic vs cross-border " +
+              "is decided by where you are established). Charges go out UNTAXED until one of the " +
+              'two is available. Set `config.tax.origin`, or `mode: "none"` if that is intended.',
           );
         }
         return {};

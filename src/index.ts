@@ -389,6 +389,12 @@ export {
   // WHO calculates, declared once in `config.tax` and read by every charge.
   taxFor,
   taxModeOf,
+  // Where the business is established, resolved in ONE place: `config.tax.origin`,
+  // else the Stripe account's own country. Nothing else may read `tax.origin` — it
+  // decides domestic vs cross-border, which is the whole question a VAT rate turns
+  // on, so a second copy of it is a second answer.
+  originFor,
+  invalidateTaxOrigin,
   type TaxMode,
   type TaxDecision,
 } from "./tax.js";
