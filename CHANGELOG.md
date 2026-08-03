@@ -1,3 +1,10 @@
+# [2.17.0](https://github.com/arnaudjnn/billing-tools/compare/v2.16.0...v2.17.0) (2026-08-03)
+
+
+### Features
+
+* **setup:** one command per environment, and one call per deploy ([9ff812f](https://github.com/arnaudjnn/billing-tools/commit/9ff812f56a26c1160a3126030082016d844d44d1))
+
 # [2.16.0](https://github.com/arnaudjnn/billing-tools/compare/v2.15.0...v2.16.0) (2026-08-03)
 
 
