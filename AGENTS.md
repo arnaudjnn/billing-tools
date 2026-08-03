@@ -322,6 +322,23 @@ silently undid it — the reads landed in two ticks and two flushes. It is start
 a promise and awaited inside the same `Promise.all` for that reason. If you add a
 read to `resolveAllowance`, add it to that batch rather than in front of it.
 
+**When a read FAILS, the library says so — and the two legs no longer disagree by
+accident.** Measured with every Stripe read rate-limited: a per-caller window
+caught its own error and returned 0, so a member who had spent their entire pack
+was allowed through, while an ORG-wide window propagated and 500'd the request.
+Same cause, opposite outcomes, neither chosen. A 429 is not exotic here — 25 req/s
+per endpoint is what a traffic spike looks like — so the caps stopped applying
+exactly when the account was busiest.
+
+There is now ONE policy, on the composite: `onReadFailure` is `"last-known"`
+(default — serve the last value read successfully for that window, falling back to
+0 when there is none), `"zero"` (the old per-caller behaviour, opted into) or
+`"throw"` (refuse rather than guess). Whichever is chosen, the degradation is
+reported through **`onUsageFault`**, because the characteristic failure of usage
+counting is not an exception but a number that is silently wrong in the direction
+nobody reports. `console.error` once per process is not something a deployment can
+alert on; that is now the fallback for when no handler is registered.
+
 **A per-member usage SCREEN is the other amplifier.** `memberUsage` is N summaries
 by construction (the ledger has no group-by), so a 100-seat org is ~400 requests per
 render — sixteen seconds of that endpoint's entire budget. Cache it at the page,
