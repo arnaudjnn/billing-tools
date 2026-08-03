@@ -20,10 +20,26 @@ import type { BillingConfig } from "./types.js";
 //
 // Europe ONLY, and that is the deliberate scope. EU VAT is tractable because it is
 // 27 states with one published standard rate each; everywhere else it is not, so a
-// non-European destination is marked `approximate` and refused rather than charged
-// a rate this library does not have. `sales-tax` did carry 86 other countries, but
-// a number with no authority behind it is worse than no number: it invoices
-// confidently and under-collects silently.
+// destination where tax is due and no rate exists is marked `approximate` and
+// refused rather than charged a rate this library does not have. `sales-tax` did
+// carry 86 other countries, but a number with no authority behind it is worse than
+// no number: it invoices confidently and under-collects silently.
+//
+// **A rate is charged where the SELLER's regime says tax is due — never merely
+// because the dataset has a number for the destination.** The dataset covers 45
+// European countries, only 27 of which are in the EU, and conflating "we have a
+// rate" with "you owe it" was a real bug: GB, CH, NO, TR and IS passed the coverage
+// gate, fell through every EU branch and were charged their own domestic rate, so an
+// Italian seller invoiced 20% "VAT" to a UK customer. That is not EU VAT (the place
+// of supply is outside the EU, so none arises) and it is not UK VAT either unless
+// you hold a UK registration — it collected 20% with nowhere to pay it over, which
+// is the fault `oss: false` already exists to prevent, one border further out.
+//
+// So there are two inputs, and `registrations` is the second: where tax is due is a
+// fact about YOUR registrations, which no dataset can know. Declaring them is the
+// only model the US has — post-Wayfair you must not collect in a state until you
+// have nexus there — and it is what makes an unregistered US destination 0% and
+// CORRECT rather than a refusal.
 //
 // What Stripe Tax also gives you and this does NOT: US local jurisdictions,
 // evidence-of-location records for EU B2C, threshold monitoring, and filing
@@ -47,19 +63,24 @@ export type TaxDecision = {
    */
   outOfScope?: boolean;
   /**
-   * The rate is a KNOWN UNDER-ESTIMATE, not an exact answer.
+   * Tax IS due here and this library has no rate for the place it is due, so `percent`
+   * is 0 because there is nothing to apply — NOT because nothing is owed.
    *
-   * Set for every destination outside the 45 European countries the rate dataset
-   * covers — the US being the case that matters in practice. US sales tax is
-   * destination-based across 13 000+ jurisdictions:
+   * The distinction from `outOfScope` is the whole point: there, 0% is the complete
+   * answer; here it is a missing one. Set when the rated place falls outside the 45
+   * European countries the dataset covers — the US being the case that matters in
+   * practice, reached either domestically (a US-established seller) or through a
+   * declared US `registrations` entry. US sales tax is destination-based across
+   * 13 000+ jurisdictions:
    * counties, cities and special districts stack on the state rate, and SaaS is
    * taxable in some states and not others. Illinois is 6.25% in the table while a
    * Chicago buyer owes ~10.25%. Getting that right needs address → geocode →
    * jurisdiction boundaries, which is a data operation and not something a local
    * table can approximate.
    *
-   * `taxRatesFor` refuses to mint a Stripe rate from an approximate decision, so
-   * this cannot be applied by accident — see `allowApproximate`.
+   * `taxRatesFor` refuses to mint a Stripe rate from an approximate decision, and
+   * there is no flag to make it stop refusing: the two ways out both say something
+   * true (`registrations`, if you do not in fact owe it; `mode: "stripe"`, if you do).
    */
   approximate?: boolean;
   /** The customer accounts for the VAT (cross-border EU B2B with a valid id). */
@@ -77,6 +98,40 @@ export type TaxDecision = {
   displayName?: string;
 };
 
+/** Where you are registered to collect tax. `state` narrows it to one US state. */
+export type TaxRegistration = {
+  /** ISO country code — "IT", "GB", "US". */
+  country: string;
+  /**
+   * A US state code ("CA", "TX"), for a registration that is not country-wide.
+   *
+   * Omitted, the registration covers the whole country, which is what a VAT
+   * registration is. Present, it covers only that state — which is what US nexus
+   * is, and the reason `state` is threaded here from the customer's address.
+   */
+  state?: string;
+};
+
+/**
+ * Does a declared registration cover this place of supply?
+ *
+ * A country-wide registration covers every state in it; a state-scoped one covers
+ * only its own, and matches nothing when the customer's address carries no state —
+ * an address too vague to place inside a US registration is not evidence that it
+ * falls inside one.
+ */
+function isRegisteredIn(
+  registrations: readonly TaxRegistration[],
+  country: string,
+  state?: string | null,
+): boolean {
+  return registrations.some((r) => {
+    if (r.country.toUpperCase() !== country) return false;
+    if (!r.state) return true;
+    return Boolean(state) && r.state.toUpperCase() === state!.toUpperCase();
+  });
+}
+
 /**
  * What tax applies to this customer.
  *
@@ -92,6 +147,22 @@ export async function resolveTax(opts: {
   country: string;
   state?: string | null;
   taxNumber?: string | null;
+  /**
+   * Where you are registered to collect. **Undefined is "the caller did not say",
+   * never "registered nowhere"** — leaving it out keeps the regime rules alone
+   * deciding (domestic, plus the EU cross-border rules), which is what every
+   * deployment predating this option gets.
+   *
+   * Declaring it switches to one rule for everywhere, domestic included: tax is due
+   * where you say you are registered and nowhere else. An explicit `[]` therefore
+   * differs from undefined, and says something useful — a US-established seller with
+   * no nexus anywhere charges 0% on every sale, correctly and without a refusal.
+   *
+   * One obligation is deliberately NOT registration-gated: destination VAT on a sale
+   * from outside the EU to an EU consumer, which arises with no threshold to sit
+   * under, so an empty list cannot wish it away.
+   */
+  registrations?: readonly TaxRegistration[];
   /**
    * Are you registered for the EU One-Stop Shop?
    *
@@ -111,64 +182,99 @@ export async function resolveTax(opts: {
 }): Promise<TaxDecision> {
   const origin = opts.originCountry.toUpperCase();
   const country = opts.country.toUpperCase();
+  const domestic = origin === country;
+  const originEU = isEUMember(origin);
+  const countryEU = isEUMember(country);
 
-  // A destination outside the 45 covered countries. Whether 0% is the RIGHT answer
-  // or an unknown one depends entirely on where the seller is, and conflating the
-  // two was a real bug:
+  // ── 1. Reverse charge: the CUSTOMER accounts for the tax, so we charge 0% ────
   //
-  //   • A EUROPEAN seller exporting a digital service outside the EU is OUT OF
-  //     SCOPE for EU VAT — the place of supply is the customer's country, which is
-  //     not in the EU, so no EU VAT arises. 0% is correct and complete. (A separate
-  //     obligation may exist in the destination once a nexus threshold is crossed;
-  //     that is a registration question, not a rate this library can compute.)
+  // Three conditions rather than a library's opinion: the destination is in the EU,
+  // it is a DIFFERENT country from ours (an Italian seller has no border with an
+  // Italian buyer, so there is nothing to reverse), and a VAT number that stands up.
   //
-  //   • A seller we have NO regime for — one established outside these countries —
-  //     is different: we cannot compute their domestic rate either, so 0% is a
-  //     guess and gets refused.
-  if (!isKnownCountry(country)) {
-    const sellerCovered = isKnownCountry(origin);
+  // It deliberately does NOT require the SELLER to be in the EU. That test was here,
+  // and it billed a German business 19% MwSt on an invoice from a US supplier — tax
+  // that supplier has no obligation to collect and no way to remit. A non-EU supplier
+  // to an EU business is outside its own regime either way, and the customer
+  // self-accounts under Art. 44/196 exactly as it does for an EU one.
+  //
+  // The order matters for cost: the format check inside `isValidVatNumber` is local
+  // and rejects most rubbish, so VIES is only asked about numbers that could be real.
+  const crossBorderToEU = countryEU && !domestic;
+  const reverseCharge =
+    crossBorderToEU && Boolean(opts.taxNumber) && (await isValidVatNumber(opts.taxNumber!));
+  if (reverseCharge) {
+    const info = getRate(country);
     return {
       percent: 0,
-      reverseCharge: false,
+      reverseCharge: true,
       country,
-      type: "none",
-      ...(sellerCovered ? { outOfScope: true } : { approximate: true }),
+      type: info?.vat_abbr ? "vat" : "none",
+      displayName: info?.vat_abbr ?? undefined,
     };
   }
 
-  const standard = getStandardRate(country) ?? 0;
-  const info = getRate(country);
-  const bothEU = isEUMember(origin) && isEUMember(country);
+  // ── 2. WHOSE rate applies — or nobody's ─────────────────────────────────────
 
-  // Reverse charge, as three conditions rather than a library's opinion: both in
-  // the EU, DIFFERENT countries (an Italian seller has no border with an Italian
-  // buyer, so there is nothing to reverse), and a VAT number that stands up.
-  //
-  // The order matters for cost: the format check is local and rejects most
-  // rubbish, so VIES is only asked about numbers that could be real.
-  const crossBorderEU = bothEU && origin !== country;
-  const reverseCharge =
-    crossBorderEU && Boolean(opts.taxNumber) && (await isValidVatNumber(opts.taxNumber!));
+  // Declaring registrations replaces "domestic, plus the EU rules" with one rule for
+  // everywhere: tax is due where you say you are registered. Undefined keeps the
+  // former, because undefined is "the caller did not say" and inventing an empty list
+  // would stop a working deployment charging its own domestic VAT.
+  const dueHere = opts.registrations
+    ? isRegisteredIn(opts.registrations, country, opts.state)
+    : domestic;
+
+  // A sale from outside the EU to an EU CONSUMER: destination VAT arises with no
+  // threshold to sit under (the non-Union OSS scheme), so this is the one place tax
+  // is charged without a registration to point at. Under-collecting is the direction
+  // that is not recoverable, and an empty list is not a defence against an obligation
+  // that never had a threshold.
+  const nonUnionDestination = countryEU && !originEU && !domestic;
 
   // A cross-border EU sale with no valid VAT id is not reverse-chargeable, so it
-  // falls to be taxed somewhere. OSS-registered, that is the customer's country;
-  // otherwise it is yours, and yours is the only one you can remit.
+  // falls to be taxed somewhere, and OSS decides which. Registered (the default),
+  // the customer's country; otherwise ours, which is the only rate we can remit.
+  // A declared registration adds nothing here — both branches already name a country
+  // whose rate you can actually pay over.
   //
   // `oss` defaults to true because charging the customer's rate is what the rule is
   // once you are over the threshold, and being over it is the state a growing
   // business ends in. Opting out is the smaller, more deliberate claim.
-  const unregisteredCrossBorder = crossBorderEU && !reverseCharge && opts.oss === false;
-  const applicable = unregisteredCrossBorder ? (getStandardRate(origin) ?? 0) : standard;
-  const applicableInfo = unregisteredCrossBorder ? getRate(origin) : info;
+  const ratedCountry =
+    originEU && crossBorderToEU
+      ? opts.oss === false
+        ? origin
+        : country
+      : nonUnionDestination || dueHere
+        ? country
+        : null;
 
+  // Nothing is due, and that is a COMPLETE answer: an EU seller exporting a digital
+  // service (the place of supply is the customer's country, so no EU VAT arises), or
+  // any destination no declared registration covers. A separate obligation can still
+  // arise there once a nexus threshold is crossed — that is a registration question,
+  // and declaring one is how you answer it.
+  if (ratedCountry === null) {
+    return { percent: 0, reverseCharge: false, country, type: "none", outOfScope: true };
+  }
+
+  // Tax IS due and we have no rate for where it is due — the one case where 0% would
+  // be a guess rather than a rule, so it is flagged and `taxRatesFor` refuses it.
+  if (!isKnownCountry(ratedCountry)) {
+    return { percent: 0, reverseCharge: false, country, type: "none", approximate: true };
+  }
+
+  const info = getRate(ratedCountry);
   return {
-    percent: reverseCharge ? 0 : applicable,
-    reverseCharge,
+    percent: getStandardRate(ratedCountry) ?? 0,
+    reverseCharge: false,
     country,
     // `vat_abbr` is the country's own word for it — "IVA", "TVA", "MwSt" — which is
-    // what belongs on the customer's invoice. Consumers used to hardcode a map.
-    type: applicableInfo?.vat_abbr ? "vat" : "none",
-    displayName: applicableInfo?.vat_abbr ?? undefined,
+    // what belongs on the customer's invoice. Consumers used to hardcode a map. It
+    // follows the RATED country, not the customer's, or an `oss: false` invoice says
+    // MwSt above an Italian figure.
+    type: info?.vat_abbr ? "vat" : "none",
+    displayName: info?.vat_abbr ?? undefined,
   };
 }
 
@@ -186,8 +292,31 @@ export async function resolveTax(opts: {
  */
 async function isValidVatNumber(vatNumber: string): Promise<boolean> {
   const clean = vatNumber.replace(/[\s-]/g, "").toUpperCase();
+  // The format gate stays REAL under the test seam below: it costs nothing, and a
+  // stub that also accepted malformed numbers would test a laxer function than ships.
   if (!validateFormat(clean)) return false;
+  return vatValidator(clean);
+}
 
+// The network leg, injectable.
+//
+// The suite is OFFLINE by design (see vitest.config.ts — "no Stripe key, no WorkOS
+// key, no network. That is why it can gate every push"), and this was the one thing
+// in it still reaching out: the reverse-charge tests asserted on a real German
+// company's live registration status. So they failed whenever a member state's VIES
+// node was down — `MS_UNAVAILABLE`, which is the exact outage this file's fallback
+// exists for and the one behaviour that could not be tested while the test WAS the
+// outage. Stubbing the leg makes both the valid and the unreachable case assertable.
+let vatValidator: (cleanVatNumber: string) => Promise<boolean> = viesLookup;
+
+/** Test seam: replace the VIES lookup. Call with nothing to restore the real one. */
+export function __setVatValidatorForTests(
+  fn?: (cleanVatNumber: string) => Promise<boolean>,
+): void {
+  vatValidator = fn ?? viesLookup;
+}
+
+async function viesLookup(clean: string): Promise<boolean> {
   const country = clean.slice(0, 2);
   const number = clean.slice(2);
   try {
@@ -212,11 +341,15 @@ const VIES_TIMEOUT_MS = 4_000;
 export class ApproximateTaxError extends Error {
   constructor(readonly decision: TaxDecision) {
     super(
-      `Refusing to apply an approximate tax rate for ${decision.country}: ${decision.percent}% is ` +
-        "the state-level rate, and US sales tax stacks county, city and district rates on top " +
-        "(Illinois 6.25% vs Chicago ~10.25%), with SaaS taxable in some states and not others. " +
-        'Use `config.tax.mode: "stripe"` for US destinations, or set ' +
-        "`config.tax.allowApproximate: true` to accept a known under-estimate.",
+      `Tax is due for ${decision.country} and this library has no rate for it, so it would apply ` +
+        "NONE — the rate dataset is European-only. It deliberately does not fall back to a " +
+        "state-level figure: US sales tax stacks county, city and district rates on top across " +
+        "13 000+ jurisdictions (Illinois 6.25% vs Chicago ~10.25%), and SaaS is taxable in some " +
+        "states and not others. Two ways out, and each of them states something true: declare " +
+        "`config.tax.registrations` if you are NOT in fact registered there (nothing is collected " +
+        "where you are not registered, which is a complete answer rather than an approximation), " +
+        'or `config.tax.mode: "stripe"` if you are. To charge nothing anywhere, deliberately, ' +
+        'that is `mode: "none"`.',
     );
     this.name = "ApproximateTaxError";
   }
@@ -271,15 +404,25 @@ export async function ensureStripeTaxRate(
 
   const resolve = (async () => {
     const stripe = getStripe();
-    const existing = (await stripe.taxRates.list({ active: true, limit: 100 })).data.find(
-      (r) =>
+    // Paginated, not `.data`: a TaxRate is immutable and can only be archived, so an
+    // account accumulates one per (country, percent, name) forever — every country
+    // sold into, every reverse-charge 0%, and every historical rate change. Reading
+    // page 1 stopped finding the match past 100 and silently minted a duplicate
+    // instead, adding to the very list it was failing to search.
+    let existing: string | undefined;
+    for await (const r of stripe.taxRates.list({ active: true, limit: 100 })) {
+      if (
         r.percentage === decision.percent &&
         r.country === decision.country &&
         r.inclusive === false &&
-        r.display_name === displayName,
-    );
+        r.display_name === displayName
+      ) {
+        existing = r.id;
+        break;
+      }
+    }
     const id =
-      existing?.id ??
+      existing ??
       (
         await stripe.taxRates.create({
           display_name: displayName,
@@ -436,8 +579,8 @@ export async function taxFor(
       }
       const where = stripeCustomerId ? await customerPlaceOfSupply(stripeCustomerId) : null;
       const { rateIds } = await taxRatesFor({
-        allowApproximate: tax?.allowApproximate,
         oss: tax?.oss,
+        registrations: tax?.registrations,
         originCountry,
         // No address on file → treat it as a domestic sale (see above).
         country: where?.country ?? originCountry,
@@ -482,20 +625,21 @@ export async function taxRatesFor(opts: {
   /** See `resolveTax`. Decides whose rate a cross-border EU sale carries when the
    *  customer has no valid VAT id. */
   oss?: boolean;
-  /**
-   * Apply a rate this library knows to be an under-estimate (US destinations).
-   *
-   * Off by default, and the refusal is the point: a 6.25% Illinois rate on an
-   * invoice to a Chicago buyer who owes ~10.25% is a liability that surfaces at
-   * audit, long after the customer is gone and the difference is yours. A charge
-   * that fails with a reason is recoverable; one that succeeds at the wrong rate
-   * is not. `config.tax.allowApproximate` is how a caller who understands that
-   * says so.
-   */
-  allowApproximate?: boolean;
+  /** See `resolveTax`. Where you are registered to collect; undefined means the
+   *  regime rules alone decide. */
+  registrations?: readonly TaxRegistration[];
 }): Promise<{ decision: TaxDecision; rateIds: string[] }> {
   const decision = await resolveTax(opts);
-  if (decision.approximate && !opts.allowApproximate) throw new ApproximateTaxError(decision);
+  // Unconditional, and `allowApproximate` used to be the way past it. It was removed
+  // rather than kept, because once `registrations` exists there is no case where it
+  // is the right answer. It only ever fired where tax IS due and no rate exists —
+  // and where you are genuinely not registered, `registrations` reports 0% as a
+  // COMPLETE answer with no flag needed, while where you ARE registered, suppressing
+  // this invoices 0% on tax you owe, which is the one unrecoverable direction this
+  // whole file is written against. A flag whose only remaining use is to silently
+  // under-collect is a footgun, not an escape hatch. `mode: "none"` still says
+  // "charge nothing", deliberately and deployment-wide.
+  if (decision.approximate) throw new ApproximateTaxError(decision);
   const id = await ensureStripeTaxRate(decision, { displayName: opts.displayName });
   return { decision, rateIds: id ? [id] : [] };
 }

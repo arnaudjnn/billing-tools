@@ -331,19 +331,31 @@ export async function checkBillingSetup(opts: {
   // It is a WARNING, not an error: whether those customers are actually taxable
   // depends on economic-nexus thresholds per state (commonly ~$100k or 200
   // transactions), which no local dataset knows. What the doctor can say is that
-  // the exposure exists and the rate this mode would apply is state-level only.
-  if (taxMode === "local" && usCustomers > 0 && !opts.config?.tax?.allowApproximate) {
+  // the exposure exists and that this mode has no US rate to apply.
+  //
+  // `registrations` is the ONE thing that silences it, and it silences it by saying
+  // something true: a declared list with no US entry makes those charges 0% because
+  // nothing is owed where you are not registered. The removed `allowApproximate`
+  // silenced it too, and asserted nothing while doing so — which is why it is gone.
+  const declaredRegistrations = opts.config?.tax?.registrations;
+  const usRegistered = declaredRegistrations?.some((r) => r.country.toUpperCase() === "US");
+  const usAnswered = declaredRegistrations !== undefined && !usRegistered;
+  if (taxMode === "local" && usCustomers > 0 && !usAnswered) {
     checks.push({
       level: "warn",
       title: "US customers under local tax calculation",
       detail:
-        `${usCustomers} customer(s) sampled have a US address, and charges to them will THROW ` +
-        "rather than go out under-taxed (state-level rates only: Illinois 6.25% vs Chicago ~10.25%)",
+        `${usCustomers} customer(s) sampled have a US address, and ${
+          usRegistered
+            ? "a US registration is declared, so charges to them will THROW — this library has no US rate"
+            : "charges to them will THROW rather than go out untaxed (the rate dataset is European-only)"
+        }`,
       fix:
-        'Use `tax: { mode: "stripe" }` if you have crossed a state\'s economic-nexus threshold — ' +
-        "no free dataset resolves the 13 000+ US local jurisdictions. Set `allowApproximate: true` " +
-        "only if you have decided the state rate is close enough, or `mode: \"none\"` if you are not " +
-        "registered anywhere in the US",
+        'Declare `tax: { registrations: [...] }` without a US entry if you have not crossed a state\'s ' +
+        "economic-nexus threshold — nothing is collected where you are not registered, and that is the " +
+        'correct answer rather than an approximation. If you HAVE crossed one, use `mode: "stripe"`: no ' +
+        'free dataset resolves the 13 000+ US local jurisdictions. `mode: "none"` is how to charge ' +
+        "nothing at all, deliberately",
     });
   }
 

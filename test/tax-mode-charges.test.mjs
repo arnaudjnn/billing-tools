@@ -20,6 +20,7 @@ import { __setStripeForTests } from "../dist/billing.js";
 import { createCheckoutSession } from "../dist/checkout.js";
 import { __setPlanPricesForTests, lookupKeyFor } from "../dist/plans.js";
 import { invalidateTaxOrigin, invalidateTaxRates, taxFor, taxModeOf } from "../dist/tax.js";
+import { stripeList } from "./helpers.mjs";
 
 const PLANS = {
   pro: {
@@ -61,8 +62,8 @@ function fakeStripe({ customerCountry } = {}) {
       },
     },
     taxRates: {
-      async list() {
-        return { data: [] };
+      list() {
+        return stripeList([]);
       },
       async create(params) {
         taxRatesCreated.push(params);

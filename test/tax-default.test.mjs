@@ -16,7 +16,7 @@
 process.env.STRIPE_SECRET_KEY ??= "sk_test_fake";
 
 import assert from "node:assert/strict";
-import { test } from "vitest";
+import { afterEach, test } from "vitest";
 
 import { taxModeOf, originFor, invalidateTaxOrigin } from "../dist/tax.js";
 import { __setStripeForTests } from "../dist/billing.js";
@@ -123,7 +123,33 @@ test("an account with no country reports none, and is not re-read", async () => 
 // is not recoverable: the customer is gone and the difference is yours, with
 // interest. A charge that fails with a reason can be fixed.
 
-import { ApproximateTaxError, resolveTax, taxRatesFor } from "../dist/tax.js";
+import {
+  ApproximateTaxError,
+  __setVatValidatorForTests,
+  resolveTax,
+  taxRatesFor,
+} from "../dist/tax.js";
+
+// Reverse charge needs a VALID VAT number, and "valid" is a live VIES answer about a
+// real company. These tests used to ask the European Commission — so they broke the
+// suite's offline contract (vitest.config.ts) and went red whenever a member state's
+// node was down, which is the exact outage the fallback below exists for. The lookup
+// is stubbed per test; the local format check is not stubbed and still runs.
+// Reset to a validator that REFUSES rather than to the real one. Restoring the
+// real lookup re-arms the network between tests, so the next test written with a
+// `taxNumber` and no stub silently starts calling VIES — and fails months later,
+// intermittently, when a member state's node is down. That is how this file came
+// to be flaky in the first place. Failing deterministically with a message that
+// says what to do is strictly better than a test that usually passes.
+const unstubbed = async () => {
+  throw new Error(
+    "VIES was called without a stub. Tests must not depend on a third-party " +
+      "service being up: call viesSays(true|false) first.",
+  );
+};
+afterEach(() => __setVatValidatorForTests(unstubbed));
+__setVatValidatorForTests(unstubbed);
+const viesSays = (isValid) => __setVatValidatorForTests(async () => isValid);
 
 test("a European seller exporting outside the EU is OUT OF SCOPE, not approximate", async () => {
   // The distinction this gets wrong at its peril. A French seller supplying a
@@ -140,6 +166,156 @@ test("a European seller exporting outside the EU is OUT OF SCOPE, not approximat
 
   // And it can be charged — the guard does not fire on a complete answer.
   await assert.doesNotReject(() => taxRatesFor({ originCountry: "FR", country: "US" }));
+});
+
+test("a non-EU EUROPEAN destination is out of scope, not its own domestic rate", async () => {
+  // The bug this pins. GB, CH, NO, TR and IS are all in the rate dataset — it covers
+  // 45 European countries, only 27 of them in the EU — so they passed the coverage
+  // gate, fell through every EU branch and were charged their own standard rate: an
+  // Italian seller invoiced 20% "VAT" to a UK customer, 25% to a Norwegian one.
+  //
+  // Neither is collectable. It is not EU VAT (the place of supply is outside the EU,
+  // so none arises) and it is not UK or Norwegian VAT unless you are registered
+  // there. It collected a fifth of the invoice with nowhere to pay it over — the same
+  // fault `oss: false` exists to prevent, one border further out.
+  for (const country of ["GB", "CH", "NO", "TR", "IS"]) {
+    const d = await resolveTax({ originCountry: "IT", country });
+    assert.equal(d.percent, 0, `${country}: no EU VAT arises on an export`);
+    assert.equal(d.outOfScope, true, `${country} should be out of scope`);
+    assert.equal(d.approximate, undefined, `${country} is a complete answer, not a refusal`);
+    assert.equal(d.type, "none");
+  }
+
+  // Nothing moved for the covered EU cases, and DOMESTIC sales in those same
+  // countries are unaffected — a UK seller still charges UK VAT to a UK customer.
+  const gbDomestic = await resolveTax({ originCountry: "GB", country: "GB" });
+  assert.equal(gbDomestic.percent, 20);
+  const chDomestic = await resolveTax({ originCountry: "CH", country: "CH" });
+  assert.equal(chDomestic.percent, 8.1);
+});
+
+test("a registration is what puts a non-EU rate back on", async () => {
+  // The corrected rule needs a way to say "I do collect there", or an Italian seller
+  // with a genuine UK VAT registration could never charge UK VAT.
+  const registered = await resolveTax({
+    originCountry: "IT",
+    country: "GB",
+    registrations: [{ country: "IT" }, { country: "GB" }],
+  });
+  assert.equal(registered.percent, 20, "registered in GB: GB VAT applies");
+  assert.equal(registered.outOfScope, undefined);
+
+  // And a registration elsewhere does not leak onto an unrelated destination.
+  const norway = await resolveTax({
+    originCountry: "IT",
+    country: "NO",
+    registrations: [{ country: "IT" }, { country: "GB" }],
+  });
+  assert.equal(norway.outOfScope, true);
+  assert.equal(norway.percent, 0);
+});
+
+test("declaring registrations governs DOMESTIC sales too; omitting them does not", async () => {
+  // Undefined is "the caller did not say", never "registered nowhere" — inventing an
+  // empty list would stop a working deployment charging its own domestic VAT.
+  assert.equal((await resolveTax({ originCountry: "IT", country: "IT" })).percent, 22);
+
+  // Declared, there is ONE rule for everywhere, domestic included. That is the only
+  // model the US has, and it is also honest for a below-threshold European seller.
+  const declared = await resolveTax({
+    originCountry: "IT",
+    country: "IT",
+    registrations: [{ country: "GB" }],
+  });
+  assert.equal(declared.percent, 0, "not registered at home: nothing to collect");
+  assert.equal(declared.outOfScope, true);
+
+  // So `[]` says something that omitting it cannot.
+  const none = await resolveTax({ originCountry: "IT", country: "IT", registrations: [] });
+  assert.equal(none.percent, 0);
+  assert.equal(none.outOfScope, true);
+});
+
+test("US nexus is per STATE, which is why `state` is finally read", async () => {
+  // It was accepted, threaded from the customer's Stripe address, and never used.
+  const regs = [{ country: "US", state: "CA" }];
+
+  // Registered in the state the customer is in: tax IS due, and we have no rate for
+  // it — an incomplete answer, so it is flagged rather than charged as 0%.
+  const ca = await resolveTax({ originCountry: "US", country: "US", state: "CA", registrations: regs });
+  assert.equal(ca.approximate, true);
+  assert.equal(ca.outOfScope, undefined);
+
+  // A state with no nexus: 0% is COMPLETE. Post-Wayfair you must not collect there.
+  const tx = await resolveTax({ originCountry: "US", country: "US", state: "TX", registrations: regs });
+  assert.equal(tx.outOfScope, true);
+  assert.equal(tx.approximate, undefined);
+  // Which means it can be charged — no refusal, no `allowApproximate` needed.
+  await assert.doesNotReject(() =>
+    taxRatesFor({ originCountry: "US", country: "US", state: "TX", registrations: regs }),
+  );
+
+  // An address too vague to place inside a state registration is not evidence that it
+  // falls inside one.
+  const noState = await resolveTax({ originCountry: "US", country: "US", registrations: regs });
+  assert.equal(noState.outOfScope, true);
+
+  // A country-wide entry covers every state in it.
+  const wide = await resolveTax({
+    originCountry: "US",
+    country: "US",
+    state: "TX",
+    registrations: [{ country: "US" }],
+  });
+  assert.equal(wide.approximate, true);
+});
+
+test("a non-EU seller reverse-charges an EU business, and does not bill it VAT", async () => {
+  // Reverse charge required BOTH parties in the EU, so a US supplier invoiced a
+  // German business 19% MwSt — tax it has no obligation to collect and no way to
+  // remit. The customer self-accounts under Art. 44/196 whoever the supplier is.
+  viesSays(true);
+  const d = await resolveTax({
+    originCountry: "US",
+    country: "DE",
+    taxNumber: "DE143454214",
+  });
+  assert.equal(d.reverseCharge, true);
+  assert.equal(d.percent, 0);
+
+  // Without a valid id the sale is B2C, and destination VAT is due with no threshold
+  // to sit under (non-Union OSS) — so this one is NOT registration-gated: an empty
+  // list cannot wish away an obligation that never had a threshold.
+  for (const registrations of [undefined, []]) {
+    const b2c = await resolveTax({ originCountry: "US", country: "DE", registrations });
+    assert.equal(b2c.percent, 19, "an EU consumer is charged their own rate");
+    assert.equal(b2c.displayName, "MwSt");
+  }
+});
+
+test("an unverifiable VAT number is CHARGED, not exempted", async () => {
+  // The most important direction in the file, and it could not be asserted while the
+  // test itself was the outage. VIES has regular per-member-state downtime
+  // (`MS_UNAVAILABLE`), and treating unreachable as valid would zero-rate a sale on
+  // the strength of a service being down. Wrongly charging is recoverable; wrongly
+  // exempting leaves you owing the VAT.
+  viesSays(false);
+  const d = await resolveTax({
+    originCountry: "IT",
+    country: "DE",
+    taxNumber: "DE143454214",
+  });
+  assert.equal(d.reverseCharge, false, "unverified is not exempt");
+  assert.equal(d.percent, 19, "so the customer's rate is charged (OSS default)");
+
+  // And a malformed number never reaches VIES at all — the local format gate is not
+  // part of the seam, so this holds whatever the stub would have said.
+  __setVatValidatorForTests(async () => {
+    throw new Error("VIES must not be asked about rubbish");
+  });
+  const junk = await resolveTax({ originCountry: "IT", country: "DE", taxNumber: "not-a-vat-id" });
+  assert.equal(junk.reverseCharge, false);
+  assert.equal(junk.percent, 19);
 });
 
 test("a seller we have no regime for IS approximate", async () => {
@@ -170,28 +346,31 @@ test("minting a rate from an approximate decision throws, and says what to do", 
       // The message has to carry the numbers: "approximate" alone does not convey
       // that the gap is four percentage points.
       assert.match(e.message, /Chicago/);
+      // Both ways out, because a refusal that names no alternative is just a wall.
       assert.match(e.message, /mode: "stripe"/);
+      assert.match(e.message, /registrations/);
       return true;
     },
   );
 });
 
-test("allowApproximate is the explicit way to accept it", async () => {
-  // Not asserting Stripe behaviour — asserting the refusal is opt-outable, so a
-  // caller who has decided the state rate is close enough is not blocked.
-  await assert.doesNotReject(async () => {
-    try {
-      await taxRatesFor({
-        originCountry: "US",
-        country: "US",
-        state: "IL",
-        allowApproximate: true,
-      });
-    } catch (e) {
-      // Anything but the approximation guard is fine here (no real Stripe key).
-      if (e instanceof ApproximateTaxError) throw e;
-    }
-  });
+test("the refusal has NO override flag, and that is deliberate", async () => {
+  // `allowApproximate` was removed rather than kept. It only ever fired where tax IS
+  // due and no rate exists, and by then it had exactly two effects: where you are not
+  // registered, `registrations` already answers 0% completely and needs no flag; where
+  // you ARE registered, suppressing this invoices 0% on tax you owe — the one
+  // unrecoverable direction. A flag whose only remaining use is silent under-collection
+  // is a footgun, so the escape hatches are the two that assert something.
+  await assert.rejects(
+    () => taxRatesFor({ originCountry: "US", country: "US", state: "IL", allowApproximate: true }),
+    ApproximateTaxError,
+    "a stale allowApproximate must not still suppress the refusal",
+  );
+
+  // And the honest way through, for a seller with no US nexus: say so.
+  await assert.doesNotReject(() =>
+    taxRatesFor({ originCountry: "US", country: "US", state: "IL", registrations: [] }),
+  );
 });
 
 // ── OSS: whose rate a cross-border EU sale carries without a VAT id ──────────
@@ -235,6 +414,7 @@ test("oss: false moves nothing else", async () => {
   assert.equal(domestic.percent, 22);
   assert.equal(domestic.reverseCharge, false);
 
+  viesSays(true);
   const reverse = await resolveTax({
     originCountry: "IT",
     country: "DE",

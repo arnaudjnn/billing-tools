@@ -192,19 +192,42 @@ export interface BillingConfig {
     /** Override the mode `origin` / `automatic` imply. See `TaxMode`. */
     mode?: "local" | "stripe" | "none";
     /**
-     * Accept a knowingly-approximate rate under `mode: "local"`.
+     * Where you are registered to collect tax, under `mode: "local"`.
      *
-     * Only US destinations are affected: the rate dataset is European-only, so no US rate exists here at all,
-     * but US sales tax stacks county, city and district rates on top of it across
-     * 13 000+ jurisdictions, and SaaS is taxable in some states and not others.
-     * Illinois reads 6.25% where a Chicago buyer owes ~10.25%.
+     * The second input a rate needs and no dataset can supply. `origin` says where
+     * you are established; this says where you have taken on an obligation, which is
+     * what actually decides whether a sale is taxed at all.
      *
-     * Without this, such a charge THROWS rather than going out under-taxed —
-     * under-collection is the one direction that is not recoverable. Prefer
-     * `mode: "stripe"` if you sell into the US; set this only if you have decided
-     * the state rate is close enough for your case.
+     * **Undefined is "the caller did not say"**, never "registered nowhere": the
+     * regime rules alone then decide (your domestic sales, plus the EU cross-border
+     * rules), which is what every deployment predating this option already gets.
+     * Declaring it switches to one rule for everywhere, domestic included — tax is
+     * due where you say you are registered and nowhere else — so `[]` is a real
+     * statement and not the same as omitting it.
+     *
+     * ```ts
+     * // An Italian seller who also holds a UK registration.
+     * registrations: [{ country: "IT" }, { country: "GB" }]
+     * // A US seller with nexus in two states, and none anywhere else.
+     * registrations: [{ country: "US", state: "CA" }, { country: "US", state: "TX" }]
+     * ```
+     *
+     * This is what makes a US destination answerable rather than a refusal: post-
+     * Wayfair you must NOT collect in a state until you have nexus there, so for the
+     * common case — no registration — 0% is the complete and correct answer, needing
+     * no flag to permit it. Where you ARE registered, the charge still refuses,
+     * because this library has no US rate; that is what `mode: "stripe"` is for.
+     *
+     * One obligation is deliberately not gated by it: destination VAT on a sale from
+     * outside the EU to an EU consumer arises with no threshold to sit under, so an
+     * empty list cannot wish it away.
+     *
+     * It replaces the removed `allowApproximate`. That flag suppressed the refusal
+     * without asserting anything, so its only remaining effect was to invoice 0% on
+     * tax you owe — the one unrecoverable direction. Say where you are registered
+     * instead, or `mode: "none"` to charge nothing deliberately.
      */
-    allowApproximate?: boolean;
+    registrations?: readonly { country: string; state?: string }[];
     /**
      * Are you registered for the EU One-Stop Shop? Default true.
      *

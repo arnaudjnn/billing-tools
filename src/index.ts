@@ -408,6 +408,7 @@ export {
   invalidateTaxOrigin,
   type TaxMode,
   type TaxDecision,
+  type TaxRegistration,
 } from "./tax.js";
 // Stripe Tax configuration as code (origin address, defaults, registrations).
 export {

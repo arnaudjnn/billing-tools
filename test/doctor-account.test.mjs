@@ -90,12 +90,29 @@ test("no US customers, no warning — even for a US-established seller", async (
   assert.equal(find(r, "US customers"), undefined);
 });
 
-test("allowApproximate silences it, because the decision has been made", async () => {
+test("declaring registrations without a US entry silences it — nothing is owed there", async () => {
+  // This replaces `allowApproximate`, which silenced the same warning while asserting
+  // nothing. A declared list is a statement: not registered in the US, so post-Wayfair
+  // those charges are 0% and complete, and there is nothing left to warn about.
   __setStripeForTests(fakeStripe({ country: "FR", customers: [customer("US")] }));
   const r = await checkBillingSetup({
-    config: config({ origin: "FR", allowApproximate: true }),
+    config: config({ origin: "FR", registrations: [{ country: "FR" }] }),
   });
   assert.equal(find(r, "US customers"), undefined);
+});
+
+test("but a declared US registration still warns — we have no US rate to apply", async () => {
+  // The opposite statement, and the case that must NOT go quiet: tax is genuinely due
+  // and this library cannot compute it, so the charge will throw. Silencing that is
+  // what the removed flag did.
+  __setStripeForTests(fakeStripe({ country: "FR", customers: [customer("US")] }));
+  const r = await checkBillingSetup({
+    config: config({ origin: "FR", registrations: [{ country: "US", state: "CA" }] }),
+  });
+  const c = find(r, "US customers");
+  assert.ok(c, "a declared US registration with no US rate must be reported");
+  assert.equal(c.level, "warn");
+  assert.match(c.detail, /registration is declared/);
 });
 
 test("it is a WARNING, not an error — nexus is not knowable from here", async () => {

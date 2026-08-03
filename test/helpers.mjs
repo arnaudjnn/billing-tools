@@ -10,6 +10,26 @@
 export const WORKOS_MAX_KEYS = 10;
 export const WORKOS_MAX_VALUE = 600;
 
+/**
+ * A Stripe list result, in BOTH shapes the SDK offers: `.data` for a page and an
+ * async iterator for `for await`.
+ *
+ * Same reasoning as the metadata limits above. A fake returning only `{ data }`
+ * makes `for await` throw, which quietly pushes the library back to reading page 1
+ * — and reading page 1 of `taxRates.list` is exactly the bug that minted a
+ * duplicate rate on any account holding more than 100. The fake has to support the
+ * pagination for a test to be able to prove the library uses it.
+ */
+export function stripeList(items = []) {
+  return {
+    data: items,
+    has_more: false,
+    async *[Symbol.asyncIterator]() {
+      yield* items;
+    },
+  };
+}
+
 function assertWithinLimits(where, store) {
   const keys = Object.keys(store);
   if (keys.length > WORKOS_MAX_KEYS) {
