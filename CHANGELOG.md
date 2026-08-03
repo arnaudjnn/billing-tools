@@ -1,3 +1,10 @@
+## [2.10.1](https://github.com/arnaudjnn/billing-tools/compare/v2.10.0...v2.10.1) (2026-08-03)
+
+
+### Bug Fixes
+
+* **top-ups:** a grant goes on the member, not in a shared metadata value ([c67ad90](https://github.com/arnaudjnn/billing-tools/commit/c67ad9034ac3792ee123e95cf78a57485a216551))
+
 # [2.10.0](https://github.com/arnaudjnn/billing-tools/compare/v2.9.0...v2.10.0) (2026-08-03)
 
 
