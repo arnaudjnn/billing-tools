@@ -1,3 +1,29 @@
+# [3.0.0](https://github.com/arnaudjnn/billing-tools/compare/v2.19.0...v3.0.0) (2026-08-03)
+
+
+* feat!: count per-member usage in Stripe, and delete every store backend ([4c64b7b](https://github.com/arnaudjnn/billing-tools/commit/4c64b7b866231726d883e31ba76ebd189f463cb1))
+
+
+### BREAKING CHANGES
+
+* the usage stores are removed — `postgresUsageLedger`,
+`counterUsageLedger`, `sqlUsageCounters`, `redisUsageCounters`,
+`memoryUsageCounters`, `ensureUsageLedgerTable`, `ensureUsageCountersTable`,
+`pruneUsageCounters`, `USAGE_EVENTS`, `USAGE_COUNTERS`, their `_DDL` aliases,
+`SqlClient`, `SqlCounterClient`, `RedisCounterClient`, `UsageCounterStore`,
+`CounterLedgerOptions`, and the `meter.db` / `meter.counters` shortcuts.
+They existed for the one question above; a database is no longer the answer to
+it. Bring your own `ledger` if you want the per-action audit trail a store keeps.
+`scopeOf` / `scopesFor` now come from `usage-scopes.js`.
+
+Also fixes `coverageNeededBy`, which was wrong in BOTH directions against the
+reads `resolveAllowance` actually issues: an org-scoped limit carrying
+`callerKind` is a per-caller read but was filed under `orgIncluded` (it passed
+every check and read 0 for ever), and a caller-scoped limit over usage the wallet
+always funds was rejected for needing a store it does not. Both are pinned.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
 # [2.19.0](https://github.com/arnaudjnn/billing-tools/compare/v2.18.0...v2.19.0) (2026-08-03)
 
 
