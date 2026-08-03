@@ -1,3 +1,35 @@
+# [10.0.0](https://github.com/arnaudjnn/billing-tools/compare/v9.0.0...v10.0.0) (2026-08-03)
+
+
+* fix(tax)!: a European seller exporting outside the EU is out of scope, not unknown ([9f1f3ea](https://github.com/arnaudjnn/billing-tools/commit/9f1f3ea6670b7124c32d3c50ee18bdcb1879c7eb))
+
+
+### BREAKING CHANGES
+
+* `TaxDecision` gains `outOfScope`, and a non-European destination
+is no longer `approximate` when the seller is European.
+
+The previous version marked EVERY destination outside the 45 covered countries as
+`approximate` and refused it, regardless of where the seller was. That is right for
+a seller whose own regime we have no rates for, and wrong — badly — for a European
+one: it would have refused every export a French business made.
+
+The place of supply for a digital service is the customer's country. If that is
+outside the EU, no EU VAT arises: 0% is correct and COMPLETE, which is what
+`outOfScope` says. `approximate` now means only "we cannot compute this seller's
+regime", where 0% would be a guess.
+
+  FR -> US / CA / AU / JP    0%, outOfScope, charged
+  US -> US                   0%, approximate, refused
+  FR -> IT                   22% IVA
+  FR -> FR                   20% TVA
+
+A separate obligation can still arise in the destination once a nexus threshold is
+crossed; that is a registration question, not a rate this library can compute, and
+`checkBillingSetup` warns on US customers for exactly that reason.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
 # [9.0.0](https://github.com/arnaudjnn/billing-tools/compare/v8.0.1...v9.0.0) (2026-08-03)
 
 
