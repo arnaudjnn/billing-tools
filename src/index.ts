@@ -244,6 +244,10 @@ export {
 // Counting usage separately from moving money — the seam an included window needs.
 export {
   stripeBalanceUsageLedger,
+  postgresUsageLedger,
+  ensureUsageLedgerTable,
+  USAGE_EVENTS_DDL,
+  type SqlClient,
   stripeMeterUsageLedger,
   ensureMeters,
   invalidateMeters,

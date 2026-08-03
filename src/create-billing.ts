@@ -18,7 +18,7 @@ import type { ClaimStore } from "./agent-auth/claim-store.js";
 import { createMachinePaymentHandler, createPaymentMd, type MachinePaymentOptions } from "./machine-payment/index.js";
 import { createOAuthProxy, type OAuthProxyOptions } from "./oauth-proxy/index.js";
 import { createMeter, createApiMeterGuard } from "./metering.js";
-import type { UsageLedger } from "./usage-ledger.js";
+import { postgresUsageLedger, type SqlClient, type UsageLedger } from "./usage-ledger.js";
 import { normalizePlans } from "./plan-model.js";
 import type { PlanCatalog } from "./plans.js";
 
@@ -109,6 +109,20 @@ export interface CreateBillingOptions {
      * needs per-member figures wants its own store behind this seam.
      */
     ledger?: UsageLedger;
+    /**
+     * A Postgres-compatible client, and the easiest correct answer.
+     *
+     * Given one, usage is counted in `usage_events` via `postgresUsageLedger` —
+     * exact, per-caller, and able to see INCLUDED usage, which is the pair no
+     * Stripe primitive offers. This exists so a project that already has a
+     * database for its user↔customer sync does not have to make a ledger
+     * decision at all: pass the pool you already have.
+     *
+     * Run `ensureUsageLedgerTable(db)` once from your migrations first.
+     *
+     * `ledger` wins if both are given, for a consumer with their own store.
+     */
+    db?: SqlClient;
   };
 }
 
@@ -215,16 +229,22 @@ export function createBilling(opts: CreateBillingOptions) {
   // the default ledger IS the debits, and included usage moves no money. The
   // failure is silent and looks like generosity (every window reads 0%, nothing
   // is ever refused), so it is worth one line at boot.
-  if (opts.meter && !opts.meter.ledger && opts.plans) {
+  // The ledger, resolved once: an explicit one wins, then a database, then the
+  // Stripe default (which can only see wallet-funded calls).
+  const ledger =
+    opts.meter?.ledger ?? (opts.meter?.db ? postgresUsageLedger(opts.meter.db) : undefined);
+
+  if (opts.meter && !ledger && opts.plans) {
     const counted = normalizePlans(opts.plans).filter(
       (m) => m.cap.kind !== "wallet" || m.limits.rate.length > 0,
     );
     if (counted.length) {
       console.warn(
         `[billing] plans ${counted.map((m) => m.key).join(", ")} declare an included window or a rate ` +
-          "limit, but no `meter.ledger` was passed. The default ledger can only see wallet-funded " +
-          "calls, so that usage counts as 0 and the limits never apply. Pass a ledger " +
-          "(stripeMeterUsageLedger(), or your own store for per-caller figures).",
+          "limit, but neither `meter.db` nor `meter.ledger` was passed. The default ledger can " +
+          "only see wallet-funded calls, so that usage counts as 0 and the limits never apply. " +
+          "Pass `db` (a Postgres client — the usual answer, and the only option that also gives " +
+          "per-member figures), or a `ledger` of your own.",
       );
     }
   }
@@ -243,7 +263,7 @@ export function createBilling(opts: CreateBillingOptions) {
         planCacheTtlMs: opts.meter.planCacheTtlMs,
         cycleStart: opts.meter.cycleStart,
         cycleKey: opts.meter.cycleKey,
-        ledger: opts.meter.ledger,
+        ledger,
       })
     : undefined;
   const meterRequest = meter

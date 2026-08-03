@@ -103,6 +103,47 @@ Two deliberate fallbacks, both "allow": no principal (the org-key case above), a
 
 Anything that files something against a billing cycle must key it with `currentCycle(adapter, {orgId, plans, plan})`, the same window the meter reads. This is not stylistic: `request_top_up` used to write a calendar month while the meter read the subscription period, so for **every org with a subscription** an approved top-up granted nothing, with no error anywhere. There is now exactly ONE key — `extraAllowance` reads the cycle it is given and nothing else, so a grant is visible under the window the meter is in or it is not visible at all. Do not reintroduce a second key to read as a fallback: the reason the defect was invisible is that a miss looked like "no grant" rather than an error.
 
+## Counting usage — pick a ledger, or pass `db` (`src/usage-ledger.ts`)
+
+Usage counting is separate from moving money, behind one seam: `UsageLedger` (`record` + `total`). Three implementations ship, and the choice is forced by ONE question — **does any plan include usage, and do you want per-member figures?**
+
+| | sees INCLUDED usage | per-member | needs a DB |
+|---|---|---|---|
+| `stripeBalanceUsageLedger()` (default) | **no** | yes | no |
+| `stripeMeterUsageLedger()` | yes | **no** | no |
+| `postgresUsageLedger(db)` | yes | yes | yes |
+
+Every metered call is one `record`; every window is one `total`. The rule at the call site is **`record` always, `deductCredits` only when the wallet funded it** — an included call must be counted (or its cap can't be enforced) but must not be charged.
+
+**Wallet-only? Do nothing.** Every metered call moves money, so the default ledger sees all of it, and per-member works too (the caller is on the balance transaction's metadata).
+
+**Anything with a `cap` or a `limits.rate`? Pass `meter.db`.** The default ledger IS the Stripe debits, and included usage moves no money, so it writes no transaction to count: a pool or a per-seat pack read through it is permanently 0, every window reads 0%, and nothing is ever refused. The failure looks like generosity, which is why `createBilling` warns at boot and `checkPlansConfig(plans, { usageLedger })` makes it an **error**. (Omit `usageLedger` and that check is skipped — undefined means "the caller did not say", not "nothing is wired".)
+
+```ts
+createBilling({ adapter, config, plans, meter: { rateCard, db: pool } })
+// once, from your migrations:
+await ensureUsageLedgerTable(pool)   // or paste USAGE_EVENTS_DDL into your own tool
+```
+
+`db` is duck-typed — anything with `query(sql, params) → { rows }`, which `pg`'s Pool/Client and Neon's driver already satisfy — so **this library depends on no database driver**. `ledger` still wins if you bring your own store.
+
+**Why a table at all, when everything else here is Stripe-backed.** Because no metadata store can do it, and each was checked: Stripe customer metadata holds 50 keys, WorkOS organization metadata holds **10**, values cap at 500 chars, and *neither has an atomic increment* — counting would be read-modify-write, so two concurrent metered calls both read `n` and both write `n+1` and one disappears (Stripe idempotency keys explicitly do not cover concurrent conflicting requests). Stripe Billing Meters can't help either: `listEventSummaries` takes only customer + meter + time window + an hour/day bucket, with no dimensions and no group-by, so a per-member question returns the whole org. A meter per member is unbounded against an account-level cap, and zero-amount balance transactions would write junk into the customer's *money* ledger — the history that backs invoices. Metadata is for a handful of stable attributes; usage is an append-only event stream. Hence one row, one index-covered `SUM`.
+
+## Spend controls — the customer's own ceiling (`getSpendControls`)
+
+A monthly ceiling on what a customer may CONSUME, plus the thresholds they want warning at. Both live on the customer's Stripe metadata beside auto-reload (`spend_limit_credits`, `spend_alert_credits`), because all three are billing preferences the customer owns rather than plan config — a handful of stable values, which is exactly what metadata is for.
+
+The ceiling is **not a new gate**. It funds nothing and only refuses, which is what `state.limits` already models, so it rides the existing path: `resolveAllowance` reports it as one more `LimitState` (`kind: "spend"`), `fundingFor` checks it in the same loop, `describeDenial` writes the message. The read joins the same parallel round as every rate-limit read and comes off the customer object `getCreditBalance` already retrieves, so enforcement adds no round trip to the meter's hot path.
+
+Two things are deliberately distinct from a rate limit:
+
+- **`spend_limit_reached`, not `rate_limit_reached`.** A plan's rate limit is the product's and the customer must wait; this one is theirs and they can raise it, so the message says so. Telling them to wait would be wrong.
+- **Plan limits are reported first.** When both refuse, the one the customer *cannot* lift is the more useful thing to be told.
+
+The window is the **calendar month**, even for an annual subscriber: "monthly" is what the customer set, and the plan cycle would make that window a year wide. A cleared limit writes `""` (the Stripe metadata clear) and never `"0"`, which would read back as a ceiling of zero and refuse every call in the workspace; junk metadata means "no ceiling" for the same reason.
+
+**The ceiling sees exactly what your ledger sees.** On the default ledger it counts wallet-funded calls only — correct for a wallet-only product, and blind to included usage otherwise. That is the same reason to pass `meter.db` as above.
+
 ## Tax on charges the library raises itself
 
 A subscription is taxed by whoever builds its Checkout Session. Two charges have no session: the **auto-reload invoice** and the **top-up** bought through `buy_credits`. Both were untaxed — an account charging 22% IVA on seats invoiced 0% on a top-up. Now `config.tax.rates(customerId)` (or `automatic`) covers the auto-reload, and `registerBillingTools({ topUp })` covers `buy_credits`. Manual rates and `automatic_tax` are mutually exclusive — Stripe rejects both together. `createCreditCheckoutSession` takes `uiMode: "embedded"` to return a `ui_mode: "elements"` client secret instead of a hosted URL, so a top-up can render its card fields in a dialog through the same `BillingCheckoutSessionProvider` the seat checkout uses (a customer with a saved card is offered it rather than retyping). Hosted stays the default: a redirect needs no Stripe.js on the page and no publishable key wired, and silently moving every consumer's top-up flow is not a minor release.

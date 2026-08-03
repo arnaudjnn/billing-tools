@@ -319,10 +319,56 @@ export function checkPlansConfig(
      *  checkout is mounted; without it, self-serve plans are flagged as
      *  advertised-but-unbuyable. */
     hasCheckout?: boolean;
+    /**
+     * Whether a usage ledger is wired — `Boolean(meter.db ?? meter.ledger)`.
+     *
+     * OMIT it and the check is skipped entirely: undefined means "the caller did
+     * not say", which is not the same as "nothing is wired". Defaulting it to
+     * false would fail every existing consumer's CI over a config that may be
+     * perfectly wired, and `createBilling` already warns at boot when it really
+     * is missing. Only a plan that includes usage or rate-limits it needs one.
+     */
+    usageLedger?: boolean;
   },
 ): DoctorResult {
   const checks: Check[] = [];
   const models = normalizePlans(plans);
+
+  // A cap or a rate limit counted by the DEFAULT ledger is counted by nothing:
+  // that ledger IS the Stripe debits, and included usage moves no money. The
+  // failure looks like generosity — every window reads 0%, nothing is ever
+  // refused — so it is an ERROR here even though `createBilling` only warns. A
+  // warning in a deploy log is missable; a month of unenforced caps is not
+  // recoverable after the fact.
+  const counted =
+    options?.usageLedger === undefined
+      ? []
+      : models.filter((m) => m.cap.kind !== "wallet" || m.limits.rate.length > 0);
+  if (options?.usageLedger === undefined) {
+    // Nothing asserted, so nothing claimed.
+  } else if (!counted.length) {
+    checks.push({
+      level: "ok",
+      title: "Usage ledger",
+      detail: "no plan includes usage or rate-limits it, so the Stripe default counts everything",
+    });
+  } else if (options?.usageLedger) {
+    checks.push({
+      level: "ok",
+      title: "Usage ledger",
+      detail: `wired for ${counted.map((m) => m.key).join(", ")}`,
+    });
+  } else {
+    checks.push({
+      level: "error",
+      title: "Usage ledger",
+      detail: `plans ${counted.map((m) => m.key).join(", ")} include usage or rate-limit it, but no ledger is wired`,
+      fix:
+        "Pass `meter.db` (a Postgres client — also the only option that gives per-member " +
+        "figures) or `meter.ledger` to createBilling, and run ensureUsageLedgerTable(db) from " +
+        "your migrations. Without one, that usage counts as 0 and the caps never apply.",
+    });
+  }
 
   const legacy = models.filter((m) => m.legacy);
   if (legacy.length) {

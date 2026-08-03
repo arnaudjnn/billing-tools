@@ -177,3 +177,127 @@ export async function ensureMeters(
 export function invalidateMeters(): void {
   meterIds.clear();
 }
+
+// ── A SQL store, for the one thing Stripe cannot count ──────────────────────
+//
+// Reach for this when a plan INCLUDES usage and you also want per-member figures.
+// That pair is the gap the two Stripe ledgers leave, and no metadata store closes
+// it: Stripe customer metadata holds 50 keys, WorkOS organization metadata holds
+// 10, neither has an atomic increment (so counting races on read-modify-write),
+// and neither is somewhere you want a write on the hot path of every metered call.
+// Metadata is built for a handful of stable attributes; usage is an append-only
+// event stream. Hence a row.
+//
+// The library depends on no database driver. The client is DUCK-TYPED — anything
+// with `query(sql, params)` returning `{ rows }` satisfies it, which `pg`'s Pool
+// and Client, Neon's serverless driver and most others already do.
+
+/** The one method this needs from a driver. */
+export interface SqlClient {
+  query<R = Record<string, unknown>>(
+    sql: string,
+    params?: unknown[],
+  ): Promise<{ rows: R[] }>;
+}
+
+/**
+ * The table, and the three indexes the two queries below actually use.
+ *
+ * Shipped rather than described because the UNIQUE index is PARTIAL, and that is
+ * not a detail a consumer should have to rediscover: `idempotency_key` is
+ * nullable, only non-null keys are unique, and Postgres refuses to infer a
+ * partial index for `ON CONFLICT` unless the predicate is repeated at the insert.
+ * Getting it wrong fails every insert with 42P10.
+ *
+ * Idempotent, so it is safe to run from a migration on every deploy.
+ */
+export const USAGE_EVENTS_DDL = `
+CREATE TABLE IF NOT EXISTS usage_events (
+  id              bigserial PRIMARY KEY,
+  org_id          text NOT NULL,
+  customer_id     text,
+  action          text NOT NULL,
+  cost            integer NOT NULL,
+  -- Which allowance paid: pool | pack | wallet. Kept because "included vs
+  -- charged" is unanswerable afterwards otherwise.
+  funded          text NOT NULL,
+  caller_kind     text,
+  caller_id       text,
+  -- Makes a retried call a no-op rather than a double count.
+  idempotency_key text,
+  at              timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS usage_events_org_at_idx
+  ON usage_events (org_id, at DESC);
+CREATE INDEX IF NOT EXISTS usage_events_org_caller_at_idx
+  ON usage_events (org_id, caller_kind, caller_id, at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS usage_events_idempotency_idx
+  ON usage_events (idempotency_key) WHERE idempotency_key IS NOT NULL;
+`;
+
+/** Create the table + indexes if they are missing. Call it from your migration;
+ *  it is idempotent. Consumers who own their schema can read `USAGE_EVENTS_DDL`
+ *  instead and paste it into their own migration tool. */
+export async function ensureUsageLedgerTable(client: SqlClient): Promise<void> {
+  await client.query(USAGE_EVENTS_DDL);
+}
+
+/**
+ * Usage counted in Postgres: exact, attributable per caller, and summable over
+ * any window a plan declares (hour / day / week / month / cycle).
+ *
+ * `record` is on the hot path of every metered execution: one INSERT, no read,
+ * no transaction. `total` is one aggregate over an index-covered range.
+ */
+export function postgresUsageLedger(client: SqlClient): UsageLedger {
+  return {
+    async record(e) {
+      // ON CONFLICT on the idempotency key, so a retried execution is counted
+      // once. Without a key (the common case) every row is a distinct event. The
+      // repeated WHERE is what makes the partial index inferable — see the DDL.
+      await client.query(
+        `INSERT INTO usage_events
+           (org_id, customer_id, action, cost, funded, caller_kind, caller_id, idempotency_key, at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, to_timestamp($9 / 1000.0))
+         ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING`,
+        [
+          e.orgId,
+          e.customerId ?? null,
+          e.action,
+          e.cost,
+          e.funded,
+          e.caller?.kind ?? null,
+          e.caller?.id ?? null,
+          e.idempotencyKey ?? null,
+          e.at ?? Date.now(),
+        ],
+      );
+    },
+
+    async total(q) {
+      // [start, end): the half-open window this library defines everywhere, so an
+      // event on a boundary is counted by exactly one window and never by both.
+      const params: unknown[] = [q.orgId, q.start];
+      let sql = `SELECT COALESCE(SUM(cost), 0)::int AS total
+                   FROM usage_events
+                  WHERE org_id = $1
+                    AND at >= to_timestamp($2 / 1000.0)`;
+      if (q.end != null) {
+        params.push(q.end);
+        sql += ` AND at < to_timestamp($${params.length} / 1000.0)`;
+      }
+      // A caller filter with no id means "all callers of this kind", which is how
+      // a shared API seat is measured: one window for every key in the org.
+      if (q.filter?.callerKind) {
+        params.push(q.filter.callerKind);
+        sql += ` AND caller_kind = $${params.length}`;
+      }
+      if (q.filter?.callerId) {
+        params.push(q.filter.callerId);
+        sql += ` AND caller_id = $${params.length}`;
+      }
+      const r = await client.query<{ total: number }>(sql, params);
+      return r.rows[0]?.total ?? 0;
+    },
+  };
+}
