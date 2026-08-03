@@ -249,6 +249,28 @@ function sliceBuckets(
   return sum;
 }
 
+/** Transient-failure retry for the WRITE path only. Reads are not retried: the
+ *  next metered call issues them again, and `onReadFailure` already decides what
+ *  a failed one means. */
+async function withRetry<T>(run: () => Promise<T>, attempts = 3): Promise<T> {
+  let last: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await run();
+    } catch (e) {
+      last = e;
+      // A 4xx that is not a rate limit will not succeed on a second try — a bad
+      // customer id, a revoked key — so it fails immediately rather than costing
+      // the caller two more round trips to learn the same thing.
+      const status = (e as { statusCode?: number })?.statusCode;
+      const transient = status === undefined || status === 429 || status >= 500;
+      if (!transient || i === attempts - 1) throw e;
+      await new Promise((r) => setTimeout(r, 50 * 2 ** i));
+    }
+  }
+  throw last;
+}
+
 export interface ScopeLedgerOptions {
   /** Meter event name. Defaults to `SCOPE_METER_EVENT`. */
   eventName?: string;
@@ -326,9 +348,23 @@ export function stripeScopeUsageLedger(opts: ScopeLedgerOptions = {}): UsageLedg
             : [],
         );
         if (!events.length) return;
-        await getStripe().v2.billing.meterEventStream.create(
-          { events },
-          { apiKey: await streamToken() },
+        // Retried, because a dropped event is usage that can NEVER be counted —
+        // unlike a failed read, which the next call re-issues. Safe to retry by
+        // construction: every event carries an `identifier`, which is Stripe's own
+        // deduplication key, so a re-send that the first attempt actually
+        // delivered is discarded rather than counted twice.
+        //
+        // Bounded to two extra attempts with a short backoff: this is the hot path
+        // of every metered call, so recovering a blip is worth ~150ms and grinding
+        // through an outage is not.
+        await withRetry(async () =>
+          getStripe().v2.billing.meterEventStream.create(
+            { events },
+            // Re-read per attempt: a session token can expire between tries, and
+            // retrying with a dead one would turn a transient blip into a
+            // guaranteed loss.
+            { apiKey: await streamToken() },
+          ),
         );
       } catch (e) {
         // Still never throws: this runs inside every metered call, and a counting

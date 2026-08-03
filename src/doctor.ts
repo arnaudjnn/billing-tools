@@ -392,7 +392,13 @@ export async function checkBillingSetup(opts: {
   {
     let taxed = 0;
     let untaxedTopUps: string[] = [];
+    // Bounded like the other doctor scans. The exit below needs FIVE untaxed
+    // top-ups to trigger, which on an account that has never raised one never
+    // happens — so this walked every paid invoice the account had, for ever, on a
+    // preflight that only wants a sample.
+    let scannedInvoices = 0;
     for await (const inv of stripe.invoices.list({ limit: 100, status: "paid" })) {
+      if (++scannedInvoices > 1_000) break;
       const hasTax = (inv.total_taxes ?? []).length > 0 || (inv.default_tax_rates ?? []).length > 0;
       if (hasTax) taxed++;
       const isTopUp =
