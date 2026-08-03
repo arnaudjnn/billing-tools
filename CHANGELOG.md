@@ -1,3 +1,34 @@
+# [12.0.0](https://github.com/arnaudjnn/billing-tools/compare/v11.0.2...v12.0.0) (2026-08-03)
+
+
+* feat(tax)!: declare where you are registered, and stop charging tax nobody can remit ([a411b7f](https://github.com/arnaudjnn/billing-tools/commit/a411b7f85c82013449963597b4f2f79d20eaf467))
+
+
+### BREAKING CHANGES
+
+* `config.tax.allowApproximate` is removed. Its only remaining use
+was to under-collect silently: since the move off `sales-tax` there has been no
+non-European rate to approximate WITH, so it never applied a figure, it only
+decided whether 0% went out quietly — while the error message claimed otherwise.
+With `registrations` both its cases collapse: where you are not registered,
+`registrations` answers 0% completely and needs no permission; where you are,
+suppressing the throw invoices 0% on tax you owe, the one unrecoverable direction.
+Migration: delete it; `registrations: []` reproduces the 0% while stating why, and
+`mode: "none"` reproduces it for an account that charges no tax anywhere.
+
+Also makes the VIES lookup injectable (`__setVatValidatorForTests`). The
+reverse-charge tests asserted on a real German company's live registration status,
+so the suite went red whenever a member state's node returned MS_UNAVAILABLE — the
+exact outage the charge-rather-than-exempt fallback exists for, and the one
+behaviour untestable while the test WAS the outage. The reset now installs a
+validator that REFUSES rather than the real one, so a future test written with a
+`taxNumber` and no stub fails deterministically with a message saying what to do,
+instead of silently re-arming the network and flaking months later. The local
+format check stays outside the seam: a stub that also accepted malformed numbers
+would test a laxer function than ships.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
 ## [11.0.2](https://github.com/arnaudjnn/billing-tools/compare/v11.0.1...v11.0.2) (2026-08-03)
 
 
