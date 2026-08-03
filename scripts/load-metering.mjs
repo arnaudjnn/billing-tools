@@ -26,6 +26,7 @@ import { resolveAllowance } from "../dist/allowance.js";
 import { stripeUsageLedger } from "../dist/usage-ledger.js";
 import { stripeScopeUsageLedger, USAGE_SCOPE_KIND } from "../dist/usage-scopes.js";
 import { cachedUsageLedger } from "../dist/usage-cache.js";
+import { onUsageFault, resetUsageFaults } from "../dist/usage-faults.js";
 
 const KEY = process.env.STRIPE_SECRET_KEY;
 if (!KEY?.startsWith("sk_test")) {
@@ -42,7 +43,7 @@ stripe.on("response", (r) => {
   http.requests++;
   const path = String(r.path ?? "?").split("?")[0].replace(/\/(cus|mtr)_[A-Za-z0-9_]+/g, "/:id");
   http.byPath.set(path, (http.byPath.get(path) ?? 0) + 1);
-  if (r.status === 429) http.rateLimited++;
+  if (r.status === 429) { http.rateLimited++; http.rl429 = http.rl429 || new Map(); http.rl429.set(path, (http.rl429.get(path) ?? 0) + 1); }
   else if (r.status >= 400) http.errors++;
 });
 const snapshot = () => ({ ...http, byPath: new Map(http.byPath) });
@@ -115,6 +116,13 @@ const oneCall = (ledger, i) =>
     ledger,
   });
 
+// What the library DID when a read failed. The point of pushing past the rate
+// limit is not the throughput number, it is this: does a saturated account
+// silently stop enforcing its caps?
+const faults = [];
+resetUsageFaults();
+onUsageFault((f) => faults.push(f));
+
 async function measure(label, ledger, { calls, concurrency }) {
   // Warm: resolve the meter + scope customers once, so the steady-state figure is
   // not dominated by one-off provisioning.
@@ -123,13 +131,14 @@ async function measure(label, ledger, { calls, concurrency }) {
   const latencies = [];
   const started = Date.now();
 
+  const rejected = [];
   let next = 0;
   const worker = async () => {
     for (;;) {
       const i = next++;
       if (i >= calls) return;
       const t = Date.now();
-      try { await oneCall(ledger, i); } catch { /* counted via the response hook */ }
+      try { await oneCall(ledger, i); } catch (e) { rejected.push((e && e.message) || String(e)); }
       latencies.push(Date.now() - t);
     }
   };
@@ -146,6 +155,29 @@ async function measure(label, ledger, { calls, concurrency }) {
   console.log(`   Stripe requests ${d.requests}  →  ${perCall.toFixed(2)} per metered call`);
   console.log(`   latency         p50 ${p(0.5)}ms · p95 ${p(0.95)}ms · max ${latencies.at(-1)}ms`);
   console.log(`   429s ${d.rateLimited} · other 4xx/5xx ${d.errors}`);
+  if (rejected.length) {
+    const kinds = {};
+    for (const m of rejected) { const k = m.slice(0, 40); kinds[k] = (kinds[k] ?? 0) + 1; }
+    console.log(`   REJECTED calls ${rejected.length} -> ${JSON.stringify(kinds)}`);
+  }
+  if (http.rl429) console.log(`   429s by path   ${JSON.stringify(Object.fromEntries(http.rl429))}`);
+  http.rl429 = new Map();
+  const mine = faults.splice(0);
+  if (mine.length) {
+    const by = {};
+    for (const f of mine) by[f.outcome] = (by[f.outcome] ?? 0) + 1;
+    console.log(`   degraded reads  ${mine.length} -> ${JSON.stringify(by)}`);
+    const zeros = mine.filter((f) => f.outcome === "counted-zero").length;
+    const stale = mine.filter((f) => f.outcome === "used-last-known").length;
+    const refused = mine.filter((f) => f.outcome === "refused").length;
+    // Say which it was. "No zeros" is not the same as "all fine": a refusal is a
+    // failed call, it is simply a LOUD one.
+    if (zeros) console.log(`   ⚠ ${zeros} window(s) counted 0 — those caps did not apply (reported, not silent)`);
+    if (stale) console.log(`   ${stale} window(s) served a last-known value — bounded staleness, no cap lapsed`);
+    if (refused) console.log(`   ${refused} call(s) REFUSED rather than guessed — failed loudly, which is the point`);
+  } else {
+    console.log("   degraded reads  none");
+  }
   console.log(`   → per-endpoint ceiling ≈ ${(25 / Math.max(perCall, 0.01)).toFixed(0)} calls/s if every request hit one endpoint\n`);
   return { perCall, throughput: calls / secs, rateLimited: d.rateLimited };
 }

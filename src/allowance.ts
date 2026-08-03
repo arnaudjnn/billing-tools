@@ -21,6 +21,7 @@ import {
   type PlanModel,
 } from "./plan-model.js";
 import { extraAllowance } from "./topup.js";
+import { reportUsageFault } from "./usage-faults.js";
 import type { BillingAdapter, ResolvedConfig } from "./types.js";
 import { stripeBalanceUsageLedger, type FundingSource, type UsageLedger } from "./usage-ledger.js";
 
@@ -220,7 +221,25 @@ export async function resolveAllowance(
   // rate-limit reads above and the pack read below splits them into two flushes
   // and two Stripe requests. Measured: it silently undid the batching entirely.
   const customerPromise = needsCustomer
-    ? retrieveBillingCustomer(customerId)
+    ? retrieveBillingCustomer(customerId).catch((error: unknown) => {
+        // The wallet balance and the spend ceiling both come off this object, and
+        // unlike a usage window it is MONEY — a stale balance would let a customer
+        // spend what they do not have, so this stays fail-closed and rethrows.
+        //
+        // What it did not do was say so. Load-testing a real account past its rate
+        // limit put every 429 here: 69 metered calls rejected outright, and not one
+        // fault reported, because this read sits outside the ledger's
+        // `onReadFailure` policy. Failing closed is a choice; failing closed
+        // silently is not.
+        reportUsageFault({
+          operation: "read",
+          outcome: "refused",
+          error,
+          orgId: input.orgId,
+          scope: "customer",
+        });
+        throw error;
+      })
     : Promise.resolve(null);
 
   const spendReads: Promise<LimitState[]> = input.skipSpendLimit

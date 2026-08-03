@@ -213,7 +213,7 @@ test("an existing scope customer is reused rather than duplicated", async () => 
   );
 });
 
-test("a Stripe failure degrades to uncounted rather than throwing", async () => {
+test("a Stripe failure PROPAGATES, so the policy layer can decide", async () => {
   __setStripeForTests({
     customers: {
       async search() {
@@ -228,24 +228,43 @@ test("a Stripe failure degrades to uncounted rather than throwing", async () => 
       },
     },
   });
-  // On the hot path of every metered call: a key that cannot read customers must
-  // not take the product down. It says so once, loudly — silenced here because
-  // the complaint IS the expected behaviour.
+  // This used to return 0 here, which is the silent-generosity failure: "I could
+  // not resolve the counter" became "that member has used nothing". Load-testing a
+  // real account found it — 75 rate-limited requests, not one reported fault,
+  // because they all died in the scope resolve. The decision belongs to
+  // `stripeUsageLedger({ onReadFailure })`, which can serve a last-known value.
   const real = console.error;
   console.error = () => {};
-  let total;
   try {
-    await stripeScopeUsageLedger().record(EVENT);
-    total = await stripeScopeUsageLedger({ wallet: walletLeg(4) }).total({
-      orgId: "org_1",
-      customerId: "cus_org",
-      start: 1_000_000,
-      filter: { callerId: "u1" },
-    });
+    await assert.rejects(
+      () =>
+        stripeScopeUsageLedger({ wallet: walletLeg(4) }).total({
+          orgId: "org_1",
+          customerId: "cus_org",
+          start: 1_000_000,
+          filter: { callerId: "u1" },
+        }),
+      /no permission/,
+    );
   } finally {
     console.error = real;
   }
-  assert.equal(total, 4, "the wallet figure still stands");
+});
+
+test("a WRITE still degrades — a metered call must not die counting itself", async () => {
+  __setStripeForTests({
+    customers: { async search() { throw new Error("no permission") } },
+    billing: { meters: { list() { return { [Symbol.asyncIterator]: async function* () { yield { id: "mtr_scope", event_name: "billing_tools_scope_usage" } } } } } },
+  });
+  const real = console.error;
+  console.error = () => {};
+  try {
+    // Reports a dropped event rather than throwing: losing the count is bad, but
+    // taking down the product to report it is worse.
+    await stripeScopeUsageLedger().record(EVENT);
+  } finally {
+    console.error = real;
+  }
 });
 
 test("sources.wallet=false skips the balance walk — the one unbounded read here", async () => {

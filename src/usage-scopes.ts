@@ -170,8 +170,15 @@ function customerForScope(orgId: string, scope: string): Promise<string | null> 
       // NOT remembered as a failure. Unlike a meter, this is one cheap lookup and
       // the memo already prevents repeats on success; caching the miss would keep
       // a member uncounted for the life of the process after one blip.
-      complain(key, e);
-      return null;
+      //
+      // PROPAGATED, not swallowed. Returning null here made the caller read the
+      // window as 0, which is the silent-generosity failure one layer up from the
+      // one `onReadFailure` was written for — and load-testing a real account
+      // found it: 75 rate-limited requests produced zero reported faults, because
+      // every one of them died here. `record` still degrades (its own catch
+      // reports a dropped event); a READ now reaches the policy.
+      reportUsageFault({ operation: "resolve", outcome: "refused", error: e, scope: key });
+      throw e;
     }
   })().finally(() => inflight.delete(key));
 
