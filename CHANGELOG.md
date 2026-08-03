@@ -1,3 +1,10 @@
+## [3.1.1](https://github.com/arnaudjnn/billing-tools/compare/v3.1.0...v3.1.1) (2026-08-03)
+
+
+### Bug Fixes
+
+* **doctor:** bound the customer scan by objects examined, not by sample size ([70f6ed6](https://github.com/arnaudjnn/billing-tools/commit/70f6ed6d2c5f4946b8e807beb7ff9a5b45ed8d94))
+
 # [3.1.0](https://github.com/arnaudjnn/billing-tools/compare/v3.0.0...v3.1.0) (2026-08-03)
 
 
