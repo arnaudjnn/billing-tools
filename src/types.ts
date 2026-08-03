@@ -99,6 +99,11 @@ export interface BillingAdapter {
      *  seats and filled six paid for ten; when it is absent the active member
      *  count is used instead. */
     seats?: number | null;
+    /** The same quantity broken down by seat type. Required by
+     *  `cap.perSeat: "included"`, which multiplies each tier by its OWN
+     *  `includedCredits` — the only form that can size a pool for a plan with more
+     *  than one tier. The total above is its sum. */
+    seatCounts?: Record<string, number> | null;
   }>;
   /** Record subscription state. `plan: undefined` leaves the plan as-is; `null`
    *  clears it (back to the default plan). */
@@ -144,20 +149,44 @@ export interface BillingConfig {
    */
   defaultLocale?: string;
   /**
-   * How to tax the charges the library raises on its OWN initiative — today the
-   * auto-reload invoice, which no form precedes.
+   * WHO calculates tax, declared ONCE for the whole deployment.
    *
-   * A subscription is taxed by whoever builds its Checkout Session, which is the
-   * app. An auto-reload has no session and no address form: it fires from the
-   * meter, so the only way for it to carry the same VAT as everything else the
-   * account bills is for the deployment to say here how to work the rate out.
-   * Leave unset only on an account that charges no tax at all — `checkBillingSetup`
-   * warns when a taxed account is auto-reloading untaxed.
+   * Every charge the library builds reads this — the seat Checkout Session, the
+   * `buy_credits` top-up, and the auto-reload invoice — so the answer to "does
+   * this account charge VAT" lives in one place instead of at each call site. An
+   * explicit `taxRates` / `automaticTax` argument at a call site still wins.
+   *
+   * That per-site arrangement is why the two charges with no form behind them (the
+   * auto-reload and the top-up) went out untaxed while every seat invoice on the
+   * same account charged 22% IVA: nothing was wrong at any one site, there was
+   * simply no single place that said what the account does.
    */
   tax?: {
-    /** Stripe TaxRate ids for this customer, e.g. from `taxRatesFor`. */
+    /**
+     * Where YOU are established, as an ISO country code ("IT", "FR", "US").
+     *
+     * Setting it selects `mode: "billing-tools"` — the library works the rate out
+     * itself (`sales-tax` + VIES) from the customer's address and tax id, and
+     * applies it as an explicit Stripe TaxRate. It decides domestic vs
+     * cross-border, which is the whole question a VAT rate turns on, so there is
+     * nothing else to configure.
+     */
+    origin?: string;
+    /** Override the mode `origin` / `automatic` imply. See `TaxMode`. */
+    mode?: "billing-tools" | "stripe" | "none";
+    /**
+     * Resolve the TaxRate ids yourself, e.g. from your own records. Wins over
+     * `mode` when it returns any — the hook exists to be authoritative.
+     */
     rates?: (stripeCustomerId: string) => Promise<string[]> | string[];
-    /** Use Stripe Tax instead. Ignored when `rates` returns any. */
+    /**
+     * Use Stripe Tax. Equivalent to `mode: "stripe"`, and ignored when `rates`
+     * returns any (Stripe rejects both on one charge).
+     *
+     * Off unless set, everywhere: a charge with neither is untaxed rather than
+     * quietly handed to Stripe Tax, which without an active registration
+     * computes 0% and reports no error.
+     */
     automatic?: boolean;
   };
   /** What the payment forms offer. See `defaultPaymentMethodConfig`. */

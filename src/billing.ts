@@ -1,5 +1,10 @@
 import Stripe from "stripe";
 import { defaultPaymentMethodConfig } from "./payment-method-config.js";
+// Both of these import `getStripe` back from here. An ESM cycle, deliberately and
+// harmlessly: every binding involved is a hoisted function declaration read at CALL
+// time, never at module-evaluation time — the same shape `payment-method-config`
+// has always had. Keep it that way (no top-level use of these at import time).
+import { taxFor } from "./tax.js";
 import type { BillingAdapter, BillingConfig, ResolvedConfig } from "./types.js";
 
 // Credit model: 1 credit = 1 cent. Held in the Stripe customer credit balance,
@@ -670,11 +675,11 @@ export async function autoReloadFor(
   stripeCustomerId: string,
   config: { currency: string; tax?: BillingConfig["tax"] },
 ): Promise<void> {
-  const rates = config.tax?.rates ? await config.tax.rates(stripeCustomerId) : undefined;
-  await tryAutoReload(stripeCustomerId, config.currency, {
-    taxRates: rates,
-    automaticTax: config.tax?.automatic,
-  });
+  await tryAutoReload(
+    stripeCustomerId,
+    config.currency,
+    await taxFor(stripeCustomerId, config.tax),
+  );
 }
 
 export async function tryAutoReload(

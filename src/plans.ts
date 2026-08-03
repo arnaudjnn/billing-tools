@@ -56,6 +56,7 @@ export type {
   CycleWindow,
   Every,
   RateLimit,
+  LedgerCoverage,
 } from "./plan-model.js";
 export {
   definePlans,
@@ -77,6 +78,8 @@ export {
   cycleWindowFor,
   rateWindowFor,
   rateLimitsOf,
+  ledgerGaps,
+  coverageNeededBy,
 } from "./plan-model.js";
 
 // Library DEFAULT seat types, priced in USD (the lib's default currency — see

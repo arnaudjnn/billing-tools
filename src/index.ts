@@ -111,6 +111,8 @@ export {
   cycleWindowFor,
   rateWindowFor,
   rateLimitsOf,
+  ledgerGaps,
+  coverageNeededBy,
   includedCredits,
   includedCreditsByType,
   lookupKeyFor,
@@ -126,6 +128,7 @@ export {
   type PlanCatalog,
   type PlanSpec,
   type PlanModel,
+  type LedgerCoverage,
   type PlanDisplay,
   type PlanLimits,
   type SeatTypeSpec,
@@ -251,6 +254,8 @@ export {
   type SqlClient,
   stripeMeterUsageLedger,
   stripeUsageLedger,
+  defaultUsageLedger,
+  warnLedgerGaps,
   ensureMeters,
   invalidateMeters,
   USAGE_METER_EVENT,
@@ -409,6 +414,10 @@ export {
   invalidateTaxRates,
   taxRatesFor,
   updateCheckoutSessionTaxRates,
+  // WHO calculates, declared once in `config.tax` and read by every charge.
+  taxFor,
+  taxModeOf,
+  type TaxMode,
   type TaxDecision,
 } from "./tax.js";
 // Stripe Tax configuration as code (origin address, defaults, registrations).

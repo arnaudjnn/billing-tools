@@ -9,6 +9,7 @@ import {
 } from "./plans.js";
 import type { BillingInterval, PlansConfig } from "./plans.js";
 import { defaultPaymentMethodConfig } from "./payment-method-config.js";
+import { taxFor } from "./tax.js";
 import type { BillingConfig } from "./types.js";
 
 // Server side of the embedded checkout: turn "these seats, this interval" into
@@ -82,17 +83,30 @@ function priceIdsFor(
 // total BEFORE the customer types anything, so tax can only be a rate you picked
 // in advance — one country, no reverse charge, wrong the moment someone buys from
 // another member state. A Checkout Session inverts that: the session is a live
-// object the browser mutates (address → tax recalculated → new total), so Stripe
-// Tax computes the real rate for the real customer and the UI renders Stripe's
-// numbers instead of its own arithmetic.
+// object the browser mutates, so the rate can be recalculated from the address
+// the customer actually typed and the UI renders the session's own numbers
+// instead of its own arithmetic.
 //
-// What it costs: Stripe Tax must be set up on the account (`Tax > Registrations`
-// per jurisdiction, and a head office). With no registration Stripe computes ZERO
-// tax rather than erroring — the total silently drops to the pre-tax amount, so
-// verify a registration exists before trusting the figures.
+// WHO CALCULATES IS THE CALLER'S CHOICE, and the default is this library's own
+// calculation, not Stripe Tax:
 //
-// The prices must also carry an explicit `tax_behavior` (ensurePlans sets
-// `exclusive`); Stripe Tax refuses to calculate on `unspecified`.
+//   - `taxRates` (the default path) — `taxRatesFor` in src/tax.ts works the rate
+//     out from `sales-tax` + VIES and applies it as an explicit Stripe TaxRate.
+//     No per-transaction fee and no registrations needed to CALCULATE. Re-apply
+//     with `updateCheckoutSessionTaxRates` when the typed country differs from
+//     the one you guessed; that handoff is the work Stripe Tax charges 0.5% for.
+//     What you take on: evidence-of-location records for EU B2C, threshold
+//     monitoring, and filing.
+//   - `automaticTax: true` — Stripe Tax instead, for an account that wants the
+//     above handled. It must be set up first (`Tax > Registrations` per
+//     jurisdiction, and a head office), because with no registration Stripe
+//     computes ZERO tax rather than erroring: the total silently drops to the
+//     pre-tax amount. It also refuses to calculate on a price whose
+//     `tax_behavior` is `unspecified` (ensurePlans sets `exclusive`).
+//
+// Neither is inferred. Passing nothing means an untaxed session, which is right
+// for an account that charges no tax and loud enough to notice for one that does
+// — where the old inferred default gave a silent 0% that looked like a rate.
 
 export type CheckoutSessionResult = {
   sessionId: string;
@@ -123,9 +137,17 @@ export async function createCheckoutSession(opts: {
   email?: string;
   currency?: string;
   /**
-   * Stripe Tax. On by default, UNLESS you pass `taxRates` — supplying your own
-   * rate means you've decided to compute tax yourself, and enabling both would
-   * tax the same line twice.
+   * Stripe Tax. OFF unless you ask for it.
+   *
+   * Off is the default because the library ships its own calculation
+   * (`taxRatesFor` — `sales-tax` + VIES, no per-transaction fee) and because
+   * "on" is the more expensive mistake: Stripe Tax with no active registration
+   * computes ZERO tax rather than erroring, so the total silently drops to the
+   * pre-tax amount and the seller owes the difference. Opting in is a statement
+   * that the registrations exist; inheriting it from an unset field never was.
+   *
+   * Mutually exclusive with `taxRates` — Stripe rejects both, and it would tax
+   * the same line twice.
    */
   automaticTax?: boolean;
   /**
@@ -296,6 +318,17 @@ async function openCheckoutSession(opts: {
         : defaultPaymentMethodConfig("payment", opts.config)),
   ]);
 
+  // Tax, from the deployment's ONE declaration (`config.tax`) unless this call
+  // named its own. Needs the customer id, so it can't join the round above — and
+  // under `mode: "billing-tools"` it is the customer's address that decides the
+  // rate, which on a brand-new customer is not typed yet: the domestic rate goes on
+  // now and the browser re-applies via `updateCheckoutSessionTaxRates` once the
+  // address exists. That handoff is what Stripe Tax would otherwise charge for.
+  const tax =
+    opts.taxRates?.length || opts.automaticTax !== undefined
+      ? { taxRates: opts.taxRates, automaticTax: opts.automaticTax }
+      : await taxFor(customerId, opts.config?.tax);
+
   const line_items: Stripe.Checkout.SessionCreateParams.LineItem[] = priceIdsFor(
     prices,
     opts.plan,
@@ -304,7 +337,7 @@ async function openCheckoutSession(opts: {
   ).map(([price, quantity]) => ({
     price,
     quantity,
-    ...(opts.taxRates?.length ? { tax_rates: opts.taxRates } : {}),
+    ...(tax.taxRates?.length ? { tax_rates: tax.taxRates } : {}),
   }));
 
   const session = await stripe.checkout.sessions.create({
@@ -323,7 +356,11 @@ async function openCheckoutSession(opts: {
     // location for the customer and the tax is computed as zero. Required
     // whenever `customer` is passed rather than `customer_email`.
     customer_update: { address: "auto", name: "auto" },
-    automatic_tax: { enabled: opts.automaticTax ?? !opts.taxRates?.length },
+    // Explicit opt-in — from this call or from `config.tax.mode`, never inferred
+    // from the absence of `taxRates`. Inferring it meant a caller that passed no tax
+    // at all got Stripe Tax silently, which on an account with no registration
+    // computes 0% and says nothing.
+    automatic_tax: { enabled: tax.automaticTax === true },
     tax_id_collection: { enabled: opts.taxIdCollection ?? true },
     // A full address, collected by the billing-address element. The alternative
     // ("auto", country + postal code inside the payment element) is enough for

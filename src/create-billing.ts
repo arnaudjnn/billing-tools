@@ -19,12 +19,12 @@ import { createMachinePaymentHandler, createPaymentMd, type MachinePaymentOption
 import { createOAuthProxy, type OAuthProxyOptions } from "./oauth-proxy/index.js";
 import { createMeter, createApiMeterGuard } from "./metering.js";
 import {
+  defaultUsageLedger,
   postgresUsageLedger,
   stripeUsageLedger,
   type SqlClient,
   type UsageLedger,
 } from "./usage-ledger.js";
-import { normalizePlans } from "./plan-model.js";
 import type { PlanCatalog } from "./plans.js";
 
 // One-call composition helper. Instead of wiring the five factories by hand in
@@ -241,35 +241,14 @@ export function createBilling(opts: CreateBillingOptions) {
   // included call counted as 0 and every window read 0%.
   const ledger =
     opts.meter?.ledger ??
-    stripeUsageLedger({
-      ...(opts.meter?.db ? { perCaller: postgresUsageLedger(opts.meter.db) } : {}),
-    });
+    (opts.meter?.db
+      ? stripeUsageLedger({ perCaller: postgresUsageLedger(opts.meter.db) })
+      : defaultUsageLedger());
 
-  // What the composite still cannot do without a store: a window that is both
-  // INCLUDED and PER-MEMBER. Balance transactions carry the caller but only exist
-  // where money moved, and a meter summary sees every call but cannot be filtered
-  // by one. So this warns for exactly that combination — a seat pack, or a
-  // `scope: "caller"` limit — rather than for any cap, which is the difference
-  // between "you need a database" and "you don't".
-  //
-  // Worth a line at boot because the failure is silent and looks like generosity:
-  // the window reads 0% and nothing is ever refused.
-  if (opts.meter && !opts.meter.ledger && !opts.meter.db && opts.plans) {
-    const perMember = normalizePlans(opts.plans).filter(
-      (m) => m.cap.kind === "per_seat" || m.limits.rate.some((l) => l.scope === "caller"),
-    );
-    if (perMember.length) {
-      console.warn(
-        `[billing] plans ${perMember.map((m) => m.key).join(", ")} meter an INCLUDED window per ` +
-          "member (a seat pack, or a caller-scoped rate limit), and no `meter.db` / `meter.ledger` " +
-          "was passed. Org-wide windows are counted in Stripe, but a per-member one cannot be: a " +
-          "balance transaction carries the caller yet only exists where money moved, and a meter " +
-          "summary cannot be filtered by caller. That usage counts as 0, so the window never " +
-          "applies. Pass `db` (a Postgres client) or a `ledger` of your own — or pool the " +
-          'allowance instead (`cap: { kind: "pool", perSeat: N }`), which needs no store.',
-      );
-    }
-  }
+  // What the wired ledger cannot count is warned about by `createMeter` below,
+  // which every metered call goes through whichever constructor composed the app —
+  // so the rule lives in one place (`warnLedgerGaps`) instead of once per entry
+  // point, which is how the two copies came to disagree about pooled plans.
 
   // Bound call-site meter + API route guard (opt-in). Plan resolution defaults to
   // the org's `plan` metadata so the common case needs no resolver.

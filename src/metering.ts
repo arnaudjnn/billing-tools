@@ -3,7 +3,7 @@ import { isInternalOrg } from "./auth.js";
 import { describeDenial, fundingFor, resolveAllowance, type DenialReason } from "./allowance.js";
 import { getSeatType } from "./seats.js";
 import { cycleWindowFor, planModel, type CycleWindow, type PlanCatalog } from "./plan-model.js";
-import { stripeBalanceUsageLedger, type UsageLedger } from "./usage-ledger.js";
+import { defaultUsageLedger, warnLedgerGaps, type UsageLedger } from "./usage-ledger.js";
 import type { BillingAdapter, ResolvedConfig } from "./types.js";
 
 export interface MeterCaller {
@@ -35,9 +35,8 @@ export interface MeterInput {
   /** @deprecated Resolved from the adapter now (see `resolveAllowance`), so a
    *  caller can no longer pass a cycle key that disagrees with the window. */
   extraAllowance?: number;
-  /** Where usage is counted. Defaults to the balance-transaction ledger, which
-   *  is exact but can only see wallet-funded calls — a plan with an included
-   *  window wants `stripeMeterUsageLedger()`. */
+  /** Where usage is counted. Defaults to `stripeUsageLedger()` — the composite,
+   *  the same default `createBilling` and `createMeter` apply. */
   ledger?: UsageLedger;
   caller?: MeterCaller;
 }
@@ -88,7 +87,7 @@ export async function meterUsage(
   }
 
   const model = planModel(plans, plan)
-  const ledger = input.ledger ?? stripeBalanceUsageLedger()
+  const ledger = input.ledger ?? defaultUsageLedger()
   const cycle =
     input.cycle ??
     (input.cycleStart != null
@@ -187,10 +186,15 @@ export interface MeterConfig<R extends Record<string, number> = Record<string, n
    *  from the same window as the usage measurement, so the two cannot drift —
    *  which they could when this was the caller's obligation. */
   cycleKey?: () => string
-  /** Where usage is counted. Default: the balance-transaction ledger (exact, and
-   *  free for a wallet-only product). A plan with an INCLUDED window needs
-   *  `stripeMeterUsageLedger()` — an included call moves no money, so it writes
-   *  no transaction to count. */
+  /**
+   * Where usage is counted. Default: `stripeUsageLedger()`, the composite — every
+   * ORG-wide window on a Stripe meter (included usage too, one request at any
+   * volume) and per-CALLER windows from balance-transaction metadata.
+   *
+   * Pass one only for the pair the composite can't do without a store: a window
+   * that is both INCLUDED and PER-MEMBER (`cap: per_seat`, a `scope: "caller"`
+   * limit) — `stripeUsageLedger({ perCaller: postgresUsageLedger(db) })`.
+   */
   ledger?: UsageLedger
 }
 
@@ -235,6 +239,12 @@ export function createMeter<R extends Record<string, number> = Record<string, nu
   } = meterCfg
   const userSeat = seatDefaults?.user ?? "standard"
   const apiSeat = seatDefaults?.api ?? "api"
+  const ledger = meterCfg.ledger ?? defaultUsageLedger()
+
+  // Said once, here, because this is the entry point every metered call goes
+  // through however the app was composed — `createBilling` wires its meter through
+  // it too, so the check can't be skipped by picking the other constructor.
+  warnLedgerGaps(plans, ledger)
 
   // A consumer-imposed window. When absent, the window comes from the
   // subscription period (see resolveAllowance) — which is what an annual package
@@ -279,7 +289,7 @@ export function createMeter<R extends Record<string, number> = Record<string, nu
       // Only when the consumer imposed one; otherwise the window (and with it
       // the top-up cycle key) comes from the subscription period.
       cycle: cycleOverride?.(),
-      ledger: meterCfg.ledger,
+      ledger,
       caller,
     })
   }

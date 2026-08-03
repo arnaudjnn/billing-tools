@@ -83,6 +83,12 @@ So you do the one thing only you can do (**build great tools**) and monetize the
 - ⌨️ **CLI:** `registerBillingCommands(program, …)` gives you `auth`, `keys`, `balance`, `buy`, `invoices`.
 - 🪝 **Stripe webhook:** `createStripeWebhookHandler()` for instant checkout crediting.
 
+### 🧾 Tax, calculated here
+- 🇪🇺 **VAT/GST from code:** `sales-tax` + VIES work the rate out and it's applied as an explicit Stripe TaxRate — no per-transaction fee, no Dashboard.
+- 1️⃣ **One line, every charge:** `tax: { origin: "IT" }` in your config and the seat checkout, the top-up and the auto-reload invoice all carry the right rate. Reverse charge for cross-border EU B2B included.
+- 🔁 **Live re-tax:** `updateCheckoutSessionTaxRates` recalculates an open session when the customer types a different country.
+- ☑️ **Stripe Tax is opt-in:** `tax: { mode: "stripe" }` when you want it. Nothing infers it — with no active registration it computes 0% silently.
+
 ### 🔄 Zero-webhook sync
 - 📡 **Event polling:** reconcile Stripe **and** WorkOS via their Events APIs. No webhook endpoints, no signing secrets.
 - ⏱️ **Any scheduler:** run it in-process with `sync.start()` (persistent hosts) or as a serverless cron via `createSyncRoute()`.
@@ -267,10 +273,11 @@ registerBillingCommands(program, { configDir: "~/.acme", envPrefix: "ACME", defa
 | `currency` | `"usd"` | Stripe currency |
 | `freeCredits` | `100` | Welcome credit on first customer creation |
 | `internalDomains` | `[]` | Orgs with these **verified** WorkOS domains are unmetered (see `internalDomainsFromEnv`) |
+| `tax.origin` | unset | Where you're established (`"IT"`). Set it and every charge the library raises is taxed, calculated locally. Unset = untaxed |
+| `tax.mode` | derived | `"billing-tools"` \| `"stripe"` \| `"none"`. Overrides what `origin` implies |
 
 ## Roadmap
 
-- 🧾 Stripe Tax (`automatic_tax`) opt-in
 - 🪙 x402 machine-payment protocol alongside [MPP](https://mpp.dev/)
 
 ## Contributing

@@ -175,3 +175,66 @@ test("no seat read at all for a plan that does not size by seat", async () => {
   });
   assert.equal(counted, 0);
 });
+
+// ── perSeat: "included" — the only form that can size a MULTI-TIER pool ──────
+
+const TIERED = {
+  pro: {
+    sells: {
+      kind: "seats",
+      seatTypes: {
+        standard: { price: { monthly: 2104, yearly: 21600 }, includedCredits: 1_000 },
+        premium: { price: { monthly: 10523, yearly: 108000 }, includedCredits: 5_000 },
+      },
+    },
+    grant: { kind: "none" },
+    cap: { kind: "pool", perSeat: "included", window: "month", covers: "users" },
+    sale: "self_serve",
+  },
+};
+const tiered = planModel(TIERED, "pro");
+
+test('perSeat: "included" multiplies each tier by ITS OWN allowance', () => {
+  // 3 Standard + 1 Premium = 3x1 000 + 1x5 000. A flat number cannot say this:
+  // perSeat: 1_000 would give 4 000 and perSeat: 5_000 would give 20 000.
+  assert.equal(poolSizeOf(tiered, { standard: 3, premium: 1 }), 8_000);
+  assert.equal(poolSizeOf(tiered, { standard: 10 }), 10_000);
+  assert.equal(poolSizeOf(tiered, { premium: 2 }), 10_000);
+});
+
+test('perSeat: "included" given only a total assumes the SMALLEST tier', () => {
+  // The mix is unknowable from a total, and under-reporting is the recoverable
+  // direction — a pool that is too large hands out allowance nobody paid for.
+  assert.equal(poolSizeOf(tiered, 4), 4_000);
+  assert.equal(poolSizeOf(tiered), 1_000);
+});
+
+test("an unrecognised seat type does not silently empty the pool", () => {
+  // A count keyed by something no seat type declares would sum to 0 and refuse
+  // every call in the workspace.
+  assert.ok(poolSizeOf(tiered, { legacy_seat: 5 }) > 0);
+});
+
+test("a flat perSeat still sums a per-type breakdown", () => {
+  // Back-compat: the record form has to work for the flat shape too, since the
+  // adapter now reports counts rather than a total.
+  assert.equal(poolSizeOf(model("team"), { standard: 3, premium: 1 }), 4_000);
+});
+
+test("the doctor refuses a flat number across unequal tiers", async () => {
+  const { checkPlansConfig } = await import("../dist/doctor.js");
+  const bad = checkPlansConfig(
+    { pro: { ...TIERED.pro, cap: { kind: "pool", perSeat: 1_000 } } },
+    { hasCheckout: true },
+  );
+  const c = bad.checks.find((x) => /seat tiers that include different amounts/.test(x.title));
+  assert.equal(c.level, "error");
+  assert.match(c.fix, /"included"/);
+
+  // And accepts the form that can express it.
+  const good = checkPlansConfig(TIERED, { hasCheckout: true });
+  assert.equal(
+    good.checks.some((x) => /seat tiers that include different amounts/.test(x.title)),
+    false,
+  );
+});

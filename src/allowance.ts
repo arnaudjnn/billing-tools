@@ -274,7 +274,10 @@ async function subscriptionState(
   adapter: BillingAdapter,
   orgId: string,
   model: PlanModel | null,
-): Promise<{ period: { start?: string | null; end?: string | null } | null; seats: number | null }> {
+): Promise<{
+  period: { start?: string | null; end?: string | null } | null;
+  seats: number | Record<string, number> | null;
+}> {
   const none = { period: null, seats: null };
   if (!model) return none;
   // A `cycle` rate limit needs the period just as much as a cap does; without
@@ -287,7 +290,9 @@ async function subscriptionState(
     const sub = await adapter.getSubscription(orgId);
     return {
       period: needsPeriod ? { start: sub.periodStart ?? null, end: sub.periodEnd ?? null } : null,
-      seats: sub.seats ?? null,
+      // The breakdown when the adapter has it: `perSeat: "included"` multiplies each
+      // tier by its own allowance, which a total cannot express.
+      seats: sub.seatCounts ?? sub.seats ?? null,
     };
   } catch {
     return none;
@@ -308,10 +313,11 @@ async function seatsFor(
   adapter: BillingAdapter,
   orgId: string,
   model: PlanModel | null,
-  purchased: number | null,
-): Promise<number | undefined> {
+  purchased: number | Record<string, number> | null,
+): Promise<number | Record<string, number> | undefined> {
   if (!poolIsPerSeat(model)) return undefined;
-  if (purchased != null && purchased > 0) return purchased;
+  if (typeof purchased === "object" && purchased && Object.keys(purchased).length) return purchased;
+  if (typeof purchased === "number" && purchased > 0) return purchased;
   if (!adapter.memberCount) return 1;
   try {
     return (await adapter.memberCount(orgId)) || 1;

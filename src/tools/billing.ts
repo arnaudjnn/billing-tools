@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { BillingAdapter, ResolvedConfig } from "../types.js";
 import { enforceAccess } from "../auth.js";
+import { taxFor } from "../tax.js";
 import {
   ensureStripeCustomer,
   getBillingCustomerId,
@@ -51,6 +52,22 @@ export function registerBillingOnlyTools(
     return ensureStripeCustomer(adapter, orgId, undefined, config);
   };
 
+  // What a top-up is taxed at: the caller's own hooks first (they are per-ORG, which
+  // `config.tax` cannot express), then the deployment's declared mode. Both the
+  // quote and the charge go through this, so the number quoted is the number
+  // charged — the whole point of `quoteCreditPurchase` sharing the rate ids.
+  const topUpTax = async (
+    orgId: string,
+    cid?: string,
+  ): Promise<{ taxRates?: string[]; automaticTax?: boolean }> => {
+    if (topUp.taxRates) {
+      const rates = await topUp.taxRates(orgId);
+      if (rates?.length) return { taxRates: rates };
+    }
+    if (topUp.automaticTax) return { automaticTax: true };
+    return taxFor(cid ?? (await getBillingCustomerId(adapter, orgId)), config.tax);
+  };
+
   server.tool(
     "get_credit_balance",
     `Returns your current credit balance, per-tool costs, and auto-reload settings.`,
@@ -88,8 +105,10 @@ Quoted from the same Stripe tax rates buy_credits will charge, so the two agree.
       const auth = await enforceAccess(adapter);
       if ("isError" in auth) return auth;
       if (!stripeConfigured()) return NO_STRIPE;
-      const rates = topUp.taxRates ? await topUp.taxRates(auth.orgId) : undefined;
-      const quote = await quoteCreditPurchase(amount, rates ?? []);
+      // The quote must read the SAME rates the purchase will carry, or the dialog
+      // shows a total the card is not charged.
+      const { taxRates } = await topUpTax(auth.orgId);
+      const quote = await quoteCreditPurchase(amount, taxRates ?? []);
       return {
         content: [
           {
@@ -125,8 +144,7 @@ Quoted from the same Stripe tax rates buy_credits will charge, so the two agree.
       if (!stripeConfigured()) return NO_STRIPE;
       const cid = await customerId(auth.orgId);
       const url = await createCreditCheckoutSession(cid, auth.orgId, amount, config, {
-        taxRates: topUp.taxRates ? await topUp.taxRates(auth.orgId) : undefined,
-        automaticTax: topUp.automaticTax,
+        ...(await topUpTax(auth.orgId, cid)),
         successUrl: topUp.successUrl,
         cancelUrl: topUp.cancelUrl,
       });

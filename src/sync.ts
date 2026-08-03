@@ -156,12 +156,27 @@ export interface BillingSync {
  * subscription can hold items on different periods, so the window is the widest
  * one — which is also the renewal date a customer is shown.
  */
-/** Purchased seats, summed across seat types. Sizes a `cap.perSeat` pool; the same
- *  quantity the `purchased_seats` grant counts. Null when nothing is quantified,
- *  so the reader falls back to the member count rather than to a pool of one. */
-function purchasedSeatsOf(sub: Stripe.Subscription): number | null {
-  const total = (sub.items?.data ?? []).reduce((sum, i) => sum + (i.quantity ?? 0), 0);
-  return total > 0 ? total : null;
+/**
+ * Purchased seats BY SEAT TYPE. Sizes a `cap.perSeat` pool — the same breakdown the
+ * `purchased_seats` grant counts, and the only thing that can size a pool for a
+ * plan with more than one tier (`perSeat: "included"` multiplies each tier by its
+ * own allowance).
+ *
+ * Null when nothing is quantified, so the reader falls back to the active member
+ * count rather than to a pool of one seat.
+ */
+function purchasedSeatsOf(sub: Stripe.Subscription): Record<string, number> | null {
+  const counts: Record<string, number> = {};
+  for (const item of sub.items?.data ?? []) {
+    const seatType = item.price?.metadata?.seatType;
+    const qty = item.quantity ?? 0;
+    if (!qty) continue;
+    // An item with no seat type still counts toward the total — a `flat` plan has
+    // no seat types at all, and a pool sized per seat must not read zero there.
+    const key = seatType || "default";
+    counts[key] = (counts[key] ?? 0) + qty;
+  }
+  return Object.keys(counts).length ? counts : null;
 }
 
 function subscriptionPeriod(sub: Stripe.Subscription): {
@@ -210,9 +225,9 @@ export function createStripeEventHandler(opts: {
         subscriptionId: sub.id,
         ...subscriptionPeriod(sub),
         // Recorded on every subscription event so a `cap.perSeat` pool resizes
-        // when seats are added or removed. Summed across seat types, the same way
+        // when seats are added or removed. Broken down by seat type, the same way
         // the `purchased_seats` grant counts them.
-        seats: purchasedSeatsOf(sub),
+        seatCounts: purchasedSeatsOf(sub),
       });
       return;
     }

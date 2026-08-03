@@ -1,6 +1,14 @@
 import { getStripe } from "./billing.js";
-import { normalizePlans, poolSizeOf, type PlanCatalog } from "./plan-model.js";
+import {
+  ledgerGaps,
+  normalizePlans,
+  poolSizeOf,
+  type LedgerCoverage,
+  type PlanCatalog,
+} from "./plan-model.js";
 import { BILLING_WEBHOOK_EVENTS } from "./webhook-setup.js";
+import { taxModeOf, type TaxMode } from "./tax.js";
+import type { BillingConfig } from "./types.js";
 
 // Preflight for a billing environment: the checks that catch the failures which
 // DON'T announce themselves.
@@ -40,7 +48,32 @@ export type DoctorResult = {
  */
 export async function checkBillingSetup(opts: {
   webhookUrl?: string;
-  /** Skip Stripe Tax checks if you deliberately don't use automatic_tax. */
+  /**
+   * WHO calculates tax on this account — a choice the deployment makes, so it is
+   * named after the thing doing the calculating rather than after how it feels:
+   *
+   * - `"billing-tools"` (default) — this library: `taxRatesFor` derives the rate
+   *   from `sales-tax` + VIES and applies it as an explicit Stripe TaxRate. No
+   *   per-transaction fee, and nothing to set up in the Dashboard. Same spelling
+   *   as the `managedBy: "billing-tools"` marker on every object this library mints.
+   * - `"stripe"` — Stripe Tax (`automatic_tax`), for an account that wants
+   *   evidence-of-location, threshold monitoring and filing handled.
+   * - `"none"` — an account that charges no tax; tax is not inspected.
+   *
+   * It decides WHICH silent failure is worth looking for, so the wrong mode is
+   * worse than no check: `"stripe"` audits the head office, the registrations and
+   * `tax_behavior`, none of which a `"billing-tools"` account has any reason to
+   * hold — reporting those as errors is how a doctor sends someone to fix a config
+   * that was already right.
+   */
+  taxMode?: TaxMode;
+  /**
+   * Your `BillingConfig`, so the mode is read from `config.tax` rather than stated
+   * again here — the point of one declaration is that nothing can disagree with it.
+   * `taxMode` and `currency` above still win if passed.
+   */
+  config?: BillingConfig;
+  /** @deprecated Use `taxMode`. `false` → `"none"`, `true` → `"stripe"`. */
   expectTax?: boolean;
   /** `config.currency`. Pass it to check for customers pinned to another one —
    *  the half-applied currency change that produces no error anywhere. */
@@ -51,7 +84,15 @@ export async function checkBillingSetup(opts: {
 } = {}): Promise<DoctorResult> {
   const stripe = getStripe();
   const checks: Check[] = [];
-  const expectTax = opts.expectTax ?? true;
+  // Explicit wins, then the config's own declaration, then the deprecated boolean.
+  // The final default is `"billing-tools"` rather than `"none"` so a caller that
+  // passes nothing still gets its rates listed — a doctor that inspected no tax by
+  // default would be silent on the account most likely to have got it wrong.
+  const taxMode: TaxMode =
+    opts.taxMode ??
+    (opts.config ? taxModeOf(opts.config.tax) : undefined) ??
+    (opts.expectTax === undefined ? "billing-tools" : opts.expectTax ? "stripe" : "none");
+  const currency = opts.currency ?? opts.config?.currency;
 
   const account = await stripe.accounts.retrieve();
   const livemode = !(process.env.STRIPE_SECRET_KEY ?? "").startsWith("sk_test");
@@ -61,7 +102,26 @@ export async function checkBillingSetup(opts: {
     detail: `${account.id} (${account.country ?? "?"}) — ${livemode ? "LIVE" : "test"} mode`,
   });
 
-  if (expectTax) {
+  if (taxMode === "billing-tools") {
+    // `taxRatesFor` mints a TaxRate per (country, percent, name) on first use and
+    // reuses it forever, so the account accumulates a handful. Nothing to provision,
+    // and nothing here can be an error: a fresh account legitimately holds none
+    // until the first taxed checkout. What IS worth saying is which rates exist,
+    // because that is the whole audit trail of what this account has charged.
+    const rates = (await stripe.taxRates.list({ active: true, limit: 100 })).data;
+    checks.push({
+      level: "ok",
+      title: "Tax calculation",
+      detail: rates.length
+        ? `billing-tools (taxRatesFor): ${rates
+            .slice(0, 8)
+            .map((r) => `${r.country ?? "?"} ${r.percentage}%${r.inclusive ? " incl" : ""}`)
+            .join(", ")}`
+        : "billing-tools (taxRatesFor) — no rate minted yet; the first taxed checkout creates one",
+    });
+  }
+
+  if (taxMode === "stripe") {
     // The silent one: with no registration Stripe Tax returns ZERO tax rather
     // than an error, so the checkout total simply drops to the pre-tax amount.
     const settings = await stripe.tax.settings.retrieve();
@@ -182,8 +242,8 @@ export async function checkBillingSetup(opts: {
   // the old balance from `customer.balance` while new debits accumulate in the
   // configured currency. Nothing errors. That silence is the reason this check
   // exists: it is the one way to see a currency change half-applied.
-  if (opts.currency) {
-    const want = opts.currency.toLowerCase();
+  if (currency) {
+    const want = currency.toLowerCase();
     const sample: string[] = [];
     // Auto-reload charges a card off-session. Enabled with no card on file, it
     // silently does nothing every time the balance runs out — the customer is
@@ -320,69 +380,70 @@ export function checkPlansConfig(
      *  advertised-but-unbuyable. */
     hasCheckout?: boolean;
     /**
-     * Whether a usage ledger is wired — `Boolean(meter.db ?? meter.ledger)`.
+     * What the wired ledger can count.
+     *
+     * Pass the ledger's own `covers` (every implementation here declares one) —
+     * or `true`/`false` for the older shorthand, which meant "a per-member store
+     * is wired". The coverage form is strictly better because it catches the case
+     * the boolean cannot express: a ledger that counts per-member usage but not
+     * ORG-wide included usage, which reads 0% on a pooled plan forever.
      *
      * OMIT it and the check is skipped entirely: undefined means "the caller did
      * not say", which is not the same as "nothing is wired". Defaulting it to
      * false would fail every existing consumer's CI over a config that may be
-     * perfectly wired, and `createBilling` already warns at boot when it really
-     * is missing. Only a plan that includes usage or rate-limits it needs one.
+     * perfectly wired, and `createMeter` already warns at boot when it really is
+     * missing. Only a plan that includes usage or rate-limits it needs one.
      */
-    usageLedger?: boolean;
+    usageLedger?: boolean | LedgerCoverage;
   },
 ): DoctorResult {
   const checks: Check[] = [];
   const models = normalizePlans(plans);
 
-  // What the DEFAULT ledger cannot count, and therefore what needs a store.
+  // Which included windows the wired ledger can actually count — the same question
+  // `warnLedgerGaps` answers at boot, through the same `ledgerGaps`, because a
+  // doctor that disagreed with the engine would send someone to fix a config that
+  // was already right. An ERROR here where the engine warns: a warning in a deploy
+  // log is missable, and a month of unenforced caps can't be recovered afterwards.
   //
-  // It used to be every cap and every rate limit, because the default was the
-  // Stripe debits themselves and included usage moves no money. The default is now
-  // the composite (`stripeUsageLedger`), which counts every ORG-wide window on a
-  // Stripe meter — included usage included, at any volume — so a pool or a
-  // `scope: "org"` limit no longer needs anything wired.
-  //
-  // What remains is the pair no Stripe primitive can answer: a window that is both
-  // INCLUDED and PER-MEMBER. A balance transaction carries the caller but only
-  // exists where money moved; a meter summary sees every call but cannot be
-  // filtered by caller. This must agree with `createBilling`'s boot warning, which
-  // narrows to the same set — a doctor that disagreed with the engine would send
-  // someone to fix a config that was already right.
-  //
-  // Still an ERROR here where `createBilling` warns: a warning in a deploy log is
-  // missable, and a month of unenforced caps is not recoverable after the fact.
-  const counted =
-    options?.usageLedger === undefined
-      ? []
-      : models.filter(
-          (m) => m.cap.kind === "per_seat" || m.limits.rate.some((l) => l.scope === "caller"),
-        );
-  if (options?.usageLedger === undefined) {
-    // Nothing asserted, so nothing claimed.
-  } else if (!counted.length) {
-    checks.push({
-      level: "ok",
-      title: "Usage ledger",
-      detail:
-        "no plan meters an included window per member, so the Stripe composite counts everything",
-    });
-  } else if (options?.usageLedger) {
-    checks.push({
-      level: "ok",
-      title: "Usage ledger",
-      detail: `wired for ${counted.map((m) => m.key).join(", ")}`,
-    });
-  } else {
-    checks.push({
-      level: "error",
-      title: "Usage ledger",
-      detail: `plans ${counted.map((m) => m.key).join(", ")} meter an INCLUDED window per member (a seat pack, or a caller-scoped rate limit), but no ledger is wired`,
-      fix:
+  // The boolean shorthand keeps its old meaning (a per-member store is wired /
+  // isn't), and says nothing about the org axis — which the default composite
+  // covers anyway. Passing the ledger's `covers` is what catches the other half.
+  if (options?.usageLedger !== undefined) {
+    const covers: LedgerCoverage =
+      typeof options.usageLedger === "boolean"
+        ? { orgIncluded: true, callerIncluded: options.usageLedger }
+        : options.usageLedger;
+    const { org, caller } = ledgerGaps(models, covers);
+    for (const [gap, detail, fix] of [
+      [
+        org,
+        "include usage ORG-WIDE (a pool, or an org-scoped rate limit), which this ledger cannot count: it only sees calls the wallet paid for",
+        'Use the default `stripeUsageLedger()` — it counts these on a Stripe meter at any volume, with no store.',
+      ],
+      [
+        caller,
+        "meter an INCLUDED window PER MEMBER (a seat pack, or a caller-scoped rate limit), which no Stripe primitive can count",
         "Pass `meter.db` (a Postgres client) or `meter.ledger` to createBilling, and run " +
-        "ensureUsageLedgerTable(db) from your migrations. Or pool the allowance instead " +
-        '(`cap: { kind: "pool", perSeat: N }`), which is counted in Stripe and needs no store. ' +
-        "Without one, that usage counts as 0 and the window never applies.",
-    });
+          "ensureUsageLedgerTable(db) from your migrations. Or pool the allowance instead " +
+          '(`cap: { kind: "pool", perSeat: N }`), which is counted in Stripe and needs no store.',
+      ],
+    ] as const) {
+      if (!gap.length) continue;
+      checks.push({
+        level: "error",
+        title: "Usage ledger",
+        detail: `plans ${gap.map((m) => m.key).join(", ")} ${detail} — that usage counts as 0, so the window never applies and nothing is ever refused`,
+        fix,
+      });
+    }
+    if (!org.length && !caller.length) {
+      checks.push({
+        level: "ok",
+        title: "Usage ledger",
+        detail: "every included window in this config is countable by the wired ledger",
+      });
+    }
   }
 
   const legacy = models.filter((m) => m.legacy);
@@ -526,6 +587,36 @@ export function checkPlansConfig(
         detail:
           "cap.credits and cap.perSeat are mutually exclusive; perSeat wins, so the flat credits are ignored",
         fix: "Keep `perSeat` for a pool that scales with seats, or `credits` for a fixed package",
+      });
+    }
+    // A FLAT per-seat number cannot express a plan with tiers that include
+    // different amounts: 3 Standard (1 000) + 1 Premium (5 000) should pool 8 000,
+    // and `perSeat: 1_000` gives 4 000 while `perSeat: 5_000` gives 20 000. One
+    // under-delivers against the pricing page; the other hands Standard seats five
+    // times what they paid for. `"included"` is the form that can say it.
+    if (
+      m.cap.kind === "pool" &&
+      typeof m.cap.perSeat === "number" &&
+      new Set(m.seatTypes.map((s) => s.includedCredits)).size > 1
+    ) {
+      checks.push({
+        level: "error",
+        title: `Plan "${m.key}" pools one number across seat tiers that include different amounts`,
+        detail: `seat types include ${m.seatTypes.map((s) => `${s.key}: ${s.includedCredits}`).join(", ")}, so a flat cap.perSeat either under-delivers or over-grants`,
+        fix: 'Use `cap: { kind: "pool", perSeat: "included" }`, which multiplies each tier by its own includedCredits',
+      });
+    }
+    // `"included"` reads each seat type's own allowance, so there has to be one.
+    if (
+      m.cap.kind === "pool" &&
+      m.cap.perSeat === "included" &&
+      m.seatTypes.every((s) => s.includedCredits === 0)
+    ) {
+      checks.push({
+        level: "warn",
+        title: `Plan "${m.key}" pools the seat types' included credits, but they are all 0`,
+        detail: 'cap.perSeat: "included" sums includedCredits per purchased seat, so the pool is empty',
+        fix: "Set `includedCredits` on the seat types, or give `cap.credits` a flat package size",
       });
     }
     // A per-seat pool multiplies by a seat count, and the count comes from the

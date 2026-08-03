@@ -257,10 +257,18 @@ export class WorkOSOrgAdapter implements BillingAdapter {
     periodStart: string | null;
     periodEnd: string | null;
     seats: number | null;
+    seatCounts: Record<string, number> | null;
   }> {
     const org = await this.workos.organizations.getOrganization(await this.wid(orgId));
     const m = (org.metadata ?? {}) as Record<string, string>;
-    const seats = Number.parseInt(m.subscriptionSeats ?? "", 10);
+    // ONE key holds the per-type breakdown and the total is its sum, rather than a
+    // key for each: the org map allows ten in total and the library already writes
+    // nine, so a second seat key would leave a consuming app none.
+    const seatCounts = parseSeatCounts(m.subscriptionSeatCounts);
+    const summed = seatCounts
+      ? Object.values(seatCounts).reduce((a, b) => a + b, 0)
+      : // Back-compat: 2.11.0 wrote a bare total under its own key.
+        Number.parseInt(m.subscriptionSeats ?? "", 10);
     return {
       plan: m.plan ?? null,
       status: m.subscriptionStatus ?? null,
@@ -269,9 +277,10 @@ export class WorkOSOrgAdapter implements BillingAdapter {
       // START matters as much as the renewal date.
       periodStart: m.subscriptionPeriodStart ?? null,
       periodEnd: m.subscriptionPeriodEnd ?? null,
-      // Sizes a `cap.perSeat` pool. Junk parses to null, which falls back to the
-      // active member count rather than to a pool of one seat.
-      seats: Number.isFinite(seats) && seats > 0 ? seats : null,
+      // Junk reads as null, which falls back to the active member count rather
+      // than to a pool of one seat.
+      seats: Number.isFinite(summed) && summed > 0 ? summed : null,
+      seatCounts,
     };
   }
 
@@ -286,6 +295,7 @@ export class WorkOSOrgAdapter implements BillingAdapter {
       periodStart?: string | null;
       periodEnd: string | null;
       seats?: number | null;
+      seatCounts?: Record<string, number> | null;
     },
   ): Promise<void> {
     const wid = await this.wid(orgId);
@@ -301,7 +311,15 @@ export class WorkOSOrgAdapter implements BillingAdapter {
     set("subscriptionPeriodStart", sub.periodStart);
     set("subscriptionPeriodEnd", sub.periodEnd);
     set("plan", sub.plan);
-    set("subscriptionSeats", sub.seats == null ? sub.seats : String(sub.seats));
+    // The breakdown, from which the total is derived on read — see getSubscription.
+    // A caller that only knows the total gets a single synthetic entry, so the one
+    // key is always the source of truth and the two can never disagree.
+    const counts =
+      sub.seatCounts ?? (sub.seats != null ? { total: sub.seats } : sub.seatCounts);
+    set("subscriptionSeatCounts", counts == null ? counts : JSON.stringify(counts));
+    // Retired in favour of the key above; cleared so it cannot be read as a stale
+    // total after seats change, and so the key budget goes back to nine.
+    set("subscriptionSeats", null);
     await this.workos.organizations.updateOrganization({ organization: wid, metadata });
   }
 
@@ -357,5 +375,22 @@ export class WorkOSOrgAdapter implements BillingAdapter {
       statuses: ["active"],
     });
     return r.data.some((m) => m.role?.slug === "admin");
+  }
+}
+
+/** Seat counts off a metadata value. Junk reads as null (→ member-count fallback)
+ *  rather than as an empty map, which would size a pool at zero. */
+function parseSeatCounts(raw: string | undefined): Record<string, number> | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof v === "number" && Number.isFinite(v) && v > 0) out[k] = v;
+    }
+    return Object.keys(out).length ? out : null;
+  } catch {
+    return null;
   }
 }

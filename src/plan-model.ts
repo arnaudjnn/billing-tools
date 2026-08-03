@@ -254,14 +254,22 @@ export type Cap =
        * The trade is fairness: one member can draw the team's share. Say
        * `per_seat` when that matters.
        *
+       * **`"included"` sums each seat TYPE's own `includedCredits` × its purchased
+       * quantity**, which is the only form that can express a plan with more than
+       * one tier. A number cannot: 3 Standard (1 000 each) + 1 Premium (5 000)
+       * should pool 8 000, and `perSeat: 1_000` gives 4 000 while `perSeat: 5_000`
+       * gives 20 000 — one under-delivers against the pricing page and the other
+       * hands Standard seats five times what they paid for. Use a number only when
+       * every tier includes the same amount, or there is one tier.
+       *
        * Seats are the PURCHASED quantity when the adapter reports one
-       * (`getSubscription().seats`), falling back to the active member count, then
-       * to 1. Purchased rather than active on purpose: a workspace that bought ten
-       * seats and filled six paid for ten.
+       * (`getSubscription().seatCounts` / `.seats`), falling back to the active
+       * member count, then to 1. Purchased rather than active on purpose: a
+       * workspace that bought ten seats and filled six paid for ten.
        *
        * Mutually exclusive with `credits`.
        */
-      perSeat?: Money;
+      perSeat?: Money | "included";
       /**
        * Unused allowance survives into the next cycle.
        *
@@ -772,14 +780,50 @@ export function grantFor(
  * The org-wide entitlement for a cycle, or null when the plan has no pool.
  * Falls back to the grant size when a plan both pools and credits.
  *
- * `seats` is only read by a `perSeat` pool. It defaults to 1 rather than throwing,
- * so a pricing surface that has no org in hand still gets the per-seat unit to
- * display — and so a caller that forgets it under-reports the pool rather than
- * over-granting it. `resolveAllowance` resolves the real count; see `seatsFor`.
+ * `seats` is only read by a `perSeat` pool, and takes either form:
+ *
+ *   a NUMBER  — total purchased seats. All `perSeat: <number>` needs.
+ *   a RECORD  — seat type → purchased quantity. What `perSeat: "included"`
+ *               needs, since it multiplies each tier by its OWN allowance.
+ *
+ * It defaults to one seat rather than throwing, so a pricing surface with no org
+ * in hand still gets a per-seat unit to display, and a caller that forgets it
+ * under-reports the pool rather than over-granting it. Given a total where the mix
+ * is needed, the SMALLEST tier is assumed for the same reason — a wrong number
+ * that refuses too early is recoverable; one that hands out allowance nobody paid
+ * for is not. `resolveAllowance` resolves the real counts; see `seatsFor`.
  */
-export function poolSizeOf(model: PlanModel | null, seats?: number): number | null {
+export function poolSizeOf(
+  model: PlanModel | null,
+  seats?: number | Record<string, number>,
+): number | null {
   if (!model || model.cap.kind !== "pool") return null;
-  if (model.cap.perSeat != null) return model.cap.perSeat * Math.max(1, seats ?? 1);
+  const { perSeat } = model.cap;
+
+  if (perSeat === "included") {
+    const counts = typeof seats === "object" && seats ? seats : null;
+    if (counts) {
+      let sum = 0;
+      for (const s of model.seatTypes) sum += s.includedCredits * (counts[s.key] ?? 0);
+      // A count that matches no declared seat type sums to 0, which would refuse
+      // every call. Fall through to the floor below rather than to nothing.
+      if (sum > 0) return sum;
+    }
+    const total = typeof seats === "number" ? Math.max(1, seats) : 1;
+    const smallest = model.seatTypes.reduce(
+      (min, s) => Math.min(min, s.includedCredits),
+      Number.POSITIVE_INFINITY,
+    );
+    return Number.isFinite(smallest) ? smallest * total : 0;
+  }
+
+  if (perSeat != null) {
+    const total =
+      typeof seats === "object" && seats
+        ? Object.values(seats).reduce((a, b) => a + b, 0)
+        : (seats ?? 1);
+    return perSeat * Math.max(1, total);
+  }
   if (model.cap.credits != null) return model.cap.credits;
   return model.grant.kind === "fixed" ? model.grant.credits : 0;
 }
@@ -915,6 +959,64 @@ export function rateWindowFor(
     case "cycle":
       return cycle ?? { start: Date.UTC(y, mo, 1), end: Date.UTC(y, mo + 1, 1), key: `m:${iso(Date.UTC(y, mo, 1)).slice(0, 7)}` };
   }
+}
+
+// ── What a ledger has to be able to count ───────────────────────────────────
+//
+// The rule that decides whether a config can be metered lived in three places —
+// `createBilling`'s boot warning, `checkPlansConfig`, and a paragraph of
+// AGENTS.md — and the three had already drifted: two of them asked only about
+// per-MEMBER windows, so a pooled plan on a wallet-only ledger passed every check
+// while counting nothing. It is one question asked twice, so it is written once
+// here, in the module that has no Stripe dependency, and every caller reads it.
+//
+// The question is not "is a store wired". It is which of two windows the ledger
+// can see, because an INCLUDED call moves no money and a ledger built on money
+// cannot see it at all.
+
+/** What a `UsageLedger` implementation can count. Declared by the ledger itself
+ *  (`covers`), so a config check needs no knowledge of which one is in use. */
+export type LedgerCoverage = {
+  /** Can count an ORG-wide window including usage the wallet didn't fund
+   *  (`cap: pool`, `scope: "org"` limits, the spend limit). */
+  orgIncluded: boolean;
+  /** Can count a PER-CALLER window including usage the wallet didn't fund
+   *  (`cap: per_seat`, `scope: "caller"` limits). */
+  callerIncluded: boolean;
+};
+
+/** Every window a ledger must be able to count for this plan to be enforceable.
+ *  A `cap: wallet` plan needs neither: nothing is included, so every call moves
+ *  money and the debits are their own record. */
+export function coverageNeededBy(model: PlanModel): LedgerCoverage {
+  return {
+    orgIncluded:
+      model.cap.kind === "pool" || model.limits.rate.some((l) => (l.scope ?? "org") === "org"),
+    callerIncluded:
+      model.cap.kind === "per_seat" || model.limits.rate.some((l) => l.scope === "caller"),
+  };
+}
+
+/**
+ * The plans whose included windows `covers` cannot count, split by cause.
+ *
+ * Both causes are the same silent failure — the window reads 0, so it never
+ * applies and nothing is ever refused, which looks exactly like generosity — but
+ * they have different fixes, which is why they are reported apart: an org-wide gap
+ * is closed by a Stripe meter (no store), a per-caller one needs a store.
+ */
+export function ledgerGaps(
+  models: readonly PlanModel[],
+  covers: LedgerCoverage,
+): { org: PlanModel[]; caller: PlanModel[] } {
+  const org: PlanModel[] = [];
+  const caller: PlanModel[] = [];
+  for (const m of models) {
+    const needs = coverageNeededBy(m);
+    if (needs.orgIncluded && !covers.orgIncluded) org.push(m);
+    if (needs.callerIncluded && !covers.callerIncluded) caller.push(m);
+  }
+  return { org, caller };
 }
 
 /**
