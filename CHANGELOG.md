@@ -1,3 +1,45 @@
+# [5.0.0](https://github.com/arnaudjnn/billing-tools/compare/v4.1.0...v5.0.0) (2026-08-03)
+
+
+* feat!: calculate tax by DEFAULT, with the origin resolved in one place ([31017c9](https://github.com/arnaudjnn/billing-tools/commit/31017c9c1cd2cd54e073508953c181a224de519a))
+
+
+### BREAKING CHANGES
+
+* `taxModeOf(undefined)` now returns `"billing-tools"` instead of
+`"none"`. A deployment that configures no tax now has this library calculate it
+(`sales-tax` + VIES, applied as explicit Stripe TaxRates) rather than charging
+none. `mode: "none"` is how you opt out.
+
+The old default was the expensive direction. Silence meant no tax on anything the
+library charged, so a deployment that never thought about VAT shipped charging
+none of it — and over-charging is recoverable while under-collecting means owing
+it yourself, with interest, in every jurisdiction you sold into. "I did not
+configure tax" is not a statement that the sale is untaxed. gtm-tools was in
+exactly that state: its setup report read `Tax: mode is "none"`.
+
+What made the default impossible before was `origin`: the mode needs to know where
+you are established and no rate exists without it. `originFor` removes that —
+`config.tax.origin`, else the Stripe ACCOUNT's country, which is the country you
+gave Stripe at signup and the best available answer. Memoised once per process (an
+account does not change country) and it never throws, because it sits behind
+`taxFor` on the hot path of every metered call: a Stripe blip must cost a tax
+rate, never the charge. A transient failure is not cached, so it retries; a
+genuine "no country on the account" is settled and remembered.
+
+That makes it the ONE place the origin is decided. Nothing else in the library may
+read `tax.origin` — it decides domestic vs cross-border, which is the whole
+question a VAT rate turns on, so a second copy is a second answer. Consumers must
+not keep one either: scartoffie has a `const TAX_ORIGIN = "FR"` beside its
+`config.tax`, and its `scripts/ops/stripe-tax.ts` still registers `IT` — the two
+answers this rule exists to prevent.
+
+`invalidateTaxOrigin()` also re-arms the one-time "no origin" warning, which is
+what keeps the "says so once" property testable rather than only asserted in a
+comment.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
 # [4.1.0](https://github.com/arnaudjnn/billing-tools/compare/v4.0.0...v4.1.0) (2026-08-03)
 
 
