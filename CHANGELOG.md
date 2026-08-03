@@ -1,3 +1,19 @@
+# [11.0.0](https://github.com/arnaudjnn/billing-tools/compare/v10.1.0...v11.0.0) (2026-08-03)
+
+
+* feat(usage)!: one policy for a failed read, and a channel that reports it ([6a382a8](https://github.com/arnaudjnn/billing-tools/commit/6a382a81664bdac0e080b7c501e07e73ba5ce367))
+
+
+### BREAKING CHANGES
+
+* `stripeScopeUsageLedger.total` now propagates read errors instead
+of returning 0, so the policy can act on them. Wrapped in `stripeUsageLedger` (the
+documented composition, and what `defaultUsageLedger` builds) behaviour is
+unchanged by default apart from serving last-known where one exists. A consumer
+driving the scope ledger directly should wrap it or handle rejection.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
 # [10.1.0](https://github.com/arnaudjnn/billing-tools/compare/v10.0.0...v10.1.0) (2026-08-03)
 
 
