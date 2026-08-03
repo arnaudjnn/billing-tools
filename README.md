@@ -89,6 +89,11 @@ So you do the one thing only you can do (**build great tools**) and monetize the
 - 🔁 **Live re-tax:** `updateCheckoutSessionTaxRates` recalculates an open session when the customer types a different country.
 - ☑️ **Stripe Tax is opt-in:** `tax: { mode: "stripe" }` when you want it. Nothing infers it — with no active registration it computes 0% silently.
 
+### 🧑‍💻 Set up an environment with one command
+- 🏠 **Local payments, no tunnel:** `npx billing-tools dev` downloads the Stripe CLI if needed, forwards webhooks to localhost (no `stripe login`), and writes the session's signing secret into `.env.local`.
+- 🩺 **`npx billing-tools doctor`:** audits the environment your `STRIPE_SECRET_KEY` points at, exit-code and all, for the misconfigurations that produce no error.
+- 🚀 **`setupBilling({ config, plans, webhookUrl })`:** provisions the few things that can't be lazy (webhook endpoint + its once-only secret, tax registrations) and then runs the doctor. Idempotent — safe on every deploy.
+
 ### 🔄 Zero-webhook sync
 - 📡 **Event polling:** reconcile Stripe **and** WorkOS via their Events APIs. No webhook endpoints, no signing secrets.
 - ⏱️ **Any scheduler:** run it in-process with `sync.start()` (persistent hosts) or as a serverless cron via `createSyncRoute()`.

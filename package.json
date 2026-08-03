@@ -66,6 +66,9 @@
       "default": "./dist/pricing.js"
     }
   },
+  "bin": {
+    "billing-tools": "./dist/bin/cli.js"
+  },
   "files": [
     "dist",
     "README.md",

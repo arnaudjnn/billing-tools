@@ -462,6 +462,16 @@ export {
   type CheckLevel,
   type DoctorResult,
 } from "./doctor.js";
+// Provision + verify one Stripe environment in one call — the deploy-time twin of
+// the lazy provisioning the request path does. `billing-tools dev` / `doctor` (the
+// bin) cover the parts that need no app config.
+export {
+  setupBilling,
+  formatSetupReport,
+  type SetupOptions,
+  type SetupResult,
+  type SetupStep,
+} from "./setup.js";
 
 // CLI factory
 export { registerBillingCommands } from "./cli/commands.js";

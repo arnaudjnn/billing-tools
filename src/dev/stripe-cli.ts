@@ -199,6 +199,64 @@ export async function listenForWebhooks(opts: {
 }
 
 /**
+ * The whole local-webhook story in ONE call: fetch the CLI if needed, start
+ * forwarding, and hand the session's signing secret to the dev server.
+ *
+ * The pieces above have existed for a while and every app still wired them
+ * itself — which is the gap this closes, because "you can do local payments with
+ * only a Stripe key" and "you can do local payments once you've written the
+ * script that does it" are different promises.
+ *
+ * Writing the secret into a dotenv file rather than the environment is deliberate:
+ * `stripe listen` mints a NEW secret per session, and the dev server that has to
+ * verify against it is a different process (often started by the same `dev`
+ * script). A file is the only channel both can see.
+ */
+export async function startLocalWebhooks(
+  opts: {
+    /** Default http://localhost:3000/api/stripe/webhook */
+    forwardTo?: string;
+    /** Dotenv file the secret is written to. Default `.env.local`. Pass `null` to
+     *  skip the write and read `secret` off the return value yourself. */
+    envFile?: string | null;
+    /** Restrict forwarding to these event types. Default: the ones that move
+     *  money (`BILLING_WEBHOOK_EVENTS`) — a local run has no use for the rest,
+     *  and a narrower stream is a readable log. */
+    events?: readonly string[];
+    apiKey?: string;
+    log?: (msg: string) => void;
+  } = {},
+): Promise<Listener & { forwardTo: string; envFile: string | null }> {
+  const log = opts.log ?? ((m: string) => console.log(m));
+  const forwardTo = opts.forwardTo ?? "http://localhost:3000/api/stripe/webhook";
+  const envFile = opts.envFile === undefined ? ".env.local" : opts.envFile;
+
+  const listener = await listenForWebhooks({
+    forwardTo,
+    apiKey: opts.apiKey,
+    events: opts.events ?? LOCAL_WEBHOOK_EVENTS,
+    log,
+  });
+
+  if (envFile) {
+    await setEnvVar(envFile, "STRIPE_WEBHOOK_SECRET", listener.secret);
+    log(`STRIPE_WEBHOOK_SECRET written to ${envFile} — restart the dev server if it was already up`);
+  }
+  log(`Forwarding Stripe events to ${forwardTo}`);
+  return { ...listener, forwardTo, envFile };
+}
+
+// Duplicated from webhook-setup.ts rather than imported: that module pulls in
+// `billing.ts` → the Stripe SDK, and this entry point is deliberately reachable
+// with nothing installed but Node (it is also the only module here allowed to
+// touch child_process and fs). Three strings are a cheaper price than that edge.
+const LOCAL_WEBHOOK_EVENTS = [
+  "checkout.session.completed",
+  "invoice.paid",
+  "invoice.payment_failed",
+] as const;
+
+/**
  * Set one key in a dotenv file, leaving everything else byte-identical.
  *
  * Used to hand the session's signing secret to a dev server running in another

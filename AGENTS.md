@@ -249,7 +249,24 @@ Wallets are in because they are not another way to pay: Apple Pay and Google Pay
 
 ## CLI
 
-`registerBillingCommands(program, { configDir: "~/.myapp", envPrefix: "MYAPP", defaultUrl })` adds `auth`, `keys list|revoke`, `balance`, `buy`, `invoices`. Config persists to `<configDir>/config.json` (chmod 600).
+Two different CLIs, for two different people. **`registerBillingCommands(program, { configDir: "~/.myapp", envPrefix: "MYAPP", defaultUrl })`** is the CUSTOMER's: it adds `auth`, `keys list|revoke`, `balance`, `buy`, `invoices`, talks to the app's REST API with an org API key, and persists to `<configDir>/config.json` (chmod 600).
+
+**`npx billing-tools <command>`** (the package's own `bin`) is the DEVELOPER's, and talks to Stripe with the secret key. It carries only what needs no app config:
+
+- **`dev`** — `startLocalWebhooks()`: fetch the Stripe CLI into `~/.cache` if absent, `stripe listen --api-key` (no `stripe login`, no tunnel, no registered endpoint), and write the session's `whsec_` into `.env.local`. The dotenv write is the point: `stripe listen` mints a NEW secret per session and the dev server is a different process, so a file is the only channel both see.
+- **`doctor`** — `checkBillingSetup` + `formatDoctorResult`, exiting non-zero on an error so it can gate CI.
+
+## Setting up an environment (`setupBilling`)
+
+The deploy-time twin of the lazy provisioning, and the honest scope of it is small: prices, the payment-method configuration and the usage meter all provision themselves from the key on first use, so `setupBilling({ config, plans, webhookUrl, stripeTax? })` exists for the two things that genuinely cannot, plus the reporting.
+
+- The **webhook endpoint**, because Stripe returns its signing secret exactly once, at creation — no request can put that in your env store. `formatSetupReport` prints it as a `STRIPE_WEBHOOK_SECRET=…` line, only on the run that created it.
+- **Tax registrations**, because only a human knows where the business collects — and skipped unless `config.tax` mode is `"stripe"`, since running it on a `billing-tools` account would create registrations it doesn't need and is billed against.
+- Everything else runs only because a deploy log is a better place to find a broken config than a customer's first request.
+
+No step throws: each failure is reported and the rest continue, because a missing tax registration must not stop the webhook from being registered, and four outcomes beat the first exception. A skipped step renders `–`, never `✓`. The doctor runs last, so it sees what was just provisioned — `setupBilling` provisions, `checkBillingSetup` decides whether it worked, and they are separate claims.
+
+It needs the app's `plans`, so it stays a function the app calls from a script (`tsx scripts/billing-setup.ts`) rather than a bin subcommand — only the app knows its catalogue.
 
 ## Plan shapes (`src/plan-model.ts`)
 
