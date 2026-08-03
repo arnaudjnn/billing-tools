@@ -1,0 +1,135 @@
+// `checkBillingSetup` — the account half of the doctor.
+//
+// It went untested for a while because it touches eight Stripe endpoints, three of
+// them auto-paginating iterators, and every ad-hoc fake I reached for was missing
+// one and died mid-run. The fake below is complete, which is the whole reason this
+// file exists: the branch it was written for shipped WRONG and nothing caught it.
+//
+// That branch is the US-exposure warning. It first read `config.tax.origin` — where
+// WE are established — when the thing that matters is where the CUSTOMER is. Tax is
+// owed at the place of supply, so a French seller with US customers has exposure and
+// a US seller with only EU customers has none. As written it stayed silent for
+// exactly the deployment that needed it.
+
+process.env.STRIPE_SECRET_KEY ??= "sk_test_fake";
+
+import assert from "node:assert/strict";
+import { test } from "vitest";
+
+import { __setStripeForTests } from "../dist/billing.js";
+import { checkBillingSetup } from "../dist/doctor.js";
+
+/** An auto-paginating list, as the SDK presents one. */
+const paged = (items) => () => ({
+  async *[Symbol.asyncIterator]() {
+    for (const i of items) yield i;
+  },
+  data: items,
+});
+
+/**
+ * Every endpoint `checkBillingSetup` touches. Complete on purpose — a fake missing
+ * one throws mid-run, and the failure looks like a bug in the code under test.
+ */
+function fakeStripe({
+  country = "FR",
+  customers = [],
+  prices = [],
+  taxRates = [],
+  // Only reached under `mode: "stripe"`, which is why it was the one endpoint the
+  // first version of this fake missed.
+  taxSettings = { status: "active", head_office: { address: { country } } },
+  taxRegistrations = [{ country, status: "active" }],
+} = {}) {
+  return {
+    tax: {
+      settings: { retrieve: async () => taxSettings },
+      registrations: { list: async () => ({ data: taxRegistrations }) },
+    },
+    accounts: { retrieve: async () => ({ id: "acct_1", country }) },
+    customers: { list: paged(customers) },
+    invoices: { list: paged([]) },
+    subscriptions: { list: paged([]) },
+    paymentMethods: { list: async () => ({ data: [] }) },
+    prices: { list: async () => ({ data: prices }) },
+    taxRates: { list: async () => ({ data: taxRates }) },
+    webhookEndpoints: { list: async () => ({ data: [] }) },
+  };
+}
+
+const customer = (addressCountry) => ({
+  id: `cus_${addressCountry ?? "none"}`,
+  currency: "eur",
+  address: addressCountry ? { country: addressCountry } : null,
+  metadata: {},
+});
+
+const find = (r, fragment) => r.checks.find((c) => c.title.includes(fragment));
+const config = (tax) => ({ currency: "eur", baseUrl: "https://t.local", internalDomains: [], tax });
+
+test("a US CUSTOMER raises the warning, whatever country we are in", async () => {
+  // The bug, pinned: a French seller with a US customer must be warned.
+  __setStripeForTests(fakeStripe({ country: "FR", customers: [customer("US"), customer("FR")] }));
+  const r = await checkBillingSetup({ config: config({ origin: "FR" }) });
+
+  const c = find(r, "US customers");
+  assert.ok(c, "expected the US-exposure warning");
+  assert.equal(c.level, "warn");
+  assert.match(c.detail, /1 customer/);
+  // The fix has to name the alternative and the reason the local rate is wrong.
+  assert.match(c.fix, /mode: "stripe"/);
+  assert.match(c.fix, /Chicago|jurisdiction/);
+});
+
+test("no US customers, no warning — even for a US-established seller", async () => {
+  // The inverse of the bug. Where WE are is irrelevant: with only EU customers there
+  // is no US place of supply, so warning would be noise, and noise in a doctor is
+  // how real findings get skipped.
+  __setStripeForTests(fakeStripe({ country: "US", customers: [customer("FR"), customer("IT")] }));
+  const r = await checkBillingSetup({ config: config({ origin: "US" }) });
+  assert.equal(find(r, "US customers"), undefined);
+});
+
+test("allowApproximate silences it, because the decision has been made", async () => {
+  __setStripeForTests(fakeStripe({ country: "FR", customers: [customer("US")] }));
+  const r = await checkBillingSetup({
+    config: config({ origin: "FR", allowApproximate: true }),
+  });
+  assert.equal(find(r, "US customers"), undefined);
+});
+
+test("it is a WARNING, not an error — nexus is not knowable from here", async () => {
+  // Whether those customers are taxable depends on per-state economic-nexus
+  // thresholds (~$100k or 200 transactions) that no local dataset knows. The doctor
+  // can say the exposure exists; it cannot say an obligation does, so it must not
+  // fail the run.
+  __setStripeForTests(fakeStripe({ country: "FR", customers: [customer("US")] }));
+  const r = await checkBillingSetup({ config: config({ origin: "FR" }) });
+  assert.equal(find(r, "US customers").level, "warn");
+  assert.equal(r.healthy, true, "a warning must not make the account unhealthy");
+});
+
+test('mode "stripe" does not raise it at all', async () => {
+  // Stripe Tax resolves US local jurisdictions, so there is nothing to warn about.
+  __setStripeForTests(fakeStripe({ country: "FR", customers: [customer("US")] }));
+  const r = await checkBillingSetup({ config: config({ origin: "FR", mode: "stripe" }) });
+  assert.equal(find(r, "US customers"), undefined);
+});
+
+test("a customer with no address is not counted as US", async () => {
+  // `address: null` is the common case for a customer created before any checkout.
+  // Counting it either way would be a guess; not counting it is the quiet one.
+  __setStripeForTests(fakeStripe({ country: "FR", customers: [customer(null), customer(null)] }));
+  const r = await checkBillingSetup({ config: config({ origin: "FR" }) });
+  assert.equal(find(r, "US customers"), undefined);
+});
+
+test("the account's environment and country are reported", async () => {
+  // The cheapest check in the file and the one that catches a live key in staging.
+  __setStripeForTests(fakeStripe({ country: "IT" }));
+  const r = await checkBillingSetup({ config: config({ origin: "IT" }) });
+  const c = find(r, "Stripe account");
+  assert.ok(c, "expected the account check");
+  assert.match(c.detail, /IT/);
+  assert.match(c.detail, /test/i, "a sk_test key must read as test mode");
+});

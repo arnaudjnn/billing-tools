@@ -1,5 +1,6 @@
 import { getStripe, usageSince, usageSinceWindows } from "./billing.js";
 import { ledgerGaps, normalizePlans, type LedgerCoverage, type PlanCatalog } from "./plan-model.js";
+import { reportUsageFault } from "./usage-faults.js";
 
 // Counting usage, separately from moving money.
 //
@@ -404,6 +405,31 @@ export function stripeUsageLedger(
      * per-caller leg can point at it too and the store disappears entirely.
      */
     orgWide?: UsageLedger;
+    /**
+     * What to do when a window cannot be READ — a Stripe 429, an outage, a
+     * permission that was revoked.
+     *
+     * This needs a policy because the two legs used to disagree by accident, and
+     * both answers were wrong. A per-caller read caught its own error and returned
+     * 0, so a member who had spent their whole pack was allowed through; an
+     * org-wide read propagated, so the same rate limit 500'd the request instead.
+     * Same cause, opposite outcomes, neither chosen.
+     *
+     *  - `"last-known"` (default) serves the last value this ledger read
+     *    successfully for that window, and falls back to `"zero"` when there is
+     *    none. Stale but bounded, and it degrades gracefully exactly when the
+     *    account is busiest.
+     *  - `"zero"` is the old per-caller behaviour, made explicit: the window does
+     *    not apply and nothing is refused. Choose it only if over-serving is
+     *    cheaper for you than refusing.
+     *  - `"throw"` refuses the call rather than guessing. Correct where usage is
+     *    expensive and availability is not the priority; it makes a Stripe outage
+     *    an outage for metered calls.
+     *
+     * Every one of them reports a `UsageFault` — see `onUsageFault`. The point is
+     * not which is picked, it is that the choice is visible.
+     */
+    onReadFailure?: "last-known" | "zero" | "throw";
   } = {},
 ): UsageLedger {
   const meter = opts.orgWide ?? stripeMeterUsageLedger({ eventName: opts.eventName });
@@ -420,6 +446,46 @@ export function stripeUsageLedger(
           callerIncluded: perCaller.covers.callerIncluded,
         }
       : undefined;
+  const policy = opts.onReadFailure ?? "last-known";
+  // Bounded: one entry per window per caller, pruned when it grows. Losing an
+  // entry only costs a fallback to `zero`, so a hard cap is safe.
+  const lastKnown = new Map<string, number>();
+  const keyOf = (q: UsageQuery) =>
+    [q.orgId, q.customerId, q.start, q.end ?? "now", q.filter?.callerKind ?? "", q.filter?.callerId ?? ""].join("|");
+
+  async function guarded(read: () => Promise<number>, q: UsageQuery): Promise<number> {
+    const key = keyOf(q);
+    try {
+      const value = await read();
+      if (policy === "last-known") {
+        if (lastKnown.size > 10_000) lastKnown.clear();
+        lastKnown.set(key, value);
+      }
+      return value;
+    } catch (error) {
+      const scope = q.filter?.callerId
+        ? `u:${q.filter.callerId}`
+        : q.filter?.callerKind
+          ? `k:${q.filter.callerKind}`
+          : "org";
+      if (policy === "throw") {
+        reportUsageFault({ operation: "read", outcome: "refused", error, orgId: q.orgId, scope });
+        throw error;
+      }
+      const remembered = policy === "last-known" ? lastKnown.get(key) : undefined;
+      const served = remembered ?? 0;
+      reportUsageFault({
+        operation: "read",
+        outcome: remembered === undefined ? "counted-zero" : "used-last-known",
+        error,
+        orgId: q.orgId,
+        scope,
+        served,
+      });
+      return served;
+    }
+  }
+
   return {
     ...(covers ? { covers } : {}),
     async record(e) {
@@ -432,7 +498,8 @@ export function stripeUsageLedger(
     },
     total(q) {
       const perCallerQuery = Boolean(q.filter?.callerKind || q.filter?.callerId);
-      return perCallerQuery ? perCaller.total(q) : meter.total(q);
+      // One policy for both legs — see `onReadFailure`.
+      return guarded(() => (perCallerQuery ? perCaller.total(q) : meter.total(q)), q);
     },
   };
 }

@@ -1,5 +1,6 @@
 import { getStripe } from "./billing.js";
 import type { LedgerCoverage } from "./plan-model.js";
+import { reportUsageFault } from "./usage-faults.js";
 import {
   meterIdFor,
   stripeBalanceUsageLedger,
@@ -323,8 +324,16 @@ export function stripeScopeUsageLedger(opts: ScopeLedgerOptions = {}): UsageLedg
           { apiKey: await streamToken() },
         );
       } catch (e) {
-        // Never throws, for the same reason `meterIdFor` does not: this runs inside
-        // every metered call, and a counting failure must not take the product down.
+        // Still never throws: this runs inside every metered call, and a counting
+        // failure must not take the product down. But a dropped event is usage that
+        // can never be counted, so it goes on the fault channel.
+        reportUsageFault({
+          operation: "write",
+          outcome: "dropped",
+          error: e,
+          orgId: event.orgId,
+          scope: scopes.join(","),
+        });
         complain(`${event.orgId}|record`, e);
       }
     },
@@ -378,7 +387,16 @@ export function stripeScopeUsageLedger(opts: ScopeLedgerOptions = {}): UsageLedg
       else groups.set(key, [w]);
     }
 
-    await Promise.all([...groups.values()].map((g) => answerGroup(g).catch(() => {})));
+    await Promise.all(
+      [...groups.values()].map((g) =>
+        // Reject the waiters rather than swallowing: `total` is a promise a caller
+        // is awaiting, and a group that fails silently would leave it pending for
+        // ever.
+        answerGroup(g).catch((e) => {
+          for (const w of g) w.reject(e);
+        }),
+      ),
+    );
   }
 
   async function answerGroup(group: Waiting[]): Promise<void> {
@@ -396,17 +414,16 @@ export function stripeScopeUsageLedger(opts: ScopeLedgerOptions = {}): UsageLedg
     const wantsIncluded = first.sources?.included ?? true;
 
     const [paid, included] = await Promise.all([
+      // NOT caught here. A read that cannot be answered used to degrade to 0
+      // right at this line, which turned "I could not count" into "you have used
+      // nothing" — silently, and only under load. The policy for that belongs in
+      // ONE place (`stripeUsageLedger`), where it can serve a last-known value and
+      // report a fault, so this propagates.
       wantsWallet
-        ? legTotals(wallet, group.map((w) => w.query)).catch((e) => {
-            complain(`${first.orgId}|wallet`, e);
-            return group.map(() => 0);
-          })
+        ? legTotals(wallet, group.map((w) => w.query))
         : Promise.resolve(group.map(() => 0)),
       wantsIncluded
-        ? meterTotals(group, scope).catch((e) => {
-            complain(`${first.orgId}|${scope}`, e);
-            return group.map(() => 0);
-          })
+        ? meterTotals(group, scope)
         : Promise.resolve(group.map(() => 0)),
     ]);
 

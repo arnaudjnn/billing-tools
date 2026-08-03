@@ -220,6 +220,17 @@ export {
 // limit, and it collapses a usage screen's N per-member reads into one round.
 export { cachedUsageLedger, type UsageCacheOptions } from "./usage-cache.js";
 
+// Counting fails as a number that is silently wrong, not as an exception. This is
+// how a deployment gets told, and what the library did about it.
+export {
+  onUsageFault,
+  resetUsageFaults,
+  type UsageFault,
+  type UsageFaultHandler,
+  type UsageFaultOperation,
+  type UsageFaultOutcome,
+} from "./usage-faults.js";
+
 export {
   stripeScopeUsageLedger,
   invalidateUsageScopes,
