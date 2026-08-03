@@ -355,6 +355,12 @@ Two different CLIs, for two different people. **`registerBillingCommands(program
 - **`dev`** — `startLocalWebhooks()`: fetch the Stripe CLI into `~/.cache` if absent, `stripe listen --api-key` (no `stripe login`, no tunnel, no registered endpoint), and write the session's `whsec_` into `.env.local`. The dotenv write is the point: `stripe listen` mints a NEW secret per session and the dev server is a different process, so a file is the only channel both see.
 - **`doctor`** — `checkBillingSetup` + `formatDoctorResult`, exiting non-zero on an error so it can gate CI.
 
+**`runBillingDoctor` is the same command for an app that has plans.** `checkPlansConfig` needs the app's own catalogue, so the bin subcommand cannot run it and each app keeps a script. What the app stopped keeping is the plumbing: the `--url` / `--no-webhook` parsing, the run order (config first — it needs no network and explains most account-level symptoms), and the exit arithmetic were hand-written in both consumers, 64 and 75 lines with 87 of them differing, the second written by copying the first. Each script is now ~12 lines of the three things only that app knows: its `plans`, its `config`, and what its ledger `covers`.
+
+Two behaviours worth knowing. `STRIPE_SECRET_KEY` unset exits **2**, not 1 — that variable decides WHICH environment is checked, and a run against the wrong account is worse than no run. And a Stripe call that THROWS (invalid key, no network) is caught, printed as `✗ Stripe: …` with a fix line, and exits non-zero — the plan-config report already printed stays on screen, because it is the half that needs no network and the half Stripe can never tell you about. Both hand-written copies discarded it to a top-level `.catch`. `exit` and `log` are injectable, which is the only reason `test/doctor-runner.test.mjs` can assert any of this.
+
+Call it, do not `await` it at the top level: it exits the process itself, and a top-level await does not survive a CJS transform — the two consumers differ on `"type": "module"`, so the awaited form worked in one and failed to build in the other.
+
 ## Setting up an environment (`setupBilling`)
 
 The deploy-time twin of the lazy provisioning, and the honest scope of it is small: prices, the payment-method configuration and the usage meter all provision themselves from the key on first use, so `setupBilling({ config, plans, webhookUrl, stripeTax? })` exists for the two things that genuinely cannot, plus the reporting.

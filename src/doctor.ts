@@ -708,3 +708,114 @@ export function formatDoctorResult(result: DoctorResult): { text: string; exitCo
   );
   return { text: lines.join("\n"), exitCode: failed === 0 ? 0 : 1 };
 }
+
+// ── The runner ──────────────────────────────────────────────────────────────
+//
+// `checkPlansConfig` and `checkBillingSetup` are the checks; this is the CLI around
+// them, and it exists because both consumers hand-wrote the same one. Measured: two
+// scripts, 64 and 75 lines, 87 differing lines, doing the same thing — the same
+// `--url` / `--no-webhook` argv parsing, the same "which do I run first", the same
+// exit-code arithmetic. The second was written by copying the first.
+//
+// It cannot live in the `billing-tools doctor` bin subcommand, because
+// `checkPlansConfig` needs the app's own catalogue and only the app has it. So the
+// app keeps a script; what it stops keeping is the plumbing.
+//
+//     // scripts/ops/billing-doctor.ts
+//     import { runBillingDoctor } from "@arnaudjnn/billing-tools";
+//     import { buildConfig, PLANS } from "@myapp/toolkit/config";
+//     import { LEDGER_COVERAGE } from "@myapp/toolkit/runtime";
+//
+//     await runBillingDoctor({
+//       plans: PLANS,
+//       config: buildConfig(),
+//       usageLedger: LEDGER_COVERAGE,
+//       hasCheckout: true,
+//       webhookUrl: "https://myapp.example/api/stripe/webhook",
+//     });
+
+export interface RunDoctorOptions {
+  /** The app's catalogue. Checked FIRST: it needs no network, and a config mistake
+   *  explains most account-level symptoms. */
+  plans?: PlanCatalog;
+  /** The app's `BillingConfig`. Supplies currency and the tax mode, so the doctor
+   *  reads the same declaration the engine does rather than being told twice. */
+  config?: BillingConfig;
+  /** What the wired ledger can count — pass the ledger's own `covers`. */
+  usageLedger?: boolean | LedgerCoverage;
+  /** True when a checkout is mounted, so self-serve plans are not flagged as
+   *  advertised-but-unbuyable. */
+  hasCheckout?: boolean;
+  /** The deployed endpoint, used unless `--url` or `--no-webhook` says otherwise. */
+  webhookUrl?: string;
+  /** Defaults to `process.argv.slice(2)`. */
+  argv?: string[];
+  /** Defaults to `process.exit`. Injectable so this is testable. */
+  exit?: (code: number) => never;
+  log?: (line: string) => void;
+}
+
+/**
+ * Run both doctors, print them, and exit non-zero when something is actually wrong.
+ *
+ * Flags: `--url <url>` checks a different endpoint, `--no-webhook` skips the webhook
+ * check entirely (correct locally, where by design there IS no endpoint).
+ *
+ * Exits 2 with a clear message when `STRIPE_SECRET_KEY` is unset, because that
+ * variable decides WHICH environment is being checked — a doctor run against the
+ * wrong account is worse than no run.
+ */
+export async function runBillingDoctor(opts: RunDoctorOptions = {}): Promise<void> {
+  const argv = opts.argv ?? process.argv.slice(2);
+  const log = opts.log ?? ((line: string) => console.log(line));
+  const exit = opts.exit ?? ((code: number) => process.exit(code));
+
+  if (!process.env.STRIPE_SECRET_KEY) {
+    console.error("STRIPE_SECRET_KEY is not set — it decides which environment is checked");
+    return exit(2);
+  }
+
+  const urlFlag = argv.indexOf("--url");
+  const webhookUrl = argv.includes("--no-webhook")
+    ? undefined
+    : urlFlag !== -1
+      ? argv[urlFlag + 1]
+      : opts.webhookUrl;
+
+  // The config check first: no network, and it explains most of what the account
+  // check would otherwise report as a symptom.
+  let planExit = 0;
+  if (opts.plans) {
+    const plans = formatDoctorResult(
+      checkPlansConfig(opts.plans, {
+        hasCheckout: opts.hasCheckout,
+        usageLedger: opts.usageLedger,
+      }),
+    );
+    log(plans.text);
+    planExit = plans.exitCode;
+  }
+
+  // The account half TALKS TO STRIPE, so it can fail outright rather than report a
+  // failing check — an invalid key, a revoked one, no network. Both hand-written
+  // copies of this caught that at the top level and printed a raw error; here it
+  // becomes a legible line and a non-zero exit, and crucially it does not discard
+  // the config report already printed above. That report is the half that needs no
+  // network and the half Stripe can never tell you about.
+  let accountExit = 0;
+  try {
+    const account = formatDoctorResult(
+      await checkBillingSetup({ webhookUrl, config: opts.config }),
+    );
+    log(account.text);
+    accountExit = account.exitCode;
+  } catch (e) {
+    log(`✗ Stripe: ${e instanceof Error ? e.message : String(e)}`);
+    log("    → check STRIPE_SECRET_KEY, and that this machine can reach api.stripe.com");
+    accountExit = 1;
+  }
+
+  // Either failing fails the run: a good account with a broken catalogue is still
+  // broken, and it is the half that never shows up in Stripe.
+  return exit(accountExit || planExit);
+}

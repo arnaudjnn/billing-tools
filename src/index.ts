@@ -399,6 +399,10 @@ export {
   checkBillingSetup,
   checkPlansConfig,
   formatDoctorResult,
+  // The CLI around the two checks. Both consumers hand-wrote the same argv parsing
+  // and exit-code arithmetic (64 and 75 lines, 87 of them differing, same job).
+  runBillingDoctor,
+  type RunDoctorOptions,
   type Check,
   type CheckLevel,
   type DoctorResult,
