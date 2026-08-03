@@ -91,7 +91,6 @@ export {
   includedCredits,
   includedCreditsByType,
   lookupKeyFor,
-  DEFAULT_SEAT_TYPES,
   type EnsuredPrice,
   type PlanPrices,
   type MigratedSubscription,

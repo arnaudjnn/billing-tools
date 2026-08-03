@@ -10,10 +10,8 @@ import {
   type BillingInterval,
   type PlanCatalog,
   type PlanModel,
-  type PlansConfig,
   type Quantities,
   type Sale,
-  type SeatTypeDef,
 } from "./plan-model.js";
 
 // Declarative plans. Declare them once in code; billing-tools provisions the
@@ -26,20 +24,17 @@ import {
 
 // The plan SHAPE lives in plan-model.ts — a leaf with no imports, so a browser
 // bundle and a docs generator can read it (this module pulls in `stripe`). The
-// types are re-exported here so `import { PlanDef } from "@arnaudjnn/billing-tools"`
+// types are re-exported here so `import { PlanSpec } from "@arnaudjnn/billing-tools"`
 // keeps working unchanged.
 export type {
   BillingInterval,
   Money,
   IntervalPrice,
-  SeatTypeDef,
   SeatTypeSpec,
   SeatTypeDisplay,
-  PlanDef,
   PlanSpec,
   PlanDisplay,
   PlanLimits,
-  PlansConfig,
   PlanCatalog,
   PlanModel,
   NormalSeatType,
@@ -62,7 +57,6 @@ export type {
 export {
   DEFAULT_SEAT_TYPE,
   definePlans,
-  isLegacyPlan,
   normalizePlan,
   normalizePlans,
   planModel,
@@ -85,18 +79,6 @@ export {
   ledgerGaps,
   coverageNeededBy,
 } from "./plan-model.js";
-
-// Library DEFAULT seat types, priced in USD (the lib's default currency — see
-// ensurePlans `opts.currency ?? "usd"`). Consumers use these as-is or override
-// (a euro-denominated consumer sets currency "eur" and its own amounts).
-// Amounts are cents; `yearly` is the annual total per seat. The `api` seat is
-// the shared agent/API pool (≈ 5× a premium seat). `includedCredits` are example
-// packs — tune per product.
-export const DEFAULT_SEAT_TYPES: Record<string, SeatTypeDef> = {
-  standard: { label: "Standard", price: { monthly: 2500, yearly: 24000 }, includedCredits: 1000 }, // $25/mo · $20/mo annually
-  premium: { label: "Premium", price: { monthly: 12500, yearly: 120000 }, includedCredits: 5000 }, // $125/mo · $100/mo annually
-  api: { label: "API", price: { monthly: 62500, yearly: 600000 }, includedCredits: 25000, seats: 1 }, // ≈ 5× premium, one per workspace
-};
 
 const STRIPE_INTERVAL: Record<BillingInterval, "month" | "year"> = {
   monthly: "month",

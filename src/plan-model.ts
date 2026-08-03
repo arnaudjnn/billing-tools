@@ -11,7 +11,10 @@
 // ── Why five axes instead of one ────────────────────────────────────────────
 //
 // A plan used to be `{ seats, creditsPerSeat, price, seatTypes?, allowanceMode? }`
-// and that shape can only really express one product: per-seat, with a per-seat
+// — `PlanDef`, removed in 4.0.0 once both consumers had migrated and nothing but
+// this library's own tests still referenced it. Kept here as the reason the model
+// looks the way it does, not as a shape you can still write: that one could only
+// really express one product: per-seat, with a per-seat
 // pack. Everything else was squeezed into `allowanceMode`, which despite its
 // name does exactly ONE thing — skip the per-seat cap. There was no org-level
 // allowance anywhere, so "we don't care about seats, here is a package of N tool
@@ -400,9 +403,7 @@ export interface PlanSpec {
    * (a Stripe credit balance auto-applies to the next invoice; measured at ~48%
    * off a seat). An included allowance belongs in `cap`, which is counted rather
    * than credited, so a plan that says nothing gets the safe answer instead of
-   * the one `checkPlansConfig` immediately flags as an error. A LEGACY config
-   * still maps to `purchased_seats` — that was its behaviour, and changing it
-   * would silently stop grants a live customer already receives.
+   * the one `checkPlansConfig` immediately flags as an error.
    */
   grant?: Grant;
   /** Default: `seats` → per_seat, otherwise wallet. A POOL IS NEVER INFERRED —
@@ -434,56 +435,9 @@ export interface PlanSpec {
   seat?: { key?: string; display?: SeatTypeDisplay };
 }
 
-// ── The legacy shape, unchanged ─────────────────────────────────────────────
-//
-// Both consumer apps declare `export const PLANS: PlansConfig = {…}` and then
-// read `PLANS[k].price.monthly`. Turning `PlanDef` into a union would stop those
-// reads compiling, so it keeps its exact fields and the normaliser maps it.
-
-/** One seat type within a plan. @deprecated Prefer {@link SeatTypeSpec}. */
-export interface SeatTypeDef {
-  /** Per-seat recurring price (cents). 0 = free (no Stripe price). */
-  price: IntervalPrice;
-  /** Included credits granted per seat of THIS type, per billing cycle. */
-  includedCredits: number;
-  /** Optional cap on seats of this type (null/undefined = unlimited). */
-  seats?: number | null;
-  /** Optional display label. */
-  label?: string;
-}
-
-export interface PlanDef {
-  /** Max members per workspace. null = unlimited. */
-  seats: number | null;
-  /**
-   * Included credits granted per seat, per billing cycle (flat model).
-   * @deprecated Never reached the cap logic — it only ever sized a GRANT. Use
-   * `grant: { kind: "per_member", credits }`, or `cap: { kind: "pool" }` if what
-   * you meant was an included allowance.
-   */
-  creditsPerSeat: number;
-  /** Recurring price in minor units. 0 = free (no Stripe price). */
-  price: IntervalPrice;
-  /** Per-seat-type prices + packs. */
-  seatTypes?: Record<string, SeatTypeDef>;
-  /**
-   * @deprecated Use `cap`. `"per_seat"` is `cap: { kind: "per_seat" }`;
-   * `"global"` is `cap: { kind: "wallet" }`.
-   *
-   * `"global"` never created an org-level pool — it only skipped the per-seat
-   * cap, leaving the wallet as the sole gate. For an actual pool, say
-   * `cap: { kind: "pool", credits: N }`.
-   */
-  allowanceMode?: "per_seat" | "global";
-}
-
-/** The all-legacy catalogue. Kept so `PLANS: PlansConfig` still type-checks. */
-export type PlansConfig = Record<string, PlanDef>;
-
-/** What library functions accept: a supertype, so a `PlansConfig` passes as-is. */
-export type PlanCatalog = Record<string, PlanDef | PlanSpec>;
-
-export const isLegacyPlan = (d: PlanDef | PlanSpec): d is PlanDef => !("sells" in d);
+/** What library functions accept. Was a supertype of the pre-0.54 `PlanDef` too,
+ *  until 4.0.0 removed it — see the note on `definePlans`. */
+export type PlanCatalog = Record<string, PlanSpec>;
 
 /**
  * Identity helper for a plans config.
@@ -491,7 +445,7 @@ export const isLegacyPlan = (d: PlanDef | PlanSpec): d is PlanDef => !("sells" i
  * Annotating with `PlanCatalog` widens the keys to `string` and loses `display`
  * autocomplete; this keeps the literal types while still checking the shape.
  */
-export function definePlans<T extends Record<string, PlanDef | PlanSpec>>(plans: T): T {
+export function definePlans<T extends Record<string, PlanSpec>>(plans: T): T {
   return plans;
 }
 
@@ -528,29 +482,18 @@ export interface PlanModel {
   seat: { key: string; display: SeatTypeDisplay | null } | null;
   /** Flat-plan price, or null. */
   price: IntervalPrice | null;
-  /** True when the config used the pre-0.54 shape, so the doctor can say so. */
-  legacy: boolean;
 }
 
-const hasPrice = (p: IntervalPrice): boolean => p.monthly > 0 || p.yearly > 0;
-
-function normalizeSeatTypes(
-  seatTypes: Record<string, SeatTypeSpec | SeatTypeDef>,
-): NormalSeatType[] {
-  return Object.entries(seatTypes).map(([key, s]) => {
-    const legacy = s as SeatTypeDef;
-    const spec = s as SeatTypeSpec;
-    return {
-      key,
-      price: s.price,
-      includedCredits: s.includedCredits ?? 0,
-      min: spec.min ?? 0,
-      // `seats` was the legacy name for a per-type cap.
-      max: spec.max ?? legacy.seats ?? null,
-      shared: spec.shared ?? false,
-      display: spec.display ?? (legacy.label ? { label: legacy.label } : null),
-    };
-  });
+function normalizeSeatTypes(seatTypes: Record<string, SeatTypeSpec>): NormalSeatType[] {
+  return Object.entries(seatTypes).map(([key, spec]) => ({
+    key,
+    price: spec.price,
+    includedCredits: spec.includedCredits ?? 0,
+    min: spec.min ?? 0,
+    max: spec.max ?? null,
+    shared: spec.shared ?? false,
+    display: spec.display ?? null,
+  }));
 }
 
 /** Intervals a price actually exists for, so a plan can't advertise an interval
@@ -566,73 +509,26 @@ function soldIntervals(
   return INTERVALS.filter(has);
 }
 
-export function normalizePlan(key: string, spec: PlanDef | PlanSpec): PlanModel {
-  if (!isLegacyPlan(spec)) {
-    const seatTypes =
-      spec.sells.kind === "seats" ? normalizeSeatTypes(spec.sells.seatTypes) : [];
-    const price = spec.sells.kind === "flat" ? spec.sells.price : null;
-    const declared = spec.sells.kind === "nothing" ? [] : spec.sells.intervals;
-    return {
-      key,
-      sells: spec.sells,
-      grant: spec.grant ?? { kind: "none" },
-      cap: spec.cap ?? { kind: spec.sells.kind === "seats" ? "per_seat" : "wallet" },
-      replenish: spec.replenish ?? {},
-      sale: spec.sale,
-      limits: { members: spec.limits?.members ?? null, rate: spec.limits?.rate ?? [] },
-      display: spec.display ?? null,
-      intervals: soldIntervals(declared, price, seatTypes),
-      seatTypes,
-      seat:
-        spec.sells.kind === "seats" || !spec.seat
-          ? null
-          : { key: spec.seat.key ?? DEFAULT_SEAT_TYPE, display: spec.seat.display ?? null },
-      price,
-      legacy: false,
-    };
-  }
-
-  // Legacy. Every mapping here is behaviour-preserving; the property to hold is
-  // that no legacy config can produce `cap: "pool"`, so the new entitlement
-  // path stays dead until a config opts in.
-  const seatTypes = spec.seatTypes ? normalizeSeatTypes(spec.seatTypes) : [];
-  const sells: Sells = spec.seatTypes
-    ? { kind: "seats", seatTypes: spec.seatTypes }
-    : hasPrice(spec.price)
-      ? { kind: "flat", price: spec.price }
-      : { kind: "nothing" };
-  const grant: Grant = spec.seatTypes
-    ? { kind: "purchased_seats" }
-    : hasPrice(spec.price)
-      ? { kind: "per_member", credits: spec.creditsPerSeat }
-      : { kind: "none" };
+export function normalizePlan(key: string, spec: PlanSpec): PlanModel {
+  const seatTypes = spec.sells.kind === "seats" ? normalizeSeatTypes(spec.sells.seatTypes) : [];
+  const price = spec.sells.kind === "flat" ? spec.sells.price : null;
+  const declared = spec.sells.kind === "nothing" ? [] : spec.sells.intervals;
   return {
     key,
-    sells,
-    grant,
-    // "global" meant "no cap", full stop.
-    cap:
-      spec.allowanceMode === "global"
-        ? { kind: "wallet" }
-        : { kind: "per_seat", onExhausted: "block" },
-    replenish: {},
-    // Not knowable from the legacy shape, so it is guessed from whether ANY
-    // price exists — note a seat-typed plan whose every seat is 0 mints no
-    // Stripe price and therefore cannot be bought, which the old `price > 0`
-    // test on the plan-level amount got wrong in both directions. The doctor
-    // warns either way, because guessing this is what sold a quote-only plan.
-    sale: soldIntervals(undefined, sells.kind === "flat" ? spec.price : null, seatTypes).length === 0
-      ? "free"
-      : "self_serve",
-    // The legacy shape cannot express a rate limit, so a legacy plan has none.
-    limits: { members: spec.seats, rate: [] },
-    display: null,
-    intervals: soldIntervals(undefined, sells.kind === "flat" ? spec.price : null, seatTypes),
+    sells: spec.sells,
+    grant: spec.grant ?? { kind: "none" },
+    cap: spec.cap ?? { kind: spec.sells.kind === "seats" ? "per_seat" : "wallet" },
+    replenish: spec.replenish ?? {},
+    sale: spec.sale,
+    limits: { members: spec.limits?.members ?? null, rate: spec.limits?.rate ?? [] },
+    display: spec.display ?? null,
+    intervals: soldIntervals(declared, price, seatTypes),
     seatTypes,
-    // The legacy shape cannot name a seat, the same way it cannot name a rate limit.
-    seat: null,
-    price: sells.kind === "flat" ? spec.price : null,
-    legacy: true,
+    seat:
+      spec.sells.kind === "seats" || !spec.seat
+        ? null
+        : { key: spec.seat.key ?? DEFAULT_SEAT_TYPE, display: spec.seat.display ?? null },
+    price,
   };
 }
 

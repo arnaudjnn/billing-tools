@@ -459,18 +459,6 @@ export function checkPlansConfig(
     }
   }
 
-  const legacy = models.filter((m) => m.legacy);
-  if (legacy.length) {
-    checks.push({
-      level: "warn",
-      title: "Legacy plan shape",
-      detail: `${legacy.map((m) => m.key).join(", ")} use the pre-0.54 shape, so \`sale\` was GUESSED from whether any price exists`,
-      fix:
-        "Declare `sells`/`cap`/`sale` explicitly (see definePlans). Guessing `sale` is what lets a " +
-        "quote-only plan be bought at its placeholder price",
-    });
-  }
-
   for (const m of models) {
     // The defect this release exists to fix: crediting an allowance discounts the
     // invoice that allowance came with.

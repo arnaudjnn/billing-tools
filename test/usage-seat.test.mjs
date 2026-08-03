@@ -83,12 +83,3 @@ test("labels resolve per locale, like every other string the config authors", ()
   assert.equal(resolveSeat(m, "solo", { locale: "it" }).label, "Singolo");
   assert.equal(resolveSeat(m, "solo", { locale: "fr-CA" }).label, "Solo"); // default locale
 });
-
-test("the legacy plan shape cannot name a seat", () => {
-  const m = normalizePlan("old", {
-    seats: 5,
-    creditsPerSeat: 1000,
-    price: { monthly: 1000, yearly: 10000 },
-  });
-  assert.equal(m.seat, null);
-});

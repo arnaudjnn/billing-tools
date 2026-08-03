@@ -167,8 +167,7 @@ export interface MeterConfig<R extends Record<string, number> = Record<string, n
    *  metadata, WorkOS org metadata, …) so the consumer supplies it; the result
    *  is cached here for `planCacheTtlMs`. */
   resolvePlan: (orgId: string) => Promise<string | null>
-  /** Seat-type keys a caller maps to by identity. Default standard / api (the
-   *  DEFAULT_SEAT_TYPES convention). */
+  /** Seat-type keys a caller maps to by identity. Default standard / api. */
   seatDefaults?: { user?: string; api?: string }
   /** Plan-cache TTL (ms). Default 60_000. The plan changes rarely; a brief stale
    *  read only affects which allowance mode applies, never the debit. */

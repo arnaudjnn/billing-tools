@@ -7,7 +7,7 @@ import {
   type PlanPrices,
   type PlanCatalog,
 } from "./plans.js";
-import type { BillingInterval, PlansConfig } from "./plans.js";
+import type { BillingInterval } from "./plans.js";
 import { defaultPaymentMethodConfig } from "./payment-method-config.js";
 import { taxFor } from "./tax.js";
 import type { BillingConfig } from "./types.js";

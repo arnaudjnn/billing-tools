@@ -74,7 +74,6 @@ export type {
   Money,
   IntervalPrice,
   PlanCatalog,
-  PlanDef,
   PlanSpec,
   PlanModel,
   PlanDisplay,
