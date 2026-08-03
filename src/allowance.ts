@@ -147,6 +147,22 @@ export async function resolveAllowance(
     return { plan: model?.key ?? null, cycle, limits: [], pool: null, pack: null, wallet: 0 };
   }
 
+  // WHICH funding sources a per-caller window can hold, worked out once from the
+  // plan and handed to every per-caller read. It is what makes the expensive leg
+  // skippable without any consumer having to declare it — and declaring it by hand
+  // was a footgun, because getting it wrong under-reports and an under-reported
+  // window refuses no one.
+  //
+  //   included — `capCovers` is false for an `api` caller on a `covers: "users"`
+  //     plan: it draws no included allowance, so its meter read is a guaranteed 0.
+  //   wallet   — `exhaustedPolicy` already answers this for every shape: "wallet"
+  //     for an api/shared caller, for a `cap: wallet` plan, and for a pack that
+  //     overflows; "block" exactly when the caller can never spend the wallet.
+  const sources = {
+    included: model ? model.cap.kind !== "wallet" && capCovers(model, input.caller) : true,
+    wallet: exhaustedPolicy(model, input.caller) === "wallet",
+  };
+
   const poolSize = poolSizeOf(
     model,
     await seatsFor(adapter, input.orgId, model, purchasedSeats),
@@ -175,6 +191,7 @@ export async function resolveAllowance(
               // whole workspace, but only that kind's usage — "600 an hour across
               // every agent" is not the same window as one agent's.
               (limit.callerKind ? { callerKind: limit.callerKind } : undefined),
+        ...(scope === "caller" || limit.callerKind ? { sources } : {}),
       })
       .then((used) => ({
         every: limit.every,
@@ -247,6 +264,7 @@ export async function resolveAllowance(
             input.caller?.kind === "api"
               ? { callerKind: "api" }
               : { callerKind: "user", callerId: input.caller?.id },
+          sources,
         }),
     // Top-up grants raise a member's pack for the cycle, keyed by the cycle
     // identity `currentCycle` produces — the same one the approving tool writes,

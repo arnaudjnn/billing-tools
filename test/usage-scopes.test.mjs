@@ -282,3 +282,35 @@ test("wallet: null still answers an org-scoped query with 0 rather than throwing
   const l = stripeScopeUsageLedger({ wallet: null });
   assert.equal(await l.total({ orgId: "org_1", customerId: "cus_org", start: 1 }), 0);
 });
+
+test("sources skips the leg that cannot contribute, and defaults to BOTH", async () => {
+  // The hint `resolveAllowance` supplies. Getting it wrong under-reports, so the
+  // default when it is absent must be to read everything.
+  const { customers } = fakeStripe({ summaries: { cus_u1: 30 } });
+  customers.set("org_1|u:u1", "cus_u1");
+  const walked = { n: 0 };
+  const spyWallet = {
+    covers: { orgIncluded: false, callerIncluded: false },
+    async record() {},
+    async total() { walked.n++; return 12 },
+  };
+  const l = stripeScopeUsageLedger({ wallet: spyWallet });
+  const q = (sources) => ({
+    orgId: "org_1", customerId: "cus_org", start: 1,
+    filter: { callerKind: "user", callerId: "u1" }, ...(sources ? { sources } : {}),
+  });
+
+  assert.equal(await l.total(q()), 42, "absent → both legs");
+  assert.equal(walked.n, 1);
+
+  // An api caller on a `covers: "users"` plan draws no included allowance, so its
+  // meter read is a guaranteed 0 — skip it, keep the debits.
+  assert.equal(await l.total(q({ included: false, wallet: true })), 12);
+  assert.equal(walked.n, 2, "wallet still read");
+
+  // A pack that blocks on exhaustion can never spend the wallet — skip the walk,
+  // which is the expensive one.
+  const before = walked.n;
+  assert.equal(await l.total(q({ included: true, wallet: false })), 30);
+  assert.equal(walked.n, before, "the balance walk did not happen");
+});

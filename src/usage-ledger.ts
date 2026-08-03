@@ -48,6 +48,24 @@ export interface UsageQuery {
   /** Epoch ms, exclusive. Omit for "up to now". */
   end?: number;
   filter?: { callerKind?: string; callerId?: string };
+  /**
+   * Which funding sources this window can actually contain — an optimisation
+   * hint, never a filter on the answer.
+   *
+   * A ledger that reads two sources (the scope ledger reads INCLUDED usage from a
+   * meter and WALLET-funded usage from the debits) can skip the leg that must
+   * return 0. The caller knows this and the ledger cannot: whether a per-caller
+   * window can hold wallet-funded usage is a property of the plan
+   * (`exhaustedPolicy`), and whether it can hold included usage is
+   * `capCovers` — an `api` caller on a `covers: "users"` plan draws no included
+   * allowance at all, so reading its meter is a guaranteed 0.
+   *
+   * Omitted means BOTH, which is the safe reading: a ledger must never invent a
+   * restriction the caller did not state, because skipping a source that could
+   * contribute under-reports, and under-reporting reads as generosity and refuses
+   * no one. `resolveAllowance` fills it in for every read it issues.
+   */
+  sources?: { included?: boolean; wallet?: boolean };
 }
 
 export interface UsageLedger {

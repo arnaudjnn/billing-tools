@@ -209,18 +209,22 @@ export interface ScopeLedgerOptions {
    * Where WALLET-funded per-caller usage is read from. Defaults to the balance
    * ledger, which is exact and has no lag because the debit IS the record.
    *
-   * **Pass `null` when no per-caller window on your plans can ever be
-   * wallet-funded**, and the walk behind it disappears. It is the most expensive
-   * read in this file and the only unbounded one: `usageSince` pages balance
-   * transactions newest-first across the whole window, 100 per request, and an
-   * org whose API usage the wallet funds writes one transaction per call — so a
-   * monthly window can cost tens of requests, on every per-member read.
+   * This is the most expensive read here and the only unbounded one: `usageSince`
+   * pages balance transactions newest-first across the whole window, 100 per
+   * request, and an org whose API usage the wallet funds writes one transaction
+   * per call — so a monthly window can cost tens of requests.
    *
-   * It is right to keep it wherever per-caller usage CAN move money: a
-   * `cap: wallet` plan, or `onExhausted: "wallet"` once a pack is spent. Dropping
-   * it there under-reports, which reads as generosity and refuses no one. When in
-   * doubt, leave it and put `cachedUsageLedger` in front instead — that bounds the
-   * cost without changing the answer.
+   * **You should not normally need to touch this.** `resolveAllowance` states on
+   * every read whether the window can hold wallet-funded usage at all
+   * (`UsageQuery.sources`), derived from `exhaustedPolicy`, and the leg is skipped
+   * when it cannot. That is strictly better than deciding here, because it is per
+   * QUERY rather than per deployment: the same plan can have a member window that
+   * overflows to the wallet and an agent window that is wallet-only.
+   *
+   * `null` remains as a blunt override for a consumer driving this ledger
+   * directly, without `resolveAllowance` to supply the hint. Setting it when any
+   * per-caller window CAN move money under-reports, and under-reporting reads as
+   * generosity and refuses no one.
    */
   wallet?: UsageLedger | null;
 }
@@ -303,9 +307,15 @@ export function stripeScopeUsageLedger(opts: ScopeLedgerOptions = {}): UsageLedg
       // figure alone is the honest answer rather than a wrong one.
       if (scope === "org") return wallet ? wallet.total(query) : 0;
 
+      // Skip the leg that cannot contribute. Absent `sources` means both, so a
+      // caller that says nothing pays for both and is never under-reported.
+      const wantsWallet = query.sources?.wallet ?? true;
+      const wantsIncluded = query.sources?.included ?? true;
+
       const [paid, included] = await Promise.all([
-        wallet ? wallet.total(query) : 0,
+        wallet && wantsWallet ? wallet.total(query) : 0,
         (async () => {
+          if (!wantsIncluded) return 0;
           try {
             const meter = await meterIdFor(eventName, { create: false });
             if (!meter) return 0;

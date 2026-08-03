@@ -101,12 +101,16 @@ const customerId = customer.id;
 console.log(`org ${ORG} · customer ${customerId} · ${MEMBERS} members\n`);
 
 /** One metered call's worth of reads, for a random member. */
+const KINDS = (process.env.CALLER ?? "user").split(",");
 const oneCall = (ledger, i) =>
   resolveAllowance(adapter, config, {
     orgId: ORG,
     plans: PLANS,
     plan: "pro",
-    caller: { kind: "user", id: members[i % members.length], seatType: "standard" },
+    caller:
+      KINDS[i % KINDS.length] === "api"
+        ? { kind: "api", id: `key_${i % members.length}` }
+        : { kind: "user", id: members[i % members.length], seatType: "standard" },
     customerId,
     ledger,
   });

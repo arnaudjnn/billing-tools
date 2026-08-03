@@ -66,6 +66,12 @@ function keyOf(q: UsageQuery): string {
     q.end ?? "now",
     f?.callerKind ?? "",
     f?.callerId ?? "",
+    // `sources` is part of the ANSWER, not just of how it is fetched: a read that
+    // skips a leg returns a smaller number than one that does not. In practice the
+    // two are derived from the same caller and always agree, but keying on the
+    // window alone would make that an assumption rather than a fact.
+    (q.sources?.included ?? true) ? "i" : "-",
+    (q.sources?.wallet ?? true) ? "w" : "-",
   ].join("|");
 }
 

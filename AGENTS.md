@@ -253,11 +253,28 @@ request: `usageSince` paginates.
 
 Measured on a per-seat catalogue with a caller-scoped limit, per metered call:
 
-| | requests / call | binding endpoint |
+| caller | uncached | cached 2 s |
 |---|---|---|
-| uncached | **5.63** | `listEventSummaries` |
-| cached 2 s, 20 distinct callers | **3.60** (1.6x fewer) | " |
-| cached 2 s, bursty (3 callers) | **1.33** (3.8x fewer) | " |
+| member (`user`) | **5.95** | **2.90** |
+| API key (`api`) | **2.00** | **1.00** |
+| member, bursty (3 callers) | 5.07 | **1.33** |
+
+**The bottleneck is metered calls per SECOND for the whole account, not users.**
+Stripe's limits are per account, so idle users cost nothing and the ceiling is
+shared across every org: at ~1.3 `listEventSummaries` per call that is roughly
+15-20 metered calls/s in aggregate. What makes it inherent is that the meter has
+**no batch read** — one summary per caller per window, so W windows cost W
+requests and an N-member screen costs N.
+
+**`UsageQuery.sources` is what makes the agent path cheap.** `resolveAllowance`
+states per read whether the window can hold INCLUDED usage (`capCovers`) and
+WALLET-funded usage (`exhaustedPolicy`), and the scope ledger skips the leg that
+must return 0. An `api` caller on a `covers: "users"` plan draws no included
+allowance, so its meter read is a guaranteed zero and its cost falls to 2 requests
+— which matters because agents are the high-volume traffic. A member whose pack
+overflows to the wallet genuinely needs both legs and is unchanged. Omitting
+`sources` means BOTH: a ledger must never invent a restriction, since skipping a
+source that could contribute under-reports and refuses no one.
 
 The spread is the point: the cache pays off in proportion to how often the SAME
 caller repeats inside the TTL, so a round-robin over many members is close to its
