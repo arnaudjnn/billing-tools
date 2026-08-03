@@ -543,6 +543,77 @@ export async function createBillingPortalSession(
   return session.url;
 }
 
+// ── Spend controls ──────────────────────────────────────────────────────────
+// A customer-set ceiling on how much they may CONSUME in a calendar month, plus
+// the thresholds they want to be warned at. Both live on the customer's metadata,
+// beside auto-reload, because all three are the same kind of thing: a billing
+// preference the customer owns, not plan configuration.
+//
+// The ceiling is a LIMIT in the `resolveAllowance` sense — it funds nothing and
+// only refuses — so it is enforced through `state.limits` like every rate limit
+// rather than through a gate of its own. See `spendLimitState`.
+
+/** Metadata keys. `spend_alerts` is a comma-separated ascending list. */
+const SPEND_LIMIT_KEY = "spend_limit_credits";
+const SPEND_ALERTS_KEY = "spend_alert_credits";
+
+export interface SpendControls {
+  /** Credits allowed per calendar month, or null for no ceiling. */
+  limitCredits: number | null;
+  /** Ascending credit thresholds to warn at. Empty when none. */
+  alertCredits: number[];
+}
+
+/** Parsed from an already-fetched customer, so a caller that has one does not
+ *  pay for a second read. `spendControlsOf` is the whole parser. */
+export function spendControlsOf(metadata: Stripe.Metadata | null | undefined): SpendControls {
+  const md = metadata ?? {};
+  const limit = Number.parseInt(md[SPEND_LIMIT_KEY] ?? "", 10);
+  return {
+    // 0 and negatives mean "no ceiling", never "refuse everything": a limit
+    // stored as 0 by a bad write must not silently block a whole workspace.
+    limitCredits: Number.isFinite(limit) && limit > 0 ? limit : null,
+    alertCredits: (md[SPEND_ALERTS_KEY] ?? "")
+      .split(",")
+      .map((s) => Number.parseInt(s.trim(), 10))
+      .filter((n) => Number.isFinite(n) && n > 0)
+      .sort((a, b) => a - b),
+  };
+}
+
+export async function getSpendControls(stripeCustomerId: string): Promise<SpendControls> {
+  const customer = await getStripe().customers.retrieve(stripeCustomerId);
+  if (customer.deleted) return { limitCredits: null, alertCredits: [] };
+  return spendControlsOf(customer.metadata);
+}
+
+/**
+ * Write either field; omit one to leave it alone.
+ *
+ * "" is what CLEARS a Stripe metadata key, which is why null/empty map to it
+ * rather than to "0" — a stored "0" would read back as a ceiling of zero.
+ */
+export async function setSpendControls(
+  stripeCustomerId: string,
+  input: { limitCredits?: number | null; alertCredits?: number[] },
+): Promise<void> {
+  const metadata: Record<string, string> = {};
+  if ("limitCredits" in input) {
+    metadata[SPEND_LIMIT_KEY] =
+      input.limitCredits && input.limitCredits > 0
+        ? String(Math.round(input.limitCredits))
+        : "";
+  }
+  if ("alertCredits" in input) {
+    const alerts = (input.alertCredits ?? [])
+      .filter((n) => Number.isFinite(n) && n > 0)
+      .map((n) => Math.round(n))
+      .sort((a, b) => a - b);
+    metadata[SPEND_ALERTS_KEY] = alerts.length ? alerts.join(",") : "";
+  }
+  await getStripe().customers.update(stripeCustomerId, { metadata });
+}
+
 export async function getAutoReloadSettings(stripeCustomerId: string): Promise<{
   enabled: boolean;
   threshold: number;

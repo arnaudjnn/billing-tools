@@ -1,4 +1,4 @@
-import { getBillingCustomerId, getCreditBalance } from "./billing.js";
+import { getBillingCustomerId, getCreditBalance, getSpendControls } from "./billing.js";
 import { formatMessage, resolveMessages, type PartialMessages } from "./i18n.js";
 import {
   capCovers,
@@ -27,7 +27,7 @@ import { stripeBalanceUsageLedger, type FundingSource, type UsageLedger } from "
 // decision itself is pure arithmetic, so pulling it out of the Stripe round trips
 // makes it testable, which the meter was not.
 
-/** One declared rate limit, with the window it is being measured over. */
+/** One limit, with the window it is being measured over. */
 export interface LimitState {
   every: Every;
   scope: "org" | "caller";
@@ -38,6 +38,16 @@ export interface LimitState {
   remaining: number;
   /** The aligned window. `end` is always known, so a UI can count down to it. */
   window: CycleWindow;
+  /**
+   * WHOSE limit this is. Absent means `rate` — every limit predates this field.
+   *
+   * `rate` is the product's, declared in the plan: the customer cannot lift it,
+   * so the refusal tells them to wait. `spend` is the customer's OWN monthly
+   * ceiling (`setSpendControls`): they can raise it, so the refusal says so
+   * instead. Same mechanism, same arithmetic — only the advice differs, which is
+   * why this is a field on one shape rather than a second kind of limit.
+   */
+  kind?: "rate" | "spend";
 }
 
 export interface AllowanceState {
@@ -77,6 +87,9 @@ export interface AllowanceInput {
   ledger?: UsageLedger;
   /** Skip the wallet read — for a caller that only needs the entitlement. */
   skipWallet?: boolean;
+  /** Skip the customer's monthly spend ceiling. For a read that only wants plan
+   *  entitlement, or a surface that must never be refused by it. */
+  skipSpendLimit?: boolean;
   /** Pin the clock. Every rate window is derived from it, so a test can place
    *  itself inside a window instead of waiting for one. Defaults to now. */
   now?: number;
@@ -164,7 +177,40 @@ export async function resolveAllowance(
       }));
   });
 
-  const [wallet, poolUsed, packUsed, extra, limits] = await Promise.all([
+  // The customer's own monthly ceiling, if they set one. Read from the customer
+  // metadata — the SAME object `getCreditBalance` retrieves below, so a caller
+  // that needs both pays one round trip, and it joins the parallel round with
+  // every other limit rather than adding a step to the meter's hot path.
+  const spendReads: Promise<LimitState[]> = input.skipSpendLimit
+    ? Promise.resolve([])
+    : getSpendControls(customerId).then(({ limitCredits }) => {
+        if (!limitCredits) return [];
+        // A CALENDAR month, deliberately, and not the plan cycle: the customer set
+        // a "monthly" ceiling, and an annual subscriber's cycle would make that one
+        // window a year wide.
+        const window = rateWindowFor("month", now, cycle);
+        return ledger
+          .total({
+            orgId: input.orgId,
+            customerId,
+            start: window.start,
+            end: window.end ?? undefined,
+          })
+          .then((used) => [
+            {
+              every: "month" as Every,
+              scope: "org" as const,
+              label: null,
+              size: limitCredits,
+              used,
+              remaining: Math.max(0, limitCredits - used),
+              window,
+              kind: "spend" as const,
+            },
+          ]);
+      });
+
+  const [wallet, poolUsed, packUsed, extra, limits, spendLimits] = await Promise.all([
     input.skipWallet ? Promise.resolve(0) : getCreditBalance(customerId, config.currency),
     poolSize == null
       ? Promise.resolve(0)
@@ -190,12 +236,15 @@ export async function resolveAllowance(
       ? Promise.resolve(0)
       : extraAllowance(adapter, input.orgId, input.caller.id, cycle.key),
     Promise.all(limitReads),
+    spendReads,
   ]);
 
   return {
     plan: model?.key ?? null,
     cycle,
-    limits,
+    // Plan limits first: when both refuse, the one the customer cannot lift is
+    // the more useful thing to be told.
+    limits: [...limits, ...spendLimits],
     pool:
       poolSize == null
         ? null
@@ -238,6 +287,9 @@ async function subscriptionPeriod(
 
 export type DenialReason =
   | "rate_limit_reached"
+  /** The customer's OWN monthly ceiling. Distinct from `rate_limit_reached`
+   *  because they can raise it themselves, and the message must say so. */
+  | "spend_limit_reached"
   | "pool_exhausted"
   | "seat_allowance_reached"
   | "insufficient_balance";
@@ -282,7 +334,15 @@ export function fundingFor(
   // when the week is what ran out.
   for (const limit of state.limits ?? []) {
     if (limit.remaining < cost) {
-      return { ok: false, source: null, reason: "rate_limit_reached", limit };
+      return {
+        ok: false,
+        source: null,
+        // The customer's own ceiling refuses exactly like a rate limit; only the
+        // advice differs, so the reason carries the distinction and nothing else
+        // in this function has to know about it.
+        reason: limit.kind === "spend" ? "spend_limit_reached" : "rate_limit_reached",
+        limit,
+      };
     }
   }
 
@@ -331,6 +391,13 @@ export function describeDenial(
       const name = l?.label ?? (l ? WINDOW_NAMES[l.every] : "window");
       const resets = l?.window.end ? ` Resets ${new Date(l.window.end).toISOString()}.` : "";
       return `Usage limit reached for this ${name} (${l?.size ?? 0}).${resets}`;
+    }
+    case "spend_limit_reached": {
+      const l = limit ?? (state.limits ?? []).find((x) => x.kind === "spend");
+      const resets = l?.window.end ? ` Resets ${new Date(l.window.end).toISOString()}.` : "";
+      // Names the customer's own action, because this is the one limit they can
+      // lift without asking anyone.
+      return `Monthly spend limit reached (${l?.size ?? 0} credits). Raise the limit to continue.${resets}`;
     }
     case "pool_exhausted":
       return `Plan allowance used up for this cycle (${state.pool?.size ?? 0} credits). Contact us to extend the package.`;

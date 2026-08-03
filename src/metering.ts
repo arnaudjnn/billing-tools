@@ -1,6 +1,6 @@
 import { autoReloadFor, deductCredits, getBillingCustomerId, stripeConfigured } from "./billing.js";
 import { isInternalOrg } from "./auth.js";
-import { describeDenial, fundingFor, resolveAllowance } from "./allowance.js";
+import { describeDenial, fundingFor, resolveAllowance, type DenialReason } from "./allowance.js";
 import { getSeatType } from "./seats.js";
 import { cycleWindowFor, planModel, type CycleWindow, type PlanCatalog } from "./plan-model.js";
 import { stripeBalanceUsageLedger, type UsageLedger } from "./usage-ledger.js";
@@ -46,17 +46,19 @@ export type MeterResult =
   | { ok: true; funded?: "pool" | "pack" | "wallet" | null }
   | {
       ok: false
-      /** `pool_exhausted` is new: an org whose included package is used up used
-       *  to be told "insufficient balance", which pointed at the wrong problem
-       *  and the wrong remedy. */
-      reason:
-        | "no_billing"
-        | "insufficient_balance"
-        | "seat_allowance_reached"
-        | "pool_exhausted"
-        /** A declared per-window limit (hour/day/week/month) refused it. Distinct
-         *  from an exhausted cap: waiting fixes this one, buying does not. */
-        | "rate_limit_reached"
+      /**
+       * `DenialReason` plus the one refusal that happens before any allowance is
+       * read. Spelled as a reference rather than a copy: this union was a
+       * duplicate of that one, so every new reason had to be added twice and the
+       * compiler only caught it because a value flowed between them.
+       *
+       * `pool_exhausted` exists because an org whose included package is used up
+       * used to be told "insufficient balance", which pointed at the wrong
+       * problem and the wrong remedy. `rate_limit_reached` is a declared
+       * per-window limit — waiting fixes it, buying does not — while
+       * `spend_limit_reached` is the customer's own ceiling, which they can raise.
+       */
+      reason: DenialReason | "no_billing"
       message: string
       /** When a rate limit refused: epoch ms at which it resets. */
       retryAt?: number
