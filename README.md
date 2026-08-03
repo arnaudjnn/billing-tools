@@ -107,6 +107,35 @@ So you do the one thing only you can do (**build great tools**) and monetize the
 - 🔌 **Pluggable storage adapter:** WorkOS-only, or WorkOS + your DB mirror, behind one interface.
 - ☁️ **No lock-in:** runs on any Node host (Railway / Render / Fly / Vercel / self-host).
 
+### 📈 Scale, stated plainly
+
+Counting usage in Stripe means the limit is Stripe's **rate** limits, not a table's
+size. Live, Stripe allows 100 req/s globally and **25 req/s per endpoint** — and
+every usage window is read through the same endpoint (`listEventSummaries`), so
+that endpoint is what binds.
+
+Measured against a real account (`scripts/load-metering.mjs`, which counts the HTTP
+requests the SDK actually sends), per metered call on a per-seat plan with a
+caller-scoped limit:
+
+| caller | uncached | with `cachedUsageLedger` |
+|---|---|---|
+| member | 3.95 requests | 1.95 |
+| API key | 1.30 | 1.00 |
+
+Which puts sustained metering in the region of **15–20 calls/second for the whole
+account**, all customers combined — idle users cost nothing, since the limits are
+per account rather than per customer. Comfortable for most SaaS; a ceiling you
+would hit building high-volume metering, and worth knowing before you adopt this
+rather than after.
+
+Three things keep it there, and all are on by default except the first:
+`cachedUsageLedger(ledger, { ttlMs })` (opt-in — a cached window is a stale window,
+and the gate reads through it), a plan's windows over one caller answered in a
+single bucketed read, and `UsageQuery.sources` skipping the leg that cannot
+contribute. If you outgrow it, the levers are asking Stripe to raise the account
+limit, or bringing your own `ledger` — the seam is unchanged.
+
 ### 🏛️ Design doctrine
 - 📐 **SDK-first:** thin-wraps the Stripe & WorkOS SDKs (SDK types, pagination, typed errors, idempotency) so the lib evolves *with* the platforms instead of drifting.
 - 🎯 **One memoized client per SDK:** lazy, never constructed at import.
