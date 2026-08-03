@@ -444,7 +444,7 @@ export interface SqlClient {
  *
  * Idempotent, so it is safe to run from a migration on every deploy.
  */
-export const USAGE_EVENTS_DDL = `
+export const USAGE_EVENTS = `
 CREATE TABLE IF NOT EXISTS usage_events (
   id              bigserial PRIMARY KEY,
   org_id          text NOT NULL,
@@ -469,10 +469,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS usage_events_idempotency_idx
 `;
 
 /** Create the table + indexes if they are missing. Call it from your migration;
- *  it is idempotent. Consumers who own their schema can read `USAGE_EVENTS_DDL`
+ *  it is idempotent. Consumers who own their schema can read `USAGE_EVENTS`
  *  instead and paste it into their own migration tool. */
+/** @deprecated Renamed to `USAGE_EVENTS` — the constant IS the table's shape, so
+ *  the name says which table rather than which kind of string. Kept as an alias
+ *  because a rename that breaks a consumer's migration script is not worth the
+ *  tidiness. */
+export const USAGE_EVENTS_DDL = USAGE_EVENTS;
+
 export async function ensureUsageLedgerTable(client: SqlClient): Promise<void> {
-  await client.query(USAGE_EVENTS_DDL);
+  await client.query(USAGE_EVENTS);
 }
 
 /**

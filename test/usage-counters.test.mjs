@@ -21,7 +21,7 @@ import {
   scopeOf,
   scopesFor,
   sqlUsageCounters,
-  USAGE_COUNTERS_DDL,
+  USAGE_COUNTERS,
 } from "../dist/usage-counters.js";
 
 const HOUR = 3_600_000;
@@ -210,13 +210,23 @@ test("empty inputs touch the database at all", async () => {
 });
 
 test("the DDL is idempotent and keyed for a point read", async () => {
-  assert.match(USAGE_COUNTERS_DDL, /CREATE TABLE IF NOT EXISTS usage_counters/);
-  assert.match(USAGE_COUNTERS_DDL, /key\s+text PRIMARY KEY/);
+  assert.match(USAGE_COUNTERS, /CREATE TABLE IF NOT EXISTS usage_counters/);
+  assert.match(USAGE_COUNTERS, /key\s+text PRIMARY KEY/);
   // Bulk expiry only; the read never filters on it.
-  assert.match(USAGE_COUNTERS_DDL, /CREATE INDEX IF NOT EXISTS usage_counters_stale_idx/);
+  assert.match(USAGE_COUNTERS, /CREATE INDEX IF NOT EXISTS usage_counters_stale_idx/);
 });
 
 test("the key is derivable from either side", () => {
   // No index needed to FIND a counter, which is what lets a KV store back this.
   assert.equal(counterKey("ws_1", "u:u_1", 496_452), "ws_1|u:u_1|496452");
+});
+
+test("the old DDL names still resolve", async () => {
+  // `USAGE_COUNTERS_DDL` / `USAGE_EVENTS_DDL` were renamed — the constant IS the
+  // table's shape, so the name says which table rather than which kind of string.
+  // Both aliases stay: a rename that breaks a consumer's migration script is not
+  // worth the tidiness.
+  const m = await import("../dist/index.js");
+  assert.equal(m.USAGE_COUNTERS_DDL, m.USAGE_COUNTERS);
+  assert.equal(m.USAGE_EVENTS_DDL, m.USAGE_EVENTS);
 });

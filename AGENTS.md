@@ -159,7 +159,7 @@ Every metered call is one `record`; every window is one `total`. The rule at the
 
 **The contract is that both paths derive the same scope string** (`scopesFor` on write, `scopeOf` on read → `org` / `k:<kind>` / `u:<memberId>`). A read that computed a different one would look up a counter nobody writes and report 0 forever — the same silent-generosity failure the coverage rule exists to catch. One event increments every scope it belongs to, so an org-wide read and a per-member read both see it.
 
-**Backends.** `sqlUsageCounters(pool)` (one `unnest` upsert per call, `used = used + excluded.used` as the atomic increment, `ANY($1)` on the primary key to read) reuses the database you already have; `redisUsageCounters(client)` needs none (`redis`, `ioredis`, `@upstash/redis`, Vercel KV all satisfy the duck type — `incrby` + `mget` + optional `pexpireat`); `memoryUsageCounters()` is for tests and single-process dev only, since separate instances would each allow a full window. `ensureUsageCountersTable` / `USAGE_COUNTERS_DDL` / `pruneUsageCounters` mirror the event-log helpers.
+**Backends.** `sqlUsageCounters(pool)` (one `unnest` upsert per call, `used = used + excluded.used` as the atomic increment, `ANY($1)` on the primary key to read) reuses the database you already have; `redisUsageCounters(client)` needs none (`redis`, `ioredis`, `@upstash/redis`, Vercel KV all satisfy the duck type — `incrby` + `mget` + optional `pexpireat`); `memoryUsageCounters()` is for tests and single-process dev only, since separate instances would each allow a full window. `ensureUsageCountersTable` / `USAGE_COUNTERS` / `pruneUsageCounters` mirror the event-log helpers.
 
 **Atomic increment is the requirement that decides where this can live.** Redis and Postgres have one; Stripe and WorkOS metadata do not, which is why counters cannot go there — two concurrent metered calls would both read `n`, both write `n+1`, and one call would vanish.
 
@@ -168,7 +168,7 @@ Every metered call is one `record`; every window is one `total`. The rule at the
 ```ts
 createBilling({ adapter, config, plans, meter: { rateCard, db: pool } })
 // once, from your migrations:
-await ensureUsageLedgerTable(pool)   // or paste USAGE_EVENTS_DDL into your own tool
+await ensureUsageLedgerTable(pool)   // or paste USAGE_EVENTS into your own tool
 ```
 
 `db` is duck-typed — anything with `query(sql, params) → { rows }`, which `pg`'s Pool/Client and Neon's driver already satisfy — so **this library depends on no database driver**. `ledger` still wins if you bring your own store.

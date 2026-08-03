@@ -154,7 +154,7 @@ export function counterUsageLedger(
 /** The table + the one index its read uses. Idempotent, so it is safe to run from
  *  a migration on every deploy. Bounded by (orgs × scopes × hours kept), not by
  *  traffic — the reason to prefer it over `usage_events` at volume. */
-export const USAGE_COUNTERS_DDL = `
+export const USAGE_COUNTERS = `
 CREATE TABLE IF NOT EXISTS usage_counters (
   key   text PRIMARY KEY,
   used  bigint NOT NULL,
@@ -170,8 +170,11 @@ export interface SqlCounterClient {
   query<R = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<{ rows: R[] }>;
 }
 
+/** @deprecated Renamed to `USAGE_COUNTERS`, alongside `USAGE_EVENTS`. */
+export const USAGE_COUNTERS_DDL = USAGE_COUNTERS;
+
 export async function ensureUsageCountersTable(client: SqlCounterClient): Promise<void> {
-  await client.query(USAGE_COUNTERS_DDL);
+  await client.query(USAGE_COUNTERS);
 }
 
 /**

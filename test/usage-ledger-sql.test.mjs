@@ -18,7 +18,7 @@ import { test } from "vitest";
 import {
   ensureUsageLedgerTable,
   postgresUsageLedger,
-  USAGE_EVENTS_DDL,
+  USAGE_EVENTS,
 } from "../dist/usage-ledger.js";
 
 /** Anything with `query(sql, params) → { rows }`. `pg`'s Pool already is one. */
@@ -156,15 +156,15 @@ test("the shipped DDL is idempotent and carries the partial unique index", async
   const client = fakeClient();
   await ensureUsageLedgerTable(client);
   assert.equal(client.calls.length, 1);
-  assert.equal(client.calls[0].sql, USAGE_EVENTS_DDL);
-  assert.match(USAGE_EVENTS_DDL, /CREATE TABLE IF NOT EXISTS usage_events/);
+  assert.equal(client.calls[0].sql, USAGE_EVENTS);
+  assert.match(USAGE_EVENTS, /CREATE TABLE IF NOT EXISTS usage_events/);
   assert.match(
-    USAGE_EVENTS_DDL,
+    USAGE_EVENTS,
     /CREATE UNIQUE INDEX IF NOT EXISTS usage_events_idempotency_idx\s+ON usage_events \(idempotency_key\) WHERE idempotency_key IS NOT NULL/,
   );
   // The two indexes the two queries above actually use.
-  assert.match(USAGE_EVENTS_DDL, /usage_events \(org_id, at DESC\)/);
-  assert.match(USAGE_EVENTS_DDL, /usage_events \(org_id, caller_kind, caller_id, at DESC\)/);
+  assert.match(USAGE_EVENTS, /usage_events \(org_id, at DESC\)/);
+  assert.match(USAGE_EVENTS, /usage_events \(org_id, caller_kind, caller_id, at DESC\)/);
 });
 
 // ── The wiring: choosing a ledger should not be a decision ──────────────────
