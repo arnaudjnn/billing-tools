@@ -6,6 +6,7 @@ import {
   exhaustedPolicy,
   packSizeOf,
   planModel,
+  poolIsPerSeat,
   poolSizeOf,
   rateLimitsOf,
   rateWindowFor,
@@ -121,7 +122,8 @@ export async function currentCycle(
 ): Promise<CycleWindow> {
   const model = planModel(input.plans ?? {}, input.plan ?? null);
   const now = input.now ?? Date.now();
-  return cycleWindowFor(model, await subscriptionPeriod(adapter, input.orgId, model), now);
+  const { period } = await subscriptionState(adapter, input.orgId, model);
+  return cycleWindowFor(model, period, now);
 }
 
 export async function resolveAllowance(
@@ -132,7 +134,7 @@ export async function resolveAllowance(
   const model = planModel(input.plans, input.plan ?? null);
   const now = input.now ?? Date.now();
   const customerId = input.customerId ?? (await getBillingCustomerId(adapter, input.orgId));
-  const period = await subscriptionPeriod(adapter, input.orgId, model);
+  const { period, seats: purchasedSeats } = await subscriptionState(adapter, input.orgId, model);
   const cycle = input.cycle ?? cycleWindowFor(model, period, now);
   const ledger = input.ledger ?? stripeBalanceUsageLedger();
 
@@ -140,7 +142,10 @@ export async function resolveAllowance(
     return { plan: model?.key ?? null, cycle, limits: [], pool: null, pack: null, wallet: 0 };
   }
 
-  const poolSize = poolSizeOf(model);
+  const poolSize = poolSizeOf(
+    model,
+    await seatsFor(adapter, input.orgId, model, purchasedSeats),
+  );
   const packSize = packSizeOf(model, input.caller?.seatType);
 
   // Each applicable limit is one more summed read over its own window. They go
@@ -265,23 +270,53 @@ export async function resolveAllowance(
 
 /** The subscription's current period, when the adapter can tell us and the plan
  *  actually needs it (only a window does). */
-async function subscriptionPeriod(
+async function subscriptionState(
   adapter: BillingAdapter,
   orgId: string,
   model: PlanModel | null,
-): Promise<{ start?: string | null; end?: string | null } | null> {
-  if (!model) return null;
+): Promise<{ period: { start?: string | null; end?: string | null } | null; seats: number | null }> {
+  const none = { period: null, seats: null };
+  if (!model) return none;
   // A `cycle` rate limit needs the period just as much as a cap does; without
   // this it would silently fall back to the calendar month.
   const needsPeriod =
     model.cap.kind !== "wallet" || model.limits.rate.some((l) => l.every === "cycle");
-  if (!needsPeriod) return null;
-  if (!adapter.getSubscription) return null;
+  if (!needsPeriod && !poolIsPerSeat(model)) return none;
+  if (!adapter.getSubscription) return none;
   try {
     const sub = await adapter.getSubscription(orgId);
-    return { start: sub.periodStart ?? null, end: sub.periodEnd ?? null };
+    return {
+      period: needsPeriod ? { start: sub.periodStart ?? null, end: sub.periodEnd ?? null } : null,
+      seats: sub.seats ?? null,
+    };
   } catch {
-    return null;
+    return none;
+  }
+}
+
+/**
+ * How many seats a `perSeat` pool is sized by.
+ *
+ * Purchased quantity first, then the active member count, then 1. The member count
+ * is a fallback rather than the definition because a workspace that bought ten
+ * seats and filled six paid for ten — sizing on members would quietly hand them a
+ * smaller package than the pricing page promised.
+ *
+ * Only read for a `perSeat` pool, so no other plan shape pays for the extra call.
+ */
+async function seatsFor(
+  adapter: BillingAdapter,
+  orgId: string,
+  model: PlanModel | null,
+  purchased: number | null,
+): Promise<number | undefined> {
+  if (!poolIsPerSeat(model)) return undefined;
+  if (purchased != null && purchased > 0) return purchased;
+  if (!adapter.memberCount) return 1;
+  try {
+    return (await adapter.memberCount(orgId)) || 1;
+  } catch {
+    return 1;
   }
 }
 

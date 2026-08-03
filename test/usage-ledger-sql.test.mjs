@@ -190,6 +190,20 @@ const adapter = {
   },
 };
 
+// A window that is both INCLUDED and PER-MEMBER — the pair no Stripe primitive can
+// count, and now the only thing that needs a store.
+const PER_MEMBER = {
+  pro: {
+    sells: {
+      kind: "seats",
+      seatTypes: { standard: { price: { monthly: 1000, yearly: 10000 }, includedCredits: 1000 } },
+    },
+    grant: { kind: "none" },
+    cap: { kind: "per_seat" },
+    sale: "self_serve",
+  },
+};
+
 test("meter.db wires the SQL ledger, and silences the boot warning", async () => {
   // The point of `db`: a project that already has Postgres for its user↔customer
   // sync should not have to make a ledger decision at all.
@@ -201,7 +215,9 @@ test("meter.db wires the SQL ledger, and silences the boot warning", async () =>
     const billing = createBilling({
       adapter,
       config: { currency: "eur", baseUrl: "https://t.local" },
-      plans: POOLED,
+      // A per-member window, i.e. one that genuinely needs the store — with a
+      // pooled plan this would pass whether `db` were wired or not.
+      plans: PER_MEMBER,
       meter: { rateCard: { search: 1 }, db: client },
     });
     assert.ok(billing.meter, "a meter was built");
@@ -211,7 +227,10 @@ test("meter.db wires the SQL ledger, and silences the boot warning", async () =>
   }
 });
 
-test("neither db nor ledger still warns at boot, naming the plans", async () => {
+test("an ORG-wide pool no longer needs a store at all", async () => {
+  // The composite counts it on a Stripe meter — included usage included, one
+  // request at any window width. Warning here would send someone to stand up a
+  // database they do not need.
   const warnings = [];
   const realWarn = console.warn;
   console.warn = (m) => warnings.push(String(m));
@@ -222,9 +241,50 @@ test("neither db nor ledger still warns at boot, naming the plans", async () => 
       plans: POOLED,
       meter: { rateCard: { search: 1 } },
     });
+    assert.deepEqual(warnings, []);
+  } finally {
+    console.warn = realWarn;
+  }
+});
+
+test("a PER-MEMBER included window with no store still warns, naming the plans", async () => {
+  const warnings = [];
+  const realWarn = console.warn;
+  console.warn = (m) => warnings.push(String(m));
+  try {
+    createBilling({
+      adapter,
+      config: { currency: "eur", baseUrl: "https://t.local" },
+      plans: PER_MEMBER,
+      meter: { rateCard: { search: 1 } },
+    });
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], /pro/);
     assert.match(warnings[0], /meter\.db/);
+    // And it names the alternative that needs no store at all.
+    assert.match(warnings[0], /perSeat/);
+  } finally {
+    console.warn = realWarn;
+  }
+});
+
+test("a caller-scoped rate limit counts as per-member too", async () => {
+  const warnings = [];
+  const realWarn = console.warn;
+  console.warn = (m) => warnings.push(String(m));
+  try {
+    createBilling({
+      adapter,
+      config: { currency: "eur", baseUrl: "https://t.local" },
+      plans: {
+        pro: {
+          ...POOLED.pro,
+          limits: { rate: [{ every: "week", credits: 500, scope: "caller" }] },
+        },
+      },
+      meter: { rateCard: { search: 1 } },
+    });
+    assert.equal(warnings.length, 1);
   } finally {
     console.warn = realWarn;
   }
@@ -232,15 +292,21 @@ test("neither db nor ledger still warns at boot, naming the plans", async () => 
 
 test("the plan check makes it an ERROR, not a warning", async () => {
   // A warning in a deploy log is missable and unenforced caps are not recoverable
-  // after the fact, so the setup check fails outright.
-  const bad = checkPlansConfig(POOLED, { hasCheckout: true, usageLedger: false });
+  // after the fact, so the setup check fails outright. It must agree with the boot
+  // warning about WHICH plans need a store, or it sends someone to fix a config
+  // that was already right.
+  const bad = checkPlansConfig(PER_MEMBER, { hasCheckout: true, usageLedger: false });
   const c = bad.checks.find((x) => x.title === "Usage ledger");
   assert.equal(c.level, "error");
   assert.match(c.fix, /meter\.db/);
   assert.equal(bad.healthy, false);
 
-  const good = checkPlansConfig(POOLED, { hasCheckout: true, usageLedger: true });
+  const good = checkPlansConfig(PER_MEMBER, { hasCheckout: true, usageLedger: true });
   assert.equal(good.checks.find((x) => x.title === "Usage ledger").level, "ok");
+
+  // And a pooled catalogue is not failed for missing a store it does not need.
+  const pooled = checkPlansConfig(POOLED, { hasCheckout: true, usageLedger: false });
+  assert.equal(pooled.checks.find((x) => x.title === "Usage ledger").level, "ok");
 });
 
 test("a wallet-only catalog needs no ledger, and is not nagged", async () => {

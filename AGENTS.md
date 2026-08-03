@@ -119,21 +119,31 @@ Enumerating a per-member record needs `adapter.listMemberIds` (`WorkOSOrgAdapter
 
 Anything that files something against a billing cycle must key it with `currentCycle(adapter, {orgId, plans, plan})`, the same window the meter reads. This is not stylistic: `request_top_up` used to write a calendar month while the meter read the subscription period, so for **every org with a subscription** an approved top-up granted nothing, with no error anywhere. There is now exactly ONE key — `extraAllowance` reads the cycle it is given and nothing else, so a grant is visible under the window the meter is in or it is not visible at all. Do not reintroduce a second key to read as a fallback: the reason the defect was invisible is that a miss looked like "no grant" rather than an error.
 
-## Counting usage — pick a ledger, or pass `db` (`src/usage-ledger.ts`)
+## Counting usage — the composite counts it in Stripe (`src/usage-ledger.ts`)
 
-Usage counting is separate from moving money, behind one seam: `UsageLedger` (`record` + `total`). Three implementations ship, and the choice is forced by ONE question — **does any plan include usage, and do you want per-member figures?**
+Usage counting is separate from moving money, behind one seam: `UsageLedger` (`record` + `total`). Four implementations ship, and **which one is wrong depends on the QUERY, not on the config** — which is why the default is a composite that routes:
 
 | | sees INCLUDED usage | per-member | needs a DB |
 |---|---|---|---|
-| `stripeBalanceUsageLedger()` (default) | **no** | yes | no |
+| **`stripeUsageLedger()`** (default) | yes | org-wide + wallet-funded | **no** |
+| `stripeBalanceUsageLedger()` | **no** | yes | no |
 | `stripeMeterUsageLedger()` | yes | **no** | no |
 | `postgresUsageLedger(db)` | yes | yes | yes |
 
-Every metered call is one `record`; every window is one `total`. The rule at the call site is **`record` always, `deductCredits` only when the wallet funded it** — an included call must be counted (or its cap can't be enforced) but must not be charged.
+`stripeUsageLedger` dispatches on whether the query carries a caller filter:
 
-**Wallet-only? Do nothing.** Every metered call moves money, so the default ledger sees all of it, and per-member works too (the caller is on the balance transaction's metadata).
+- **an ORG-wide window** (`cap: pool`, `scope: "org"` limits, the spend limit) → the **Stripe meter**. It sees every call, included ones too, and a summary is ONE request for any window width. This is the leg that removes a database: a 200 000-credit weekly window costs the same read as a 400-credit one.
+- **a PER-CALLER window** (a seat pack, `scope: "caller"` limits) → **balance transactions**, which carry the caller on their metadata. Exact and per-member, but they only exist where money moved.
 
-**Anything with a `cap` or a `limits.rate`? Pass `meter.db`.** The default ledger IS the Stripe debits, and included usage moves no money, so it writes no transaction to count: a pool or a per-seat pack read through it is permanently 0, every window reads 0%, and nothing is ever refused. The failure looks like generosity, which is why `createBilling` warns at boot and `checkPlansConfig(plans, { usageLedger })` makes it an **error**. (Omit `usageLedger` and that check is skipped — undefined means "the caller did not say", not "nothing is wired".)
+Every metered call is one `record`; every window is one `total`. The rule at the call site is **`record` always, `deductCredits` only when the wallet funded it** — an included call must be counted (or its cap can't be enforced) but must not be charged. The composite's `record` writes the meter event *and* forwards to the per-caller leg (a no-op for balance transactions, the write for a store); it never moves money, because `deductCredits` owns that.
+
+**So a store is needed for exactly one thing: a window that is both INCLUDED and PER-MEMBER.** Nothing in Stripe can count that pair — a balance transaction carries the caller but only exists where money moved, and a meter summary sees every call but cannot be filtered by one. `createBilling` warns at boot for that combination only, and `checkPlansConfig(plans, { usageLedger })` makes it an **error**; the two narrow to the same set deliberately, because a doctor that disagreed with the engine would send someone to fix a config that was already right. (Omit `usageLedger` and the check is skipped — undefined means "the caller did not say", not "nothing is wired".)
+
+**A pool costs nothing to count.** `cap: pool` — including `perSeat`, below — plus org-scoped limits is a config that runs with **no store at all, at any volume**. That was impossible before: the old default was the debits themselves, so an included call counted as 0 and every window read 0% forever.
+
+**`orgWide` is a seam too**, and the one most likely to move: Stripe's Meter Usage Analytics API answers the same question grouped by a dimension (`caller_id`), so when it leaves preview it belongs there — and the per-caller leg can point at it too, at which point the store disappears entirely.
+
+**Pairing a store with the composite beats the store alone.** `stripeUsageLedger({ perCaller: postgresUsageLedger(db) })` — which is what `meter.db` now builds — keeps exact per-member figures while answering every org-wide window from Stripe, so those reads stop scanning rows.
 
 ```ts
 createBilling({ adapter, config, plans, meter: { rateCard, db: pool } })
@@ -143,7 +153,7 @@ await ensureUsageLedgerTable(pool)   // or paste USAGE_EVENTS_DDL into your own 
 
 `db` is duck-typed — anything with `query(sql, params) → { rows }`, which `pg`'s Pool/Client and Neon's driver already satisfy — so **this library depends on no database driver**. `ledger` still wins if you bring your own store.
 
-**Why a table at all, when everything else here is Stripe-backed.** Because no metadata store can do it, and each was checked: Stripe customer metadata holds 50 keys, WorkOS organization metadata holds **10** (keys ≤40 chars, values ≤**600**, ASCII), and *neither has an atomic increment* — counting would be read-modify-write, so two concurrent metered calls both read `n` and both write `n+1` and one disappears (Stripe idempotency keys explicitly do not cover concurrent conflicting requests). Stripe Billing Meters can't help either: `listEventSummaries` takes only customer + meter + time window + an hour/day bucket, with no dimensions and no group-by, so a per-member question returns the whole org. A meter per member is unbounded against an account-level cap, and zero-amount balance transactions would write junk into the customer's *money* ledger — the history that backs invoices. Metadata is for a handful of stable attributes; usage is an append-only event stream. Hence one row, one index-covered `SUM`.
+**Why a table at all for the per-member case, when everything else here is Stripe-backed.** Because no metadata store can do it, and each was checked: Stripe customer metadata holds 50 keys, WorkOS organization metadata holds **10** (keys ≤40 chars, values ≤**600**, ASCII), and *neither has an atomic increment* — counting would be read-modify-write, so two concurrent metered calls both read `n` and both write `n+1` and one disappears (Stripe idempotency keys explicitly do not cover concurrent conflicting requests). Stripe Billing Meters can't help either: `listEventSummaries` takes only customer + meter + time window + an hour/day bucket, with no dimensions and no group-by, so a per-member question returns the whole org. A meter per member is unbounded against an account-level cap, and zero-amount balance transactions would write junk into the customer's *money* ledger — the history that backs invoices. Metadata is for a handful of stable attributes; usage is an append-only event stream. Hence one row, one index-covered `SUM`.
 
 ## Spend controls — the customer's own ceiling (`getSpendControls`)
 
@@ -209,7 +219,7 @@ A plan is FIVE independent axes, not one. Only `sells` is a union, because it al
 |---|---|---|
 | `sells` | `nothing` \| `seats` \| `flat` | what Stripe charges for (and what gets minted) |
 | `grant` | `none` \| `purchased_seats` \| `per_member` \| `fixed` | what is CREDITED as money on `invoice.paid` |
-| `cap` | `wallet` \| `per_seat` \| `pool` | what is INCLUDED, as a counted window |
+| `cap` | `wallet` \| `per_seat` \| `pool` (flat `credits` or `perSeat`) | what is INCLUDED, as a counted window |
 | `replenish` | `{purchase?, autoReload?, request?}` | how to get more (a record — they compose) |
 | `sale` | `free` \| `self_serve` \| `quote` \| `legacy` | whether it can be bought. **Required, never inferred** |
 
@@ -232,6 +242,10 @@ Counting therefore has to be separable from charging: `src/usage-ledger.ts` is t
 `onExhausted` decides what a used-up window does: `"block"` refuses even when the wallet could pay (a committed package's overage is a renegotiation; a free plan has no wallet), `"wallet"` falls through so a top-up funds it. An agent (`shared` seat / `caller.kind: "api"`) always overflows to the wallet — that was a hardcoded `caller.kind === "user"` test, now declarative.
 
 The window comes from the SUBSCRIPTION period, not the calendar month: an annual package measured monthly resets twelve times. Calendar month remains the fallback for an org with no subscription.
+
+**`cap: { kind: "pool", perSeat: N }` is the rung between a flat pool and `per_seat`, and choosing it is an infrastructure decision as much as a commercial one.** "1 000 credits per seat per month" is what a pricing page says. `per_seat` additionally **enforces** it member by member — which is a stricter product than most teams sell, and the *only* cap shape that needs a per-member counter to gate, i.e. the only one that needs a store (see the ledger section). Pooled, the same promise is ONE org-wide window: `perSeat × seats`, shared, countable by a single Stripe meter summary at any volume with no store anywhere. The trade is fairness — one member can draw the team's share — so say `per_seat` when that matters and pool when it doesn't.
+
+Seats are the **purchased** quantity (`getSubscription().seats`, recorded by the sync from the subscription's summed item quantities), falling back to the active member count, then to 1. Purchased rather than active deliberately: a workspace that bought ten seats and filled six paid for ten, and sizing on members would quietly hand them a smaller package than the page promised. `poolSizeOf(model, seats)` takes the count as an argument and defaults it to 1, so a caller that forgets it under-reports rather than over-grants — and a pricing surface with no org in hand gets the per-seat unit to display. Mutually exclusive with `cap.credits` (`checkPlansConfig` errors: `perSeat` wins, so the flat number would silently do nothing), and warned when the plan `sells: nothing` — there is no purchased quantity to multiply.
 
 **`cap.window: "month"` is the exception, and it exists because a price and a window are different things.** A plan sold annually whose pricing page says "1 000 per seat **per month**" cannot be expressed by the default: one window per subscription period gives an annual subscriber twelve months' allowance on day one and nothing after it runs out. Declaring `window: "month"` measures the same pack over the calendar month whatever the billing interval. It is read inside **`cycleWindowFor`**, not at the call sites, so the meter, `usageSummary` and `grantExtraAllowance` all keep agreeing on one window — a grant written under a period key that the meter never reads is precisely the defect above. Mutually exclusive with `rollover` (which widens the window instead); `checkPlansConfig` errors on both.
 

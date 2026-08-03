@@ -156,6 +156,14 @@ export interface BillingSync {
  * subscription can hold items on different periods, so the window is the widest
  * one — which is also the renewal date a customer is shown.
  */
+/** Purchased seats, summed across seat types. Sizes a `cap.perSeat` pool; the same
+ *  quantity the `purchased_seats` grant counts. Null when nothing is quantified,
+ *  so the reader falls back to the member count rather than to a pool of one. */
+function purchasedSeatsOf(sub: Stripe.Subscription): number | null {
+  const total = (sub.items?.data ?? []).reduce((sum, i) => sum + (i.quantity ?? 0), 0);
+  return total > 0 ? total : null;
+}
+
 function subscriptionPeriod(sub: Stripe.Subscription): {
   periodStart: string | null;
   periodEnd: string | null;
@@ -201,6 +209,10 @@ export function createStripeEventHandler(opts: {
         status: sub.status,
         subscriptionId: sub.id,
         ...subscriptionPeriod(sub),
+        // Recorded on every subscription event so a `cap.perSeat` pool resizes
+        // when seats are added or removed. Summed across seat types, the same way
+        // the `purchased_seats` grant counts them.
+        seats: purchasedSeatsOf(sub),
       });
       return;
     }

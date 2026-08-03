@@ -18,7 +18,12 @@ import type { ClaimStore } from "./agent-auth/claim-store.js";
 import { createMachinePaymentHandler, createPaymentMd, type MachinePaymentOptions } from "./machine-payment/index.js";
 import { createOAuthProxy, type OAuthProxyOptions } from "./oauth-proxy/index.js";
 import { createMeter, createApiMeterGuard } from "./metering.js";
-import { postgresUsageLedger, type SqlClient, type UsageLedger } from "./usage-ledger.js";
+import {
+  postgresUsageLedger,
+  stripeUsageLedger,
+  type SqlClient,
+  type UsageLedger,
+} from "./usage-ledger.js";
 import { normalizePlans } from "./plan-model.js";
 import type { PlanCatalog } from "./plans.js";
 
@@ -98,25 +103,26 @@ export interface CreateBillingOptions {
     cycleStart?: () => number;
     cycleKey?: () => string;
     /**
-     * Where usage is COUNTED. Default: the balance-transaction ledger.
+     * Where usage is COUNTED. Default: `stripeUsageLedger()` — the composite.
      *
-     * Pass one whenever any plan has a `cap` or a `limits.rate`. The default
-     * ledger is the debits themselves, and an included call moves no money, so
-     * it writes no transaction to count: a pool or a per-seat pack read through
-     * it is permanently 0, which means the cap never bites and a usage screen
-     * reads 0% forever. `stripeMeterUsageLedger()` sees included usage but
-     * aggregates one dimension, so it cannot answer per-caller — a product that
-     * needs per-member figures wants its own store behind this seam.
+     * It counts every ORG-wide window in Stripe (a meter summary, which sees
+     * included usage and costs one request at any window width), and reads
+     * per-CALLER windows from balance-transaction metadata. So a config whose
+     * windows are all org-scoped — `cap: pool`, `cap: wallet`, `scope: "org"`
+     * limits — needs no store at all.
+     *
+     * Pass `db` (or one of your own) when a window is both INCLUDED and
+     * PER-MEMBER: a seat pack, or a `scope: "caller"` limit. Nothing in Stripe can
+     * count that pair, and without a store it reads 0 forever.
      */
     ledger?: UsageLedger;
     /**
-     * A Postgres-compatible client, and the easiest correct answer.
+     * A Postgres-compatible client, used as the composite's PER-CALLER leg.
      *
-     * Given one, usage is counted in `usage_events` via `postgresUsageLedger` —
-     * exact, per-caller, and able to see INCLUDED usage, which is the pair no
-     * Stripe primitive offers. This exists so a project that already has a
-     * database for its user↔customer sync does not have to make a ledger
-     * decision at all: pass the pool you already have.
+     * Given one, per-member windows are counted in `usage_events` via
+     * `postgresUsageLedger` — exact, per-caller, and able to see INCLUDED usage,
+     * which is the pair no Stripe primitive offers. Org-wide windows still go to
+     * the Stripe meter, so they are answered without scanning those rows.
      *
      * Run `ensureUsageLedgerTable(db)` once from your migrations first.
      *
@@ -225,26 +231,42 @@ export function createBilling(opts: CreateBillingOptions) {
       })
     : undefined;
 
-  // A cap or a rate limit counted by the DEFAULT ledger is counted by nothing:
-  // the default ledger IS the debits, and included usage moves no money. The
-  // failure is silent and looks like generosity (every window reads 0%, nothing
-  // is ever refused), so it is worth one line at boot.
-  // The ledger, resolved once: an explicit one wins, then a database, then the
-  // Stripe default (which can only see wallet-funded calls).
+  // The ledger, resolved once: an explicit one wins, then a database as the
+  // per-caller leg, then the composite on its own.
+  //
+  // The composite is the default because it counts every ORG-wide window in
+  // Stripe — included usage too, one request per window at any volume — so a
+  // config whose windows are all org-scoped needs no database at all. That was
+  // previously impossible: the old default was the debits themselves, so an
+  // included call counted as 0 and every window read 0%.
   const ledger =
-    opts.meter?.ledger ?? (opts.meter?.db ? postgresUsageLedger(opts.meter.db) : undefined);
+    opts.meter?.ledger ??
+    stripeUsageLedger({
+      ...(opts.meter?.db ? { perCaller: postgresUsageLedger(opts.meter.db) } : {}),
+    });
 
-  if (opts.meter && !ledger && opts.plans) {
-    const counted = normalizePlans(opts.plans).filter(
-      (m) => m.cap.kind !== "wallet" || m.limits.rate.length > 0,
+  // What the composite still cannot do without a store: a window that is both
+  // INCLUDED and PER-MEMBER. Balance transactions carry the caller but only exist
+  // where money moved, and a meter summary sees every call but cannot be filtered
+  // by one. So this warns for exactly that combination — a seat pack, or a
+  // `scope: "caller"` limit — rather than for any cap, which is the difference
+  // between "you need a database" and "you don't".
+  //
+  // Worth a line at boot because the failure is silent and looks like generosity:
+  // the window reads 0% and nothing is ever refused.
+  if (opts.meter && !opts.meter.ledger && !opts.meter.db && opts.plans) {
+    const perMember = normalizePlans(opts.plans).filter(
+      (m) => m.cap.kind === "per_seat" || m.limits.rate.some((l) => l.scope === "caller"),
     );
-    if (counted.length) {
+    if (perMember.length) {
       console.warn(
-        `[billing] plans ${counted.map((m) => m.key).join(", ")} declare an included window or a rate ` +
-          "limit, but neither `meter.db` nor `meter.ledger` was passed. The default ledger can " +
-          "only see wallet-funded calls, so that usage counts as 0 and the limits never apply. " +
-          "Pass `db` (a Postgres client — the usual answer, and the only option that also gives " +
-          "per-member figures), or a `ledger` of your own.",
+        `[billing] plans ${perMember.map((m) => m.key).join(", ")} meter an INCLUDED window per ` +
+          "member (a seat pack, or a caller-scoped rate limit), and no `meter.db` / `meter.ledger` " +
+          "was passed. Org-wide windows are counted in Stripe, but a per-member one cannot be: a " +
+          "balance transaction carries the caller yet only exists where money moved, and a meter " +
+          "summary cannot be filtered by caller. That usage counts as 0, so the window never " +
+          "applies. Pass `db` (a Postgres client) or a `ledger` of your own — or pool the " +
+          'allowance instead (`cap: { kind: "pool", perSeat: N }`), which needs no store.',
       );
     }
   }

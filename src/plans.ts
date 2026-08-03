@@ -70,6 +70,7 @@ export {
   describeBasketProblem,
   grantFor,
   poolSizeOf,
+  poolIsPerSeat,
   packSizeOf,
   exhaustedPolicy,
   capCovers,

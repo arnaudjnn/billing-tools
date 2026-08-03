@@ -94,6 +94,11 @@ export interface BillingAdapter {
      *  monthly would reset twelve times a year. */
     periodStart?: string | null;
     periodEnd: string | null;
+    /** PURCHASED seat quantity, summed across seat types. Sizes a `cap.perSeat`
+     *  pool. Purchased rather than active, because a workspace that bought ten
+     *  seats and filled six paid for ten; when it is absent the active member
+     *  count is used instead. */
+    seats?: number | null;
   }>;
   /** Record subscription state. `plan: undefined` leaves the plan as-is; `null`
    *  clears it (back to the default plan). */

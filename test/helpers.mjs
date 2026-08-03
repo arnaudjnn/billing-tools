@@ -61,6 +61,11 @@ export function fakeAdapter({
         async listMemberIds() {
           return [...members];
         },
+        // Derived from the same list, as in the real adapter — so a test cannot
+        // have a member count that disagrees with its members.
+        async memberCount() {
+          return members.length;
+        },
       }
     : {};
   return {

@@ -178,6 +178,70 @@ export function invalidateMeters(): void {
   meterIds.clear();
 }
 
+// ── The composite: route each read to the store that can answer it ───────────
+//
+// Neither Stripe ledger above is the right answer on its own, and which one is
+// wrong depends on the QUERY rather than on the config:
+//
+//   an ORG-wide window   (pool, `scope: "org"` limits, spend limit)
+//     → the meter. It sees every call, included ones too, and a summary is ONE
+//       request for any window width. This is the leg that removes a database:
+//       a 200 000-credit weekly window costs the same read as a 400-credit one.
+//
+//   a PER-CALLER window  (a seat pack, `scope: "caller"` limits)
+//     → balance transactions, which carry the caller on their metadata. Exact and
+//       per-member, but they only exist where money moved, so INCLUDED per-member
+//       usage is invisible to them.
+//
+// That last line is the honest limit of running with no store, and it is why this
+// is not simply "the new default for everything": a plan that both includes usage
+// AND meters it per member still needs `meter.db` (or the counter leg, when it
+// lands). `createBilling` warns for exactly that combination rather than for any
+// cap, which is the difference between "you need a database" and "you don't".
+//
+// Pass `perCaller` to swap the second leg for a store — `stripeUsageLedger({
+// perCaller: postgresUsageLedger(db) })` is strictly better than the SQL ledger
+// alone, because the org-wide reads stop scanning rows at all.
+
+export function stripeUsageLedger(
+  opts: {
+    eventName?: string;
+    /**
+     * Where a per-CALLER window is read from. Default: the balance ledger (exact,
+     * per-member, wallet-funded only). A store belongs here for a plan whose
+     * per-member window is INCLUDED.
+     */
+    perCaller?: UsageLedger;
+    /**
+     * Where an ORG-wide window is read from. Default: the Stripe meter, which is
+     * the right answer today.
+     *
+     * A seam rather than a constant because this is the leg most likely to change:
+     * Stripe's Meter Usage Analytics API can answer the same question grouped by a
+     * dimension, and when it leaves preview it belongs here — at which point the
+     * per-caller leg can point at it too and the store disappears entirely.
+     */
+    orgWide?: UsageLedger;
+  } = {},
+): UsageLedger {
+  const meter = opts.orgWide ?? stripeMeterUsageLedger({ eventName: opts.eventName });
+  const perCaller = opts.perCaller ?? stripeBalanceUsageLedger();
+  return {
+    async record(e) {
+      // The meter always, so org-wide windows see every call whatever funded it.
+      // The per-caller leg too, in the same round — for the balance ledger that is
+      // a no-op (the debit IS the record) and for a store it is the write. Never
+      // a second money movement: `deductCredits` owns that, and it has already
+      // run for a wallet-funded call.
+      await Promise.all([meter.record(e), perCaller.record(e)]);
+    },
+    total(q) {
+      const perCallerQuery = Boolean(q.filter?.callerKind || q.filter?.callerId);
+      return perCallerQuery ? perCaller.total(q) : meter.total(q);
+    },
+  };
+}
+
 // ── A SQL store, for the one thing Stripe cannot count ──────────────────────
 //
 // Reach for this when a plan INCLUDES usage and you also want per-member figures.

@@ -240,6 +240,29 @@ export type Cap =
       /** The package size, set in config. */
       credits?: Money;
       /**
+       * The package size PER SEAT instead of a flat number: the pool is
+       * `perSeat × seats`, shared across the workspace.
+       *
+       * This is the rung between a flat pool and `per_seat`, and it exists because
+       * a promise and an enforcement are different things. "1 000 credits per seat
+       * per month" is what a pricing page says; `per_seat` additionally *enforces*
+       * it member by member, which is a stricter product than most teams sell and
+       * the only shape that needs a per-member counter to gate. Pooled, the same
+       * promise is one org-wide window — countable by a single Stripe meter
+       * summary at any volume, with no per-member store anywhere.
+       *
+       * The trade is fairness: one member can draw the team's share. Say
+       * `per_seat` when that matters.
+       *
+       * Seats are the PURCHASED quantity when the adapter reports one
+       * (`getSubscription().seats`), falling back to the active member count, then
+       * to 1. Purchased rather than active on purpose: a workspace that bought ten
+       * seats and filled six paid for ten.
+       *
+       * Mutually exclusive with `credits`.
+       */
+      perSeat?: Money;
+      /**
        * Unused allowance survives into the next cycle.
        *
        * Not a sweep — it widens the window to the subscription's start instead
@@ -745,12 +768,26 @@ export function grantFor(
   }
 }
 
-/** The org-wide entitlement for a cycle, or null when the plan has no pool.
- *  Falls back to the grant size when a plan both pools and credits. */
-export function poolSizeOf(model: PlanModel | null): number | null {
+/**
+ * The org-wide entitlement for a cycle, or null when the plan has no pool.
+ * Falls back to the grant size when a plan both pools and credits.
+ *
+ * `seats` is only read by a `perSeat` pool. It defaults to 1 rather than throwing,
+ * so a pricing surface that has no org in hand still gets the per-seat unit to
+ * display — and so a caller that forgets it under-reports the pool rather than
+ * over-granting it. `resolveAllowance` resolves the real count; see `seatsFor`.
+ */
+export function poolSizeOf(model: PlanModel | null, seats?: number): number | null {
   if (!model || model.cap.kind !== "pool") return null;
+  if (model.cap.perSeat != null) return model.cap.perSeat * Math.max(1, seats ?? 1);
   if (model.cap.credits != null) return model.cap.credits;
   return model.grant.kind === "fixed" ? model.grant.credits : 0;
+}
+
+/** Whether this plan's pool is sized by seat count — i.e. whether a caller has to
+ *  resolve one before `poolSizeOf` means anything. */
+export function poolIsPerSeat(model: PlanModel | null): boolean {
+  return model?.cap.kind === "pool" && model.cap.perSeat != null;
 }
 
 /** The pack a caller is entitled to for the cycle, or null when uncapped. */

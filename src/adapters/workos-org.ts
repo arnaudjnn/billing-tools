@@ -256,9 +256,11 @@ export class WorkOSOrgAdapter implements BillingAdapter {
     subscriptionId: string | null;
     periodStart: string | null;
     periodEnd: string | null;
+    seats: number | null;
   }> {
     const org = await this.workos.organizations.getOrganization(await this.wid(orgId));
     const m = (org.metadata ?? {}) as Record<string, string>;
+    const seats = Number.parseInt(m.subscriptionSeats ?? "", 10);
     return {
       plan: m.plan ?? null,
       status: m.subscriptionStatus ?? null,
@@ -267,6 +269,9 @@ export class WorkOSOrgAdapter implements BillingAdapter {
       // START matters as much as the renewal date.
       periodStart: m.subscriptionPeriodStart ?? null,
       periodEnd: m.subscriptionPeriodEnd ?? null,
+      // Sizes a `cap.perSeat` pool. Junk parses to null, which falls back to the
+      // active member count rather than to a pool of one seat.
+      seats: Number.isFinite(seats) && seats > 0 ? seats : null,
     };
   }
 
@@ -280,6 +285,7 @@ export class WorkOSOrgAdapter implements BillingAdapter {
       subscriptionId: string | null;
       periodStart?: string | null;
       periodEnd: string | null;
+      seats?: number | null;
     },
   ): Promise<void> {
     const wid = await this.wid(orgId);
@@ -295,6 +301,7 @@ export class WorkOSOrgAdapter implements BillingAdapter {
     set("subscriptionPeriodStart", sub.periodStart);
     set("subscriptionPeriodEnd", sub.periodEnd);
     set("plan", sub.plan);
+    set("subscriptionSeats", sub.seats == null ? sub.seats : String(sub.seats));
     await this.workos.organizations.updateOrganization({ organization: wid, metadata });
   }
 

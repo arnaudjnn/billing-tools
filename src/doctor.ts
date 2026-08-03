@@ -334,23 +334,37 @@ export function checkPlansConfig(
   const checks: Check[] = [];
   const models = normalizePlans(plans);
 
-  // A cap or a rate limit counted by the DEFAULT ledger is counted by nothing:
-  // that ledger IS the Stripe debits, and included usage moves no money. The
-  // failure looks like generosity — every window reads 0%, nothing is ever
-  // refused — so it is an ERROR here even though `createBilling` only warns. A
-  // warning in a deploy log is missable; a month of unenforced caps is not
-  // recoverable after the fact.
+  // What the DEFAULT ledger cannot count, and therefore what needs a store.
+  //
+  // It used to be every cap and every rate limit, because the default was the
+  // Stripe debits themselves and included usage moves no money. The default is now
+  // the composite (`stripeUsageLedger`), which counts every ORG-wide window on a
+  // Stripe meter — included usage included, at any volume — so a pool or a
+  // `scope: "org"` limit no longer needs anything wired.
+  //
+  // What remains is the pair no Stripe primitive can answer: a window that is both
+  // INCLUDED and PER-MEMBER. A balance transaction carries the caller but only
+  // exists where money moved; a meter summary sees every call but cannot be
+  // filtered by caller. This must agree with `createBilling`'s boot warning, which
+  // narrows to the same set — a doctor that disagreed with the engine would send
+  // someone to fix a config that was already right.
+  //
+  // Still an ERROR here where `createBilling` warns: a warning in a deploy log is
+  // missable, and a month of unenforced caps is not recoverable after the fact.
   const counted =
     options?.usageLedger === undefined
       ? []
-      : models.filter((m) => m.cap.kind !== "wallet" || m.limits.rate.length > 0);
+      : models.filter(
+          (m) => m.cap.kind === "per_seat" || m.limits.rate.some((l) => l.scope === "caller"),
+        );
   if (options?.usageLedger === undefined) {
     // Nothing asserted, so nothing claimed.
   } else if (!counted.length) {
     checks.push({
       level: "ok",
       title: "Usage ledger",
-      detail: "no plan includes usage or rate-limits it, so the Stripe default counts everything",
+      detail:
+        "no plan meters an included window per member, so the Stripe composite counts everything",
     });
   } else if (options?.usageLedger) {
     checks.push({
@@ -362,11 +376,12 @@ export function checkPlansConfig(
     checks.push({
       level: "error",
       title: "Usage ledger",
-      detail: `plans ${counted.map((m) => m.key).join(", ")} include usage or rate-limit it, but no ledger is wired`,
+      detail: `plans ${counted.map((m) => m.key).join(", ")} meter an INCLUDED window per member (a seat pack, or a caller-scoped rate limit), but no ledger is wired`,
       fix:
-        "Pass `meter.db` (a Postgres client — also the only option that gives per-member " +
-        "figures) or `meter.ledger` to createBilling, and run ensureUsageLedgerTable(db) from " +
-        "your migrations. Without one, that usage counts as 0 and the caps never apply.",
+        "Pass `meter.db` (a Postgres client) or `meter.ledger` to createBilling, and run " +
+        "ensureUsageLedgerTable(db) from your migrations. Or pool the allowance instead " +
+        '(`cap: { kind: "pool", perSeat: N }`), which is counted in Stripe and needs no store. ' +
+        "Without one, that usage counts as 0 and the window never applies.",
     });
   }
 
@@ -497,8 +512,32 @@ export function checkPlansConfig(
       checks.push({
         level: "warn",
         title: `Plan "${m.key}" has an empty pool`,
-        detail: "cap is a pool but no `credits` were set, so every metered call is refused",
-        fix: "Set `cap.credits` to the package size",
+        detail: "cap is a pool but neither `credits` nor `perSeat` was set, so every metered call is refused",
+        fix: "Set `cap.credits` for a flat package, or `cap.perSeat` for one sized by seats",
+      });
+    }
+    // Both would be a pool whose size depends on which field the reader checks
+    // first. `perSeat` wins in `poolSizeOf`, so `credits` would silently do
+    // nothing — the kind of disagreement that only shows up as a wrong number.
+    if (m.cap.kind === "pool" && m.cap.perSeat != null && m.cap.credits != null) {
+      checks.push({
+        level: "error",
+        title: `Plan "${m.key}" sizes its pool twice`,
+        detail:
+          "cap.credits and cap.perSeat are mutually exclusive; perSeat wins, so the flat credits are ignored",
+        fix: "Keep `perSeat` for a pool that scales with seats, or `credits` for a fixed package",
+      });
+    }
+    // A per-seat pool multiplies by a seat count, and the count comes from the
+    // subscription — a plan that sells nothing has no seats to multiply, so every
+    // org would fall back to the member count or to 1.
+    if (m.cap.kind === "pool" && m.cap.perSeat != null && m.sells.kind === "nothing") {
+      checks.push({
+        level: "warn",
+        title: `Plan "${m.key}" sizes a pool per seat but sells no seats`,
+        detail:
+          "there is no purchased quantity to multiply, so the pool falls back to the active member count",
+        fix: "Use `cap.credits` for a free plan's package, or sell seats",
       });
     }
     if (m.grant.kind === "purchased_seats" && m.seatTypes.every((s) => s.includedCredits === 0)) {
