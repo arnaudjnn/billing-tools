@@ -1,3 +1,10 @@
+# [2.9.0](https://github.com/arnaudjnn/billing-tools/compare/v2.8.0...v2.9.0) (2026-08-03)
+
+
+### Features
+
+* **allowance:** enforce a customer-set monthly spend limit ([550253c](https://github.com/arnaudjnn/billing-tools/commit/550253c1ff579bc7680a715ce0d056ac0abdf74e))
+
 # [2.8.0](https://github.com/arnaudjnn/billing-tools/compare/v2.7.1...v2.8.0) (2026-08-02)
 
 
