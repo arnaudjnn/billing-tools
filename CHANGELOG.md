@@ -1,3 +1,10 @@
+# [2.18.0](https://github.com/arnaudjnn/billing-tools/compare/v2.17.0...v2.18.0) (2026-08-03)
+
+
+### Features
+
+* **metering:** record WHICH api key made the call, not the org id ([1f55e6a](https://github.com/arnaudjnn/billing-tools/commit/1f55e6a8f55ecce74fb443915061c866b72852d0))
+
 # [2.17.0](https://github.com/arnaudjnn/billing-tools/compare/v2.16.0...v2.17.0) (2026-08-03)
 
 
