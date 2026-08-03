@@ -246,11 +246,26 @@ So the axis is needed when the read is caller-filtered (`scope: "caller"` **or**
 ### What limits this, and the one lever that moves it
 
 **The constraint is Stripe's RATE limits, not latency or storage.** Live: 100 req/s
-globally, **25 req/s per endpoint**, 20 read/s for Search. Measured on a real
-per-seat catalogue, one metered call by a member issues two `listEventSummaries`
-(the seat pack and a caller-scoped limit) plus two balance-transaction walks. Since
-every window read goes through the same endpoint, that shape tops out around **a
-dozen metered calls per second for the whole account**, whatever the traffic.
+globally, **25 req/s per endpoint**, 20 read/s for Search. `scripts/load-metering.mjs`
+measures the real read path against a real account, counting every HTTP request the
+SDK makes via `stripe.on("response")` — which matters because a read is not one
+request: `usageSince` paginates.
+
+Measured on a per-seat catalogue with a caller-scoped limit, per metered call:
+
+| | requests / call | binding endpoint |
+|---|---|---|
+| uncached | **5.63** | `listEventSummaries` |
+| cached 2 s, 20 distinct callers | **3.60** (1.6x fewer) | " |
+| cached 2 s, bursty (3 callers) | **1.33** (3.8x fewer) | " |
+
+The spread is the point: the cache pays off in proportion to how often the SAME
+caller repeats inside the TTL, so a round-robin over many members is close to its
+worst case and real traffic does better. Latency follows it (p50 382 ms -> 174 ms
+bursty). Requests-per-call transfers to live; THROUGHPUT does not — test mode
+allows 25 req/s globally against live's 100, while the per-endpoint cap is 25 in
+both and is what actually binds. Cached, that puts sustained metering in the region
+of **15-20 calls/s** mixed, higher when bursty.
 
 **The most expensive read is the wallet leg, and it is the only unbounded one.**
 `usageSince` pages balance transactions newest-first across the window, 100 per
