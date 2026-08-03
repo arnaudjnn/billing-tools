@@ -1,3 +1,33 @@
+# [6.0.0](https://github.com/arnaudjnn/billing-tools/compare/v5.1.0...v6.0.0) (2026-08-03)
+
+
+* feat!: rename the tax mode "billing-tools" to "local" ([6d8bed9](https://github.com/arnaudjnn/billing-tools/commit/6d8bed9ff4100812bc13504dd6fb120421f43a30))
+
+
+### BREAKING CHANGES
+
+* `config.tax.mode` and `checkBillingSetup({ taxMode })` take
+`"local"` where they took `"billing-tools"`. The values are now
+`"local" | "stripe" | "none"`.
+
+The old name came from matching the `managedBy: "billing-tools"` marker this
+library stamps on everything it mints, which is a fact about the implementation
+rather than about the choice a developer is making. `"local"` names the thing that
+actually distinguishes it: the rate is computed in-process, from `sales-tax` plus a
+VIES lookup, with no per-transaction fee and no registration needed to calculate.
+
+Deliberately NOT `"auto"`. Stripe's own field is `automatic_tax` and Stripe Tax is
+sold as automatic tax, so `"auto"` would name this mode after the one thing it is
+the alternative to — the reading a developer is most likely to get backwards. A
+mode name that inverts its own meaning is worse than a clumsy one.
+
+The `managedBy: "billing-tools"` marker, the MCP/REST `realm` default and the
+Stripe-CLI cache directory all keep the old string: they are the package's
+identity, not the tax mode, and three of the six occurrences in src/ were exactly
+those.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
 # [5.1.0](https://github.com/arnaudjnn/billing-tools/compare/v5.0.0...v5.1.0) (2026-08-03)
 
 
