@@ -149,6 +149,22 @@ Every metered call is one `record`; every window is one `total`. The rule at the
 
 **Pairing a store with the composite beats the store alone.** `stripeUsageLedger({ perCaller: postgresUsageLedger(db) })` — which is what `meter.db` now builds — keeps exact per-member figures while answering every org-wide window from Stripe, so those reads stop scanning rows.
 
+## Counters, not events, when the per-member store has to scale (`src/usage-counters.ts`)
+
+`meter.counters` is the scale-correct per-caller leg, and the only one that needs no SQL.
+
+**Why.** Every read here is `sum(cost) where org, [start, end), caller?` over a FIXED, UTC-aligned window. `usage_events` answers that by aggregating a range on the hot path of every metered call, over a table that grows by one row per call forever — at an Enterprise window of 200 000 credits a week, millions of rows a month whose only purpose is to be summed back into a handful of integers. `usage_counters` keeps **one row per (org, scope, hour)**: a caller making a thousand calls in an hour writes ONE row, every read is a point lookup, and the row count is bounded by time rather than traffic.
+
+**Why hourly buckets rather than a counter per declared window.** A counter keyed by the plan's own windows would be smaller, but `record` would have to know which windows exist — and a window it failed to bump is usage counted by nothing, which reads 0% and refuses no one. Bucketing at a fixed grain means `record` needs no plan knowledge: it bumps the bucket the event falls in, `total` sums the buckets its window covers, and a window added to the config later is answerable retroactively. An hour is the grain because `every: "hour"` is the tightest window the model can express; a month is then at most 744 keys in ONE batched read.
+
+**The contract is that both paths derive the same scope string** (`scopesFor` on write, `scopeOf` on read → `org` / `k:<kind>` / `u:<memberId>`). A read that computed a different one would look up a counter nobody writes and report 0 forever — the same silent-generosity failure the coverage rule exists to catch. One event increments every scope it belongs to, so an org-wide read and a per-member read both see it.
+
+**Backends.** `sqlUsageCounters(pool)` (one `unnest` upsert per call, `used = used + excluded.used` as the atomic increment, `ANY($1)` on the primary key to read) reuses the database you already have; `redisUsageCounters(client)` needs none (`redis`, `ioredis`, `@upstash/redis`, Vercel KV all satisfy the duck type — `incrby` + `mget` + optional `pexpireat`); `memoryUsageCounters()` is for tests and single-process dev only, since separate instances would each allow a full window. `ensureUsageCountersTable` / `USAGE_COUNTERS_DDL` / `pruneUsageCounters` mirror the event-log helpers.
+
+**Atomic increment is the requirement that decides where this can live.** Redis and Postgres have one; Stripe and WorkOS metadata do not, which is why counters cannot go there — two concurrent metered calls would both read `n`, both write `n+1`, and one call would vanish.
+
+**What counters give up: the audit trail.** They cannot say WHICH actions made up a total, or when inside the hour. `postgresUsageLedger` keeps that and stays right for a consumer who wants per-action history — both satisfy the same seam, so a deployment can write to both. Clamping is deliberate too: a window wider than `maxKeysPerRead` reads the most RECENT slice, under-reporting rather than over-granting, because refusing early is recoverable and handing out unpaid-for allowance is not.
+
 ```ts
 createBilling({ adapter, config, plans, meter: { rateCard, db: pool } })
 // once, from your migrations:

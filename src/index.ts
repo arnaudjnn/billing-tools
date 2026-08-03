@@ -267,6 +267,28 @@ export {
   type FundingSource,
 } from "./usage-ledger.js";
 
+// Counters instead of events: one row per (org, scope, hour) rather than per call,
+// so a per-member window is a point read and the store stops growing with traffic.
+// Works without SQL — a Redis/KV client satisfies the same seam.
+export {
+  counterUsageLedger,
+  sqlUsageCounters,
+  redisUsageCounters,
+  memoryUsageCounters,
+  ensureUsageCountersTable,
+  pruneUsageCounters,
+  USAGE_COUNTERS_DDL,
+  BUCKET_MS,
+  bucketOf,
+  scopeOf,
+  scopesFor,
+  counterKey,
+  type UsageCounterStore,
+  type CounterLedgerOptions,
+  type SqlCounterClient,
+  type RedisCounterClient,
+} from "./usage-counters.js";
+
 // Per-execution metering engine (prepaid balance; per-seat packs or a global
 // pool; usage summed from Stripe balance-transaction metadata — no new backend).
 export {

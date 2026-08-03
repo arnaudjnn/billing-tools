@@ -18,6 +18,7 @@ import type { ClaimStore } from "./agent-auth/claim-store.js";
 import { createMachinePaymentHandler, createPaymentMd, type MachinePaymentOptions } from "./machine-payment/index.js";
 import { createOAuthProxy, type OAuthProxyOptions } from "./oauth-proxy/index.js";
 import { createMeter, createApiMeterGuard } from "./metering.js";
+import { counterUsageLedger, type UsageCounterStore } from "./usage-counters.js";
 import {
   defaultUsageLedger,
   postgresUsageLedger,
@@ -126,9 +127,32 @@ export interface CreateBillingOptions {
      *
      * Run `ensureUsageLedgerTable(db)` once from your migrations first.
      *
-     * `ledger` wins if both are given, for a consumer with their own store.
+     * `ledger` wins if both are given, for a consumer with their own store, and
+     * `counters` below wins over this — it answers the same questions without the
+     * per-call row.
      */
     db?: SqlClient;
+    /**
+     * A COUNTER store for the per-caller leg — the scale-correct choice, and the
+     * one that does not need SQL.
+     *
+     * `db` above keeps one row per metered call and answers a window by aggregating
+     * a range of them on the hot path. Counters keep one row per (org, scope, hour),
+     * so a caller making a thousand calls in an hour writes ONE row and every read
+     * is a point lookup: the store stops growing with traffic, and the read stops
+     * scaling with it. At the volumes a plan actually declares — an Enterprise
+     * window of 200 000 credits a week — that is the difference between a bounded
+     * working set and a partitioning project.
+     *
+     * `sqlUsageCounters(pool)` uses the database you already have;
+     * `redisUsageCounters(client)` needs no SQL at all (`redis`, `ioredis`,
+     * `@upstash/redis` and Vercel KV all satisfy the duck type). Run
+     * `ensureUsageCountersTable(pool)` from your migrations for the SQL one.
+     *
+     * What it gives up: per-action history. A counter cannot say WHICH actions made
+     * up a total — pass `db` instead if you want that trail.
+     */
+    counters?: UsageCounterStore;
   };
 }
 
@@ -241,9 +265,14 @@ export function createBilling(opts: CreateBillingOptions) {
   // included call counted as 0 and every window read 0%.
   const ledger =
     opts.meter?.ledger ??
-    (opts.meter?.db
-      ? stripeUsageLedger({ perCaller: postgresUsageLedger(opts.meter.db) })
-      : defaultUsageLedger());
+    (opts.meter?.counters
+      ? // Counters answer a per-member window with a point read instead of a range
+        // aggregate, so they are the scale-correct per-caller leg. Org-wide windows
+        // still go to the Stripe meter, which needs no store at any volume.
+        stripeUsageLedger({ perCaller: counterUsageLedger(opts.meter.counters) })
+      : opts.meter?.db
+        ? stripeUsageLedger({ perCaller: postgresUsageLedger(opts.meter.db) })
+        : defaultUsageLedger());
 
   // What the wired ledger cannot count is warned about by `createMeter` below,
   // which every metered call goes through whichever constructor composed the app —
