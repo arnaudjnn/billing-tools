@@ -1,3 +1,10 @@
+# [2.19.0](https://github.com/arnaudjnn/billing-tools/compare/v2.18.0...v2.19.0) (2026-08-03)
+
+
+### Features
+
+* **usage:** memberUsage narrows an api member to its own key ([6ec0b34](https://github.com/arnaudjnn/billing-tools/commit/6ec0b34a3b06a0e849e34c1c05f0247a67ceb03a))
+
 # [2.18.0](https://github.com/arnaudjnn/billing-tools/compare/v2.17.0...v2.18.0) (2026-08-03)
 
 
