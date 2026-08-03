@@ -1,3 +1,10 @@
+## [2.10.2](https://github.com/arnaudjnn/billing-tools/compare/v2.10.1...v2.10.2) (2026-08-03)
+
+
+### Bug Fixes
+
+* **seats:** a seat assignment goes on the member, not in a shared metadata value ([f421e14](https://github.com/arnaudjnn/billing-tools/commit/f421e14ec003c1b37af33f3712ab56b92291522a))
+
 ## [2.10.1](https://github.com/arnaudjnn/billing-tools/compare/v2.10.0...v2.10.1) (2026-08-03)
 
 
