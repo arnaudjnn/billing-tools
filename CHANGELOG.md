@@ -1,3 +1,19 @@
+# [14.0.0](https://github.com/arnaudjnn/billing-tools/compare/v13.1.0...v14.0.0) (2026-08-04)
+
+
+* feat(tax)!: a provider mode, and make an uncomputable `local` origin unwritable ([292b10c](https://github.com/arnaudjnn/billing-tools/commit/292b10c36835ec9701d742f88e403f2e9bc0252b))
+
+
+### BREAKING CHANGES
+
+* `config.tax` is a union rather than an open object. `mode: "local"`
+(including by default) now requires `origin` to be one of the 45 countries the local
+engine has rates for; `LOCAL_TAX_ORIGINS` and `isLocalTaxOrigin` are exported for
+checking at runtime. A deployment whose establishment is elsewhere must move to
+`mode: "stripe"` or `mode: "external"` — it was already being refused at charge time.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
 # [13.1.0](https://github.com/arnaudjnn/billing-tools/compare/v13.0.0...v13.1.0) (2026-08-04)
 
 
