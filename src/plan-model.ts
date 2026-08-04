@@ -10,18 +10,9 @@
 //
 // ── Why five axes instead of one ────────────────────────────────────────────
 //
-// A plan used to be `{ seats, creditsPerSeat, price, seatTypes?, allowanceMode? }`
-// — `PlanDef`, removed in 4.0.0 once both consumers had migrated and nothing but
-// this library's own tests still referenced it. Kept here as the reason the model
-// looks the way it does, not as a shape you can still write: that one could only
-// really express one product: per-seat, with a per-seat
-// pack. Everything else was squeezed into `allowanceMode`, which despite its
-// name does exactly ONE thing — skip the per-seat cap. There was no org-level
-// allowance anywhere, so "we don't care about seats, here is a package of N tool
-// requests" was unrepresentable, and a plan-level `creditsPerSeat` on such a plan
-// was simply never read.
-//
-// What varies between products turns out to be five independent things:
+// One flat shape can only really express one product. Fold the axes together and
+// an org-level package — "we don't care about seats, here are N tool requests" —
+// becomes unrepresentable. What varies between products is five independent things:
 //
 //   sells      what Stripe charges for      (nothing | seats | flat)
 //   grant      what is CREDITED as money    (none | purchased_seats | …)

@@ -635,18 +635,7 @@ export interface CompareTableView {
   sections: readonly CompareSectionView[];
 }
 
-export interface DeriveCompareOptions extends DerivePlanViewsOptions {
-  /**
-   * @deprecated Use `messages`, which covers these four and the rest of the
-   * library's own words in one bundle. Kept working because it shipped.
-   */
-  labels?: {
-    unlimited?: string;
-    separator?: string;
-    monthly?: string;
-    yearly?: string;
-  };
-}
+export type DeriveCompareOptions = DerivePlanViewsOptions;
 
 /**
  * Resolve a compare config against the plans into something a table can render.
@@ -661,8 +650,7 @@ export function deriveCompareTable(
   opts: DeriveCompareOptions = {},
 ): CompareTableView {
   const views = derivePlanViews(plans, opts);
-  // `labels` predates the messages bundle; it maps onto four of its keys.
-  const m = resolveMessages({ ...opts.labels, ...opts.messages });
+  const m = resolveMessages(opts.messages);
   const locale = opts.locale ?? "en-US";
   const number = (n: number) => new Intl.NumberFormat(locale).format(n);
   const text = (v: Localized | undefined) => resolveLocalized(v, opts);

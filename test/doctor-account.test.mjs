@@ -91,9 +91,8 @@ test("no US customers, no warning — even for a US-established seller", async (
 });
 
 test("declaring registrations without a US entry silences it — nothing is owed there", async () => {
-  // This replaces `allowApproximate`, which silenced the same warning while asserting
-  // nothing. A declared list is a statement: not registered in the US, so post-Wayfair
-  // those charges are 0% and complete, and there is nothing left to warn about.
+  // A declared list is a statement: not registered in the US, so post-Wayfair those
+  // charges are 0% and complete, and there is nothing left to warn about.
   __setStripeForTests(fakeStripe({ country: "FR", customers: [customer("US")] }));
   const r = await checkBillingSetup({
     config: config({ origin: "FR", registrations: [{ country: "FR" }] }),

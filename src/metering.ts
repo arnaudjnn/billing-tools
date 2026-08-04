@@ -32,9 +32,6 @@ export interface MeterInput {
   /** The window usage is measured over. Derived from the subscription period
    *  when omitted. */
   cycle?: CycleWindow;
-  /** @deprecated Resolved from the adapter now (see `resolveAllowance`), so a
-   *  caller can no longer pass a cycle key that disagrees with the window. */
-  extraAllowance?: number;
   /** Where usage is counted. Defaults to `stripeUsageLedger()` — the composite,
    *  the same default `createBilling` and `createMeter` apply. */
   ledger?: UsageLedger;

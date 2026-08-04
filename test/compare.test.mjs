@@ -41,7 +41,7 @@ test('the comparison table derives from the same config', async () => {
 
   const t = deriveCompareTable(PLANS, COMPARE, {
     currency: "eur", locale: "it-IT",
-    labels: { unlimited: "Illimitati", monthly: "Mensile", yearly: "Annuale" },
+    messages: { unlimited: "Illimitati", monthly: "Mensile", yearly: "Annuale" },
   });
   const rows = t.sections[0].groups.flatMap(g => g.rows);
   const cell = (label, plan) => rows.find(r => r.label === label).cells[plan];

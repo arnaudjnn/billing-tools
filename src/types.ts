@@ -221,11 +221,6 @@ export interface BillingConfig {
      * One obligation is deliberately not gated by it: destination VAT on a sale from
      * outside the EU to an EU consumer arises with no threshold to sit under, so an
      * empty list cannot wish it away.
-     *
-     * It replaces the removed `allowApproximate`. That flag suppressed the refusal
-     * without asserting anything, so its only remaining effect was to invoice 0% on
-     * tax you owe — the one unrecoverable direction. Say where you are registered
-     * instead, or `mode: "none"` to charge nothing deliberately.
      */
     registrations?: readonly { country: string; state?: string }[];
     /**

@@ -49,9 +49,8 @@ import {
 //   included, per caller      → this scope meter       (exact, ~60 s lag)
 //
 // The two sets are disjoint by construction — an event is funded by exactly one of
-// them — so `total` is a plain sum with no double count. It also reproduces the
-// SQL behaviour exactly: `counterUsageLedger.record` counts every event whatever
-// funded it, and so does the sum of these two legs.
+// them — so `total` is a plain sum with no double count: every event is counted
+// once, whatever funded it.
 //
 // ── Why the org scope gets no customer of its own ───────────────────────────
 //

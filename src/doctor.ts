@@ -77,8 +77,6 @@ export async function checkBillingSetup(opts: {
    * `taxMode` and `currency` above still win if passed.
    */
   config?: BillingConfig;
-  /** @deprecated Use `taxMode`. `false` → `"none"`, `true` → `"stripe"`. */
-  expectTax?: boolean;
   /** `config.currency`. Pass it to check for customers pinned to another one —
    *  the half-applied currency change that produces no error anywhere. */
   currency?: string;
@@ -88,14 +86,12 @@ export async function checkBillingSetup(opts: {
 } = {}): Promise<DoctorResult> {
   const stripe = getStripe();
   const checks: Check[] = [];
-  // Explicit wins, then the config's own declaration, then the deprecated boolean.
-  // The final default is `"local"` rather than `"none"` so a caller that
-  // passes nothing still gets its rates listed — a doctor that inspected no tax by
-  // default would be silent on the account most likely to have got it wrong.
+  // Explicit wins, then the config's own declaration. The default is `"local"` rather
+  // than `"none"` so a caller that passes nothing still gets its rates listed — a
+  // doctor that inspected no tax by default would be silent on the account most likely
+  // to have got it wrong.
   const taxMode: TaxMode =
-    opts.taxMode ??
-    (opts.config ? taxModeOf(opts.config.tax) : undefined) ??
-    (opts.expectTax === undefined ? "local" : opts.expectTax ? "stripe" : "none");
+    opts.taxMode ?? (opts.config ? taxModeOf(opts.config.tax) : undefined) ?? "local";
   const currency = opts.currency ?? opts.config?.currency;
 
   const account = await stripe.accounts.retrieve();
@@ -333,10 +329,8 @@ export async function checkBillingSetup(opts: {
   // transactions), which no local dataset knows. What the doctor can say is that
   // the exposure exists and that this mode has no US rate to apply.
   //
-  // `registrations` is the ONE thing that silences it, and it silences it by saying
-  // something true: a declared list with no US entry makes those charges 0% because
-  // nothing is owed where you are not registered. The removed `allowApproximate`
-  // silenced it too, and asserted nothing while doing so — which is why it is gone.
+  // `registrations` silences it, by saying something true: a declared list with no US
+  // entry makes those charges 0%, because nothing is owed where you are not registered.
   const declaredRegistrations = opts.config?.tax?.registrations;
   const usRegistered = declaredRegistrations?.some((r) => r.country.toUpperCase() === "US");
   const usAnswered = declaredRegistrations !== undefined && !usRegistered;
@@ -493,10 +487,11 @@ export function checkPlansConfig(
       ],
       [
         caller,
-        "meter an INCLUDED window PER MEMBER (a seat pack, or a caller-scoped rate limit), which no Stripe primitive can count",
-        "Pass `meter.db` (a Postgres client) or `meter.ledger` to createBilling, and run " +
-          "ensureUsageLedgerTable(db) from your migrations. Or pool the allowance instead " +
-          '(`cap: { kind: "pool", perSeat: N }`), which is counted in Stripe and needs no store.',
+        "meter an INCLUDED window PER MEMBER (a seat pack, or a caller-scoped rate limit), which the bare composite cannot count",
+        "Pass `stripeUsageLedger({ perCaller: stripeScopeUsageLedger() })`, which answers it out " +
+          "of Stripe — one Customer per active member per org, and ~60s of lag on that window. " +
+          'Or pool the allowance instead (`cap: { kind: "pool", perSeat: N }`), which is one ' +
+          "org-wide window at any volume and needs nothing extra.",
       ],
     ] as const) {
       if (!gap.length) continue;
