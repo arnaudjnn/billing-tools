@@ -730,24 +730,42 @@ export async function setAutoReloadSettings(
  * returns the first invoice for every duplicate within its 24h window, so the
  * customer is charged once no matter how many callers raced.
  */
-/** Fire-and-forget auto-reload with the deployment's tax settings applied.
- *  Both trigger points (the meter and the auth gate) go through this, so a
- *  reload can't be taxed on one path and untaxed on the other. */
+/** What a charge carries for tax, as `taxFor` returns it. */
+export type ChargeTax = { taxRates?: string[]; automaticTax?: boolean };
+
+/**
+ * Fire-and-forget auto-reload with the deployment's tax settings applied.
+ *
+ * Both trigger points (the meter and the auth gate) go through this, so a reload
+ * can't be taxed on one path and untaxed on the other.
+ *
+ * **The tax settings are passed as a THUNK, not a value, and that is the whole
+ * point of this function's shape.** It used to `await taxFor(...)` here and hand
+ * the result down — so every wallet-funded metered call resolved tax for a reload
+ * that, almost always, was not going to happen. Under `mode: "local"` that meant a
+ * live **VIES** request plus a Stripe customer retrieve per metered call, for a
+ * customer whose balance was nowhere near their threshold.
+ *
+ * VIES is a shared European Commission service, and the failure it invites is a
+ * cascade rather than an error: get rate-limited there and every B2B customer
+ * silently stops reverse-charging, because an unverifiable number means CHARGE. The
+ * bill for hammering it would have arrived as "why is everyone suddenly paying VAT".
+ */
 export async function autoReloadFor(
   stripeCustomerId: string,
   config: { currency: string; tax?: BillingConfig["tax"] },
 ): Promise<void> {
-  await tryAutoReload(
-    stripeCustomerId,
-    config.currency,
-    await taxFor(stripeCustomerId, config.tax),
+  await tryAutoReload(stripeCustomerId, config.currency, () =>
+    taxFor(stripeCustomerId, config.tax),
   );
 }
 
 export async function tryAutoReload(
   stripeCustomerId: string,
   currency: string,
-  opts: { taxRates?: string[]; automaticTax?: boolean } = {},
+  /** Resolved tax, or a thunk resolving it — the thunk runs only if we actually
+   *  charge, which is what keeps `taxFor` off the metered hot path. */
+  opts: ChargeTax | (() => Promise<ChargeTax>) = {},
 ): Promise<void> {
   const settings = await getAutoReloadSettings(stripeCustomerId);
   if (!settings || !settings.enabled) return;
@@ -766,12 +784,17 @@ export async function tryAutoReload(
   });
   if (pms.data.length === 0) return;
 
+  // Only NOW is tax worth resolving: past every early return above, this customer is
+  // definitely being charged. Every one of those returns is the common case on a
+  // metered call, which is why resolving tax before them cost a VIES request per call.
+  const tax = typeof opts === "function" ? await opts() : opts;
+
   // Stable across concurrent triggers: same customer, same target, same hour.
   // Not the exact balance — two racing callers can read balances a credit apart
   // and would then key differently, which is precisely the double charge.
   const slot = new Date().toISOString().slice(0, 13);
   const key = `autoreload:${stripeCustomerId}:${settings.reload_to}:${slot}`;
-  const taxRates = opts.taxRates?.length ? opts.taxRates : null;
+  const taxRates = tax.taxRates?.length ? tax.taxRates : null;
 
   try {
     await stripe.invoiceItems.create(
@@ -799,7 +822,7 @@ export async function tryAutoReload(
         // appeared on the renewal a month later.
         pending_invoice_items_behavior: "include",
         description: `Auto-reload: ${creditsNeeded} credits`,
-        ...(!taxRates && opts.automaticTax ? { automatic_tax: { enabled: true } } : {}),
+        ...(!taxRates && tax.automaticTax ? { automatic_tax: { enabled: true } } : {}),
         metadata: { auto_reload: "true", credits: String(creditsNeeded) },
       },
       { idempotencyKey: `${key}:invoice` },

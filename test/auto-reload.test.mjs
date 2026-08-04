@@ -112,6 +112,40 @@ test("manual rates and automatic tax are never sent together", async () => {
   assert.equal(stripe.of("invoice")[0].params.automatic_tax, undefined);
 });
 
+test("tax is resolved ONLY when a reload actually happens", async () => {
+  // The shape of the bug, and it is a rate-limit cascade rather than a wrong number.
+  // This is fired and forgotten on EVERY wallet-funded metered call, and it used to
+  // resolve tax before deciding whether to charge — so under `mode: "local"` each
+  // metered call made a live VIES request plus a Stripe customer retrieve for a
+  // reload that, almost always, was not going to happen. VIES is a shared European
+  // Commission service, and being rate-limited there does not surface as an error:
+  // an unverifiable VAT number means CHARGE, so every B2B customer silently stops
+  // reverse-charging. Hence the thunk.
+  const { tryAutoReload, __setStripeForTests } = await import("../dist/billing.js");
+
+  // Above the threshold — the common case on a metered call. Nothing may be resolved.
+  let resolved = 0;
+  const tax = async () => {
+    resolved++;
+    return { taxRates: ["txr_iva22"] };
+  };
+  __setStripeForTests(fakeStripe({ balance: 5000 }));
+  await tryAutoReload("cus_1", "eur", tax);
+  assert.equal(resolved, 0, "a customer nowhere near their threshold must not touch VIES");
+
+  // No card on file — also an early return, also must not resolve.
+  __setStripeForTests(fakeStripe({ balance: 50, cards: [] }));
+  await tryAutoReload("cus_1", "eur", tax);
+  assert.equal(resolved, 0, "no card means no charge, so no tax to work out");
+
+  // Actually charging: resolved exactly once, and the rate reaches the invoice.
+  const stripe = fakeStripe({ balance: 50 });
+  __setStripeForTests(stripe);
+  await tryAutoReload("cus_1", "eur", tax);
+  assert.equal(resolved, 1);
+  assert.deepEqual(stripe.of("invoiceItem")[0].params.tax_rates, ["txr_iva22"]);
+});
+
 test("concurrent triggers charge once", async () => {
   // The real shape of the bug: the meter fires this on every metered call.
   const stripe = fakeStripe({ balance: 50 });

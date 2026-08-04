@@ -61,6 +61,7 @@ export {
   type SpendControls,
   tryAutoReload,
   autoReloadFor,
+  type ChargeTax,
   type TopUpCheckoutOptions,
   listInvoices,
   getInvoice,
