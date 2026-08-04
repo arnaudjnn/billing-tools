@@ -46,7 +46,10 @@ function toolError(e: unknown): { isError: true; content: Array<{ type: "text"; 
 export interface SubscriptionToolOptions {
   plans: PlanCatalog;
   /** Where Stripe returns after a first-purchase Checkout, which has no
-   *  subscription to prorate against. */
+   *  subscription to prorate against. Defaults to `config.baseUrl`: the option is
+   *  easy not to know about, and unset it made `change_plan` throw
+   *  `needs_return_url` on exactly that path — a refusal the caller cannot act on,
+   *  in place of a landing page every deployment already has. */
   returnUrl?: string;
   /** Stripe TaxRate ids for a change, when the account computes its own tax.
    *  Defaults to the rates already on the subscription's items. */
@@ -161,7 +164,7 @@ is pending resumes it. Preview the cost first with preview_plan_change.`,
             currency: config.currency,
             timing,
             proration,
-            returnUrl: opts.returnUrl,
+            returnUrl: opts.returnUrl ?? config.baseUrl,
             // Hosted, because THIS caller has no browser. An agent handed a client
             // secret can do nothing with it — which is how a consumer ends up
             // hand-rolling a hosted session next to this one and losing the
