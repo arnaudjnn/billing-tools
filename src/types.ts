@@ -224,6 +224,29 @@ export interface BillingConfig {
      */
     registrations?: readonly { country: string; state?: string }[];
     /**
+     * Mandatory invoice wording, per outcome. `mode: "local"` only.
+     *
+     * ```ts
+     * // A French micro-entreprise under the franchise en base:
+     * notes: {
+     *   exempt: "TVA non applicable, art. 293 B du CGI",
+     *   reverseCharge: "Autoliquidation, art. 196 dir. 2006/112/CE",
+     * }
+     * ```
+     *
+     * Where a regime requires the invoice to state WHY a sale is untaxed, that
+     * mention is not decoration: France fines €15 per invoice missing the 293 B
+     * wording, and the CJEU held in C-247/21 that an omitted reverse-charge mention
+     * cannot be cured afterwards. Supplying `exempt` makes billing-tools mint a 0%
+     * Stripe TaxRate carrying it, so it renders as a tax line on every invoice from
+     * every charge path. Supply nothing and an untaxed sale carries no line, exactly
+     * as before.
+     *
+     * Stripe caps a TaxRate display name at 50 characters — the mention, not the
+     * explanation.
+     */
+    notes?: { exempt?: string; reverseCharge?: string };
+    /**
      * Are you registered for the EU One-Stop Shop? Default true.
      *
      * It decides ONE case: a cross-border EU customer with no valid VAT number.

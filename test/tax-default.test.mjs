@@ -20,6 +20,7 @@ import { afterEach, test } from "vitest";
 
 import { taxModeOf, originFor, invalidateTaxOrigin } from "../dist/tax.js";
 import { __setStripeForTests } from "../dist/billing.js";
+import { stripeList } from "./helpers.mjs";
 
 test("configuring nothing means local, not none", () => {
   assert.equal(taxModeOf(undefined), "local");
@@ -229,6 +230,114 @@ test("declaring registrations governs DOMESTIC sales too; omitting them does not
   const none = await resolveTax({ originCountry: "IT", country: "IT", registrations: [] });
   assert.equal(none.percent, 0);
   assert.equal(none.outOfScope, true);
+});
+
+test("a SMALL-BUSINESS EXEMPTION charges nothing, including to EU consumers", async () => {
+  // France's franchise en base (art. 293 B CGI) and its equivalents: below the
+  // threshold you are not VAT-registered, so you charge 0% — and `registrations: []`
+  // is how that is said. Domestic already worked; the EU cross-border B2C leg did
+  // NOT, because it read `oss` and bypassed registrations, so a French
+  // micro-entreprise invoiced 20% TVA to every EU consumer. That is VAT it is not
+  // registered to collect and cannot remit.
+  const franchise = { registrations: [], oss: false };
+
+  const domestic = await resolveTax({ originCountry: "FR", country: "FR", ...franchise });
+  assert.equal(domestic.percent, 0, "no VAT at home");
+  assert.equal(domestic.outOfScope, true);
+
+  const euConsumer = await resolveTax({ originCountry: "FR", country: "DE", ...franchise });
+  assert.equal(euConsumer.percent, 0, "and none to an EU consumer either");
+  assert.equal(euConsumer.outOfScope, true);
+
+  // Non-EU is unchanged, and an EU BUSINESS still reverse-charges — the exemption is
+  // about whether WE charge, not about who accounts for the tax.
+  assert.equal((await resolveTax({ originCountry: "FR", country: "US", ...franchise })).percent, 0);
+  viesSays(true);
+  const b2b = await resolveTax({
+    originCountry: "FR",
+    country: "DE",
+    taxNumber: "DE143454214",
+    ...franchise,
+  });
+  assert.equal(b2b.reverseCharge, true);
+
+  // Crossing €10 000 means registering for OSS, and then the CUSTOMER's rate applies
+  // even though domestic sales stay exempt. `oss: true` is that switch.
+  const overThreshold = await resolveTax({
+    originCountry: "FR",
+    country: "DE",
+    registrations: [],
+    oss: true,
+  });
+  assert.equal(overThreshold.percent, 19, "OSS-registered: the customer's rate");
+});
+
+test("an EXEMPT sale carries its mandatory wording onto the invoice", async () => {
+  // An untaxed sale normally carries no tax line — nothing to show. But France fines
+  // €15 per invoice missing "TVA non applicable, art. 293 B du CGI", so a regime that
+  // requires the mention needs a line to put it on. Supplying `notes.exempt` mints a
+  // 0% rate carrying it; supplying nothing keeps today's behaviour exactly.
+  const minted = [];
+  __setStripeForTests({
+    taxRates: {
+      list: () => stripeList([]),
+      async create(params) {
+        minted.push(params);
+        return { id: `txr_${minted.length}`, ...params };
+      },
+    },
+  });
+
+  const franchise = { originCountry: "FR", country: "FR", registrations: [], oss: false };
+
+  // Without wording: no rate, no line — unchanged for every existing deployment.
+  const bare = await taxRatesFor(franchise);
+  assert.equal(bare.rateIds.length, 0);
+  assert.equal(minted.length, 0, "an untaxed sale must not invent a tax line unasked");
+
+  // With wording: a 0% rate carrying the mention.
+  const noted = await taxRatesFor({
+    ...franchise,
+    notes: { exempt: "TVA non applicable, art. 293 B du CGI" },
+  });
+  assert.equal(noted.rateIds.length, 1);
+  assert.equal(minted.length, 1);
+  assert.equal(minted[0].percentage, 0, "the mention must not add tax");
+  assert.equal(minted[0].display_name, "TVA non applicable, art. 293 B du CGI");
+  assert.ok(
+    minted[0].display_name.length <= 50,
+    "Stripe caps a TaxRate display name at 50 chars",
+  );
+
+  // And reverse charge takes its own wording — "Reverse charge" is not the mention a
+  // French seller must print.
+  viesSays(true);
+  const rc = await taxRatesFor({
+    originCountry: "FR",
+    country: "DE",
+    taxNumber: "DE143454214",
+    registrations: [],
+    notes: { exempt: "unused here", reverseCharge: "Autoliquidation, art. 196" },
+  });
+  assert.equal(rc.decision.reverseCharge, true);
+  assert.equal(minted.at(-1).display_name, "Autoliquidation, art. 196");
+  assert.equal(minted.at(-1).percentage, 0);
+});
+
+test("declaring a registration AT ORIGIN still charges your own rate", async () => {
+  // The other half: a VAT-registered French seller that is not OSS-registered charges
+  // its own 20% on a cross-border EU B2C sale, which is the sub-€10 000 regime.
+  const registered = await resolveTax({
+    originCountry: "FR",
+    country: "DE",
+    registrations: [{ country: "FR" }],
+    oss: false,
+  });
+  assert.equal(registered.percent, 20);
+
+  // And omitting registrations entirely is unchanged for every existing deployment.
+  const undeclared = await resolveTax({ originCountry: "FR", country: "DE", oss: false });
+  assert.equal(undeclared.percent, 20);
 });
 
 test("US nexus is per STATE, which is why `state` is finally read", async () => {

@@ -408,6 +408,8 @@ export {
   type TaxMode,
   type TaxDecision,
   type TaxRegistration,
+  type TaxNotes,
+  noteFor,
 } from "./tax.js";
 // Stripe Tax configuration as code (origin address, defaults, registrations).
 export {

@@ -221,11 +221,27 @@ export async function resolveTax(opts: {
   // that never had a threshold.
   const nonUnionDestination = countryEU && !originEU && !domestic;
 
+  // Charging YOUR OWN rate presupposes being VAT-registered where you are
+  // established, and a small-business exemption means you are not: France's
+  // *franchise en base* (art. 293 B CGI), Germany's Kleinunternehmerregelung, and
+  // their equivalents charge NOTHING until the €10 000 cross-border threshold, at
+  // which point OSS takes over and the rate becomes the customer's.
+  //
+  // So a declared registration list that omits the origin means 0% here rather than
+  // the origin rate. Without it, a French micro-entreprise invoiced 20% TVA to every
+  // EU consumer — VAT it is not registered to collect and cannot remit, which is the
+  // same fault `oss: false` exists to prevent, pointing the other way.
+  //
+  // Undefined registrations still mean "the caller did not say", so an existing
+  // deployment keeps charging its own rate exactly as before.
+  const registeredAtOrigin = opts.registrations
+    ? isRegisteredIn(opts.registrations, origin, null)
+    : true;
+
   // A cross-border EU sale with no valid VAT id is not reverse-chargeable, so it
   // falls to be taxed somewhere, and OSS decides which. Registered (the default),
-  // the customer's country; otherwise ours, which is the only rate we can remit.
-  // A declared registration adds nothing here — both branches already name a country
-  // whose rate you can actually pay over.
+  // the customer's country; otherwise ours — the only rate we could remit, and only
+  // if we are registered to remit anything at all.
   //
   // `oss` defaults to true because charging the customer's rate is what the rule is
   // once you are over the threshold, and being over it is the state a growing
@@ -233,7 +249,9 @@ export async function resolveTax(opts: {
   const ratedCountry =
     originEU && crossBorderToEU
       ? opts.oss === false
-        ? origin
+        ? registeredAtOrigin
+          ? origin
+          : null
         : country
       : nonUnionDestination || dueHere
         ? country
@@ -473,7 +491,17 @@ export async function ensureStripeTaxRate(
   decision: TaxDecision,
   opts: { displayName?: string } = {},
 ): Promise<string | null> {
-  if (decision.percent === 0 && !decision.reverseCharge) return null;
+  // An untaxed sale normally carries no rate at all — there is nothing to show. But
+  // some regimes REQUIRE the invoice to say why it is untaxed, and a mention that is
+  // legally mandatory cannot be left to whoever wired the charge: France fines €15
+  // per invoice missing "TVA non applicable, art. 293 B du CGI", and the CJEU has held
+  // (C-247/21) that an omitted reverse-charge mention cannot be cured afterwards.
+  //
+  // So when the deployment supplies wording, a 0% rate is minted to carry it and
+  // Stripe renders it as a tax line on every invoice, from any charge path. When it
+  // supplies none, nothing changes for anyone.
+  const zeroRatedNote = decision.percent === 0 && !decision.reverseCharge;
+  if (zeroRatedNote && !opts.displayName) return null;
 
   const displayName =
     opts.displayName ??
@@ -483,7 +511,14 @@ export async function ensureStripeTaxRate(
         // invoice says IVA and a French one TVA without the app supplying a map.
         (decision.displayName ?? "VAT"));
 
-  const key = `${decision.country}|${decision.percent}|${displayName}|${decision.reverseCharge}`;
+  // An exemption is a fact about the SELLER's regime, not the customer's country: a
+  // Japanese invoice carrying `country: "JP"` beside a French statute is wrong, and it
+  // would mint one identical 0% rate per destination sold into. So the note-carrying
+  // rate has no country and there is one of it, forever. Reverse charge keeps the
+  // customer's country — there the obligation genuinely is theirs.
+  const country = zeroRatedNote ? undefined : decision.country;
+
+  const key = `${country ?? "-"}|${decision.percent}|${displayName}|${decision.reverseCharge}`;
   const hit = rateCache.get(key);
   if (hit !== undefined) return hit;
   const pending = rateInflight.get(key);
@@ -500,7 +535,7 @@ export async function ensureStripeTaxRate(
     for await (const r of stripe.taxRates.list({ active: true, limit: 100 })) {
       if (
         r.percentage === decision.percent &&
-        r.country === decision.country &&
+        (r.country ?? undefined) === country &&
         r.inclusive === false &&
         r.display_name === displayName
       ) {
@@ -514,7 +549,7 @@ export async function ensureStripeTaxRate(
         await stripe.taxRates.create({
           display_name: displayName,
           percentage: decision.percent,
-          country: decision.country,
+          ...(country ? { country } : {}),
           inclusive: false,
           ...(decision.reverseCharge
             ? { description: "VAT reverse charge — customer accounts for VAT" }
@@ -668,6 +703,7 @@ export async function taxFor(
       const { rateIds } = await taxRatesFor({
         oss: tax?.oss,
         registrations: tax?.registrations,
+        notes: tax?.notes,
         originCountry,
         // No address on file → treat it as a domestic sale (see above).
         country: where?.country ?? originCountry,
@@ -715,14 +751,51 @@ export async function taxRatesFor(opts: {
   /** See `resolveTax`. Where you are registered to collect; undefined means the
    *  regime rules alone decide. */
   registrations?: readonly TaxRegistration[];
+  /** Mandatory invoice wording per outcome. See `TaxNotes`. */
+  notes?: TaxNotes;
 }): Promise<{ decision: TaxDecision; rateIds: string[] }> {
   const decision = await resolveTax(opts);
   // Unconditional, with no override: the two ways past it both assert something true
   // (`registrations` if you do not owe it there, `mode: "stripe"` if you do). A flag
   // that merely suppressed this would only ever under-collect silently.
   if (decision.approximate) throw new ApproximateTaxError(decision);
-  const id = await ensureStripeTaxRate(decision, { displayName: opts.displayName });
+  const id = await ensureStripeTaxRate(decision, {
+    displayName: opts.displayName ?? noteFor(decision, opts.notes),
+  });
   return { decision, rateIds: id ? [id] : [] };
+}
+
+/**
+ * The wording an invoice must carry, per outcome.
+ *
+ * Both are legally mandatory where they apply, which is why they belong in config
+ * rather than at a call site: France fines €15 per invoice missing "TVA non
+ * applicable, art. 293 B du CGI", and the CJEU held in C-247/21 that an omitted
+ * reverse-charge mention cannot be cured after the fact.
+ *
+ * Stripe caps a TaxRate `display_name` at 50 characters, so keep these short — the
+ * mention, not the explanation.
+ */
+export type TaxNotes = {
+  /**
+   * Shown when NOTHING is due and it is not reverse charge — a small-business
+   * exemption (France's `franchise en base`), or a supply outside the scope of your
+   * VAT regime.
+   *
+   * Without it an untaxed sale carries no tax line at all, which is right for an
+   * account with no such obligation and wrong for one that has it.
+   */
+  exempt?: string;
+  /** Shown on a reverse-charge line. Defaults to `"Reverse charge"`; a French
+   *  seller wants `"Autoliquidation, art. 196 dir. 2006/112/CE"`. */
+  reverseCharge?: string;
+};
+
+/** Which note applies to a decision, if any. */
+export function noteFor(decision: TaxDecision, notes: TaxNotes | undefined): string | undefined {
+  if (!notes) return undefined;
+  if (decision.reverseCharge) return notes.reverseCharge;
+  return decision.percent === 0 ? notes.exempt : undefined;
 }
 
 /**
