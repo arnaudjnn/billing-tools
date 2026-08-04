@@ -3,8 +3,11 @@ import {
   checkWorkOSSetup,
   checkPlansConfig,
   formatDoctorResult,
+  runBillingDoctor,
+  webhookUrlFromArgv,
   type Check,
   type DoctorResult,
+  type RunDoctorOptions,
 } from "./doctor.js";
 import { ensurePlans } from "./plans.js";
 import { ensureMeters } from "./usage-ledger.js";
@@ -251,7 +254,10 @@ export async function setupBilling(opts: SetupOptions): Promise<SetupResult> {
   if (opts.workos) {
     const w = typeof opts.workos === "object" ? opts.workos : {};
     try {
-      workos = await checkWorkOSSetup(w);
+      // The mismatch matters most HERE: this is the run that writes prices and a
+      // webhook endpoint, so a live Stripe key beside a staging WorkOS key
+      // provisions the real account and points it at the wrong identity store.
+      workos = await checkWorkOSSetup({ ...w, expectLivemode: account.livemode });
     } catch (e) {
       workos = {
         livemode: account.livemode,
@@ -315,4 +321,96 @@ export function formatSetupReport(result: SetupResult): string {
     );
   }
   return out.join("\n");
+}
+
+// ── One runner, two verbs ───────────────────────────────────────────────────
+//
+// `setupBilling` provisions and `checkBillingSetup` decides whether it worked —
+// separate claims, deliberately. But they are separate CLAIMS, not separate
+// COMMANDS: they take the same inputs (this app's `plans`, this app's `config`, this
+// app's webhook URL), and every consumer was keeping two scripts and two
+// package.json entries to pass the same three values to each. Both copies then
+// carried the same ~30 lines of prose explaining what setup cannot do lazily, which
+// is documentation living in the two places nobody reads it.
+//
+// So the argv, the report and the exit arithmetic live here, and an app keeps one
+// script naming only what an app knows:
+//
+//     // scripts/ops/billing.ts    →    "billing": "tsx --env-file-if-exists=.env.local scripts/ops/billing.ts"
+//     import { runBillingCli } from "@arnaudjnn/billing-tools";
+//     import { buildConfig, PLANS } from "@myapp/toolkit/config";
+//
+//     runBillingCli({
+//       config: buildConfig(),
+//       plans: PLANS,
+//       webhookUrl: "https://myapp.example/api/stripe/webhook",
+//       workos: { oauthProxy: true },
+//     });
+//
+//       pnpm billing            audit (read-only)
+//       pnpm billing setup      provision, then audit
+//
+// It still cannot be a `billing-tools` bin subcommand: `plans` is a TypeScript value
+// in the app, and no flag can pass it. What the app stops keeping is the plumbing.
+
+export interface RunBillingCliOptions extends Omit<RunDoctorOptions, "config"> {
+  /** Required here, unlike on the doctor: `setup` provisions FROM it (currency,
+   *  tax mode), so a run without it would provision a guess. */
+  config: BillingConfig;
+  /** Stripe Tax head office + registrations. Ignored unless `config.tax` mode is
+   *  `"stripe"` — see `setupBilling`. */
+  stripeTax?: SetupOptions["stripeTax"];
+}
+
+/**
+ * `setup` | `doctor` (default) over one options object.
+ *
+ * Flags, the same for both verbs: `--url <url>` names a different endpoint,
+ * `--no-webhook` says there isn't one. `setup` also takes `--prune`, which deletes
+ * other endpoints registered on the same URL.
+ *
+ * **`doctor` is the default and `setup` must be typed**, because the default has to
+ * be the verb that cannot change anything: a bare `pnpm billing` from a laptop
+ * holding live keys should read the account, never provision it.
+ *
+ * Exits the process itself — call it, do not `await` it at the top level, which does
+ * not survive a CJS transform.
+ */
+export async function runBillingCli(opts: RunBillingCliOptions): Promise<void> {
+  const argv = opts.argv ?? process.argv.slice(2);
+  const log = opts.log ?? ((line: string) => console.log(line));
+  const exit = opts.exit ?? ((code: number) => process.exit(code));
+
+  const verb = argv.find((a) => !a.startsWith("--")) ?? "doctor";
+  if (verb === "doctor") return runBillingDoctor({ ...opts, argv, log, exit });
+  if (verb !== "setup") {
+    console.error(`Unknown command: ${verb}\n\n  billing [doctor]   audit this environment\n  billing setup      provision it, then audit\n\n  --url <url>  --no-webhook  --prune`);
+    return exit(2);
+  }
+
+  // The same rule the doctor exits 2 on, for the same reason and more sharply: this
+  // verb WRITES, and the key decides which account it writes to.
+  if (!process.env.STRIPE_SECRET_KEY) {
+    console.error("STRIPE_SECRET_KEY is not set — it decides which environment is provisioned");
+    return exit(2);
+  }
+
+  // No step inside `setupBilling` throws; a call that fails outright is the account
+  // being unreachable. Reported as a line rather than a stack, like the doctor's.
+  try {
+    const result = await setupBilling({
+      config: opts.config,
+      plans: opts.plans,
+      webhookUrl: webhookUrlFromArgv(argv, opts.webhookUrl),
+      pruneDuplicateWebhooks: argv.includes("--prune"),
+      stripeTax: opts.stripeTax,
+      workos: opts.workos,
+    });
+    log(formatSetupReport(result));
+    return exit(result.healthy ? 0 : 1);
+  } catch (e) {
+    log(`✗ Stripe: ${e instanceof Error ? e.message : String(e)}`);
+    log("    → check STRIPE_SECRET_KEY, and that this machine can reach api.stripe.com");
+    return exit(1);
+  }
 }

@@ -440,6 +440,10 @@ export {
 export {
   setupBilling,
   formatSetupReport,
+  // `setup` | `doctor` over one options object, so an app keeps one script instead
+  // of two passing the same three values to each half.
+  runBillingCli,
+  type RunBillingCliOptions,
   type SetupOptions,
   type SetupResult,
   type SetupStep,

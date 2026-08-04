@@ -11,7 +11,8 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 
-import { runBillingDoctor } from "../dist/doctor.js";
+import { environmentMismatch, runBillingDoctor, webhookUrlFromArgv } from "../dist/doctor.js";
+import { runBillingCli } from "../dist/setup.js";
 
 const PLANS = {
   pro: {
@@ -101,4 +102,77 @@ test("a broken catalogue fails the run even if the account is fine", async () =>
   const h = harness(["--no-webhook"]);
   await run({ ...h.opts, plans: BAD, hasCheckout: false });
   assert.notEqual(h.code, 0, "a catalogue error must not exit 0");
+});
+
+// ── The two keys, disagreeing about which environment this is ────────────────
+//
+// Both halves of the report state their own environment plainly, so a mixed pair
+// printed "LIVE MODE" above "test/staging key" and passed. Pure and separate from
+// the WorkOS network call precisely so this can be asserted offline.
+test("a live Stripe key beside a staging WorkOS key is an error", () => {
+  const mixed = environmentMismatch("sk_test_123", true);
+  assert.equal(mixed?.level, "error");
+  assert.match(mixed.detail, /LIVE key and WORKOS_API_KEY is a test/);
+
+  // And the other way round, which is the likelier accident: a laptop with test
+  // Stripe keys and the production WorkOS key pasted in.
+  assert.equal(environmentMismatch("sk_live_123", false)?.level, "error");
+
+  // Matching pairs say nothing at all — local dev and prod are both a matched pair.
+  assert.equal(environmentMismatch("sk_test_123", false), null);
+  assert.equal(environmentMismatch("sk_live_123", true), null);
+});
+
+// ── One runner, two verbs ────────────────────────────────────────────────────
+
+test("the flags parse the same for both verbs", () => {
+  // One parser, because both verbs take both flags and the two hand-written copies
+  // of this had already drifted.
+  assert.equal(webhookUrlFromArgv(["--no-webhook"], "https://deployed.example/hook"), undefined);
+  assert.equal(webhookUrlFromArgv(["--url", "https://other.example/hook"]), "https://other.example/hook");
+  assert.equal(webhookUrlFromArgv([], "https://deployed.example/hook"), "https://deployed.example/hook");
+  // A flag must not be read as the verb, or `billing --no-webhook` would provision.
+  assert.equal(webhookUrlFromArgv(["setup", "--no-webhook"], "https://x/y"), undefined);
+});
+
+async function cli(opts) {
+  try {
+    await runBillingCli(opts);
+  } catch (e) {
+    if (!e || typeof e !== "object" || !("__exit" in e)) throw e;
+  }
+}
+
+test("the default verb is the one that cannot change anything", async () => {
+  // A bare `pnpm billing` on a laptop holding live keys must read the account, never
+  // provision it — so `doctor` is the default and `setup` has to be typed.
+  process.env.STRIPE_SECRET_KEY = "sk_test_fake";
+  const h = harness(["--no-webhook"]);
+  await cli({ ...h.opts, config: { currency: "eur", baseUrl: "https://x.example" }, plans: PLANS });
+  assert.equal(typeof h.code, "number");
+  // The doctor's own output, not a setup report: nothing was provisioned.
+  assert.ok(
+    h.out.join("\n").length > 0 && !h.out.join("\n").includes("Provisioned:"),
+    "the default verb provisioned something",
+  );
+});
+
+test("an unknown verb exits 2 rather than defaulting to either half", async () => {
+  process.env.STRIPE_SECRET_KEY = "sk_test_fake";
+  const h = harness(["privision"]);
+  await cli({ ...h.opts, config: { currency: "eur", baseUrl: "https://x.example" } });
+  assert.equal(h.code, 2, "a typo must not fall through to setup OR doctor");
+});
+
+test("setup with no STRIPE_SECRET_KEY exits 2, before writing anything", async () => {
+  const key = process.env.STRIPE_SECRET_KEY;
+  delete process.env.STRIPE_SECRET_KEY;
+  const h = harness(["setup"]);
+  try {
+    await cli({ ...h.opts, config: { currency: "eur", baseUrl: "https://x.example" }, plans: PLANS });
+    assert.equal(h.code, 2);
+    assert.deepEqual(h.out, [], "nothing should be printed before the key is checked");
+  } finally {
+    if (key !== undefined) process.env.STRIPE_SECRET_KEY = key;
+  }
 });

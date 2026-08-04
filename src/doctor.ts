@@ -781,6 +781,20 @@ export function formatDoctorResult(result: DoctorResult): { text: string; exitCo
 //       webhookUrl: "https://myapp.example/api/stripe/webhook",
 //     });
 
+/**
+ * Which endpoint to work on: `--url <url>` overrides, `--no-webhook` means there
+ * isn't one (correct on a laptop, which uses `stripe listen` instead).
+ *
+ * One parser, because `setup` and `doctor` take the same two flags and the whole
+ * reason this plumbing moved into the library is that two hand-written copies of it
+ * had already drifted.
+ */
+export function webhookUrlFromArgv(argv: string[], fallback?: string): string | undefined {
+  if (argv.includes("--no-webhook")) return undefined;
+  const i = argv.indexOf("--url");
+  return i !== -1 ? argv[i + 1] : fallback;
+}
+
 export interface RunDoctorOptions {
   /** The app's catalogue. Checked FIRST: it needs no network, and a config mistake
    *  explains most account-level symptoms. */
@@ -826,12 +840,7 @@ export async function runBillingDoctor(opts: RunDoctorOptions = {}): Promise<voi
     return exit(2);
   }
 
-  const urlFlag = argv.indexOf("--url");
-  const webhookUrl = argv.includes("--no-webhook")
-    ? undefined
-    : urlFlag !== -1
-      ? argv[urlFlag + 1]
-      : opts.webhookUrl;
+  const webhookUrl = webhookUrlFromArgv(argv, opts.webhookUrl);
 
   // The config check first: no network, and it explains most of what the account
   // check would otherwise report as a symptom.
@@ -854,10 +863,14 @@ export async function runBillingDoctor(opts: RunDoctorOptions = {}): Promise<voi
   // the config report already printed above. That report is the half that needs no
   // network and the half Stripe can never tell you about.
   let accountExit = 0;
+  // Kept, rather than only formatted, so the WorkOS half below can be told which
+  // environment Stripe is pointed at. It comes off the key prefix, not the network,
+  // so a Stripe outage does not cost us the comparison.
+  let stripeLivemode: boolean | undefined;
   try {
-    const account = formatDoctorResult(
-      await checkBillingSetup({ webhookUrl, config: opts.config }),
-    );
+    const result = await checkBillingSetup({ webhookUrl, config: opts.config });
+    stripeLivemode = result.livemode;
+    const account = formatDoctorResult(result);
     log(account.text);
     accountExit = account.exitCode;
   } catch (e) {
@@ -872,7 +885,9 @@ export async function runBillingDoctor(opts: RunDoctorOptions = {}): Promise<voi
   if (opts.workos) {
     const w = typeof opts.workos === "object" ? opts.workos : {};
     try {
-      const workos = formatDoctorResult(await checkWorkOSSetup(w));
+      const workos = formatDoctorResult(
+        await checkWorkOSSetup({ ...w, expectLivemode: stripeLivemode }),
+      );
       log(workos.text);
       workosExit = workos.exitCode;
     } catch (e) {
@@ -906,10 +921,42 @@ export async function runBillingDoctor(opts: RunDoctorOptions = {}): Promise<voi
 // than "one variable is unset". Measured on a real deployment: absent from both
 // `.env.example` and `.env.local` while `oauthProxy: true` was set, so no agent
 // could connect and nothing said why.
+/**
+ * The two keys, disagreeing about which environment this is.
+ *
+ * Nothing compared them before, and both halves of the report state their own
+ * environment plainly — "LIVE MODE" from Stripe, "production key" from WorkOS — so
+ * a mixed pair printed both facts, passed every check and read as healthy. That is
+ * the worst deploy mistake available here: a live Stripe key beside a staging
+ * WorkOS key means real cards are charged against orgs, memberships and `sk_` keys
+ * that live in the wrong environment, and the mapping between the two (the org's
+ * `stripeCustomerId`) is written into the environment nobody is looking at.
+ *
+ * Pure, and separate from the network call, so it is testable offline.
+ */
+export function environmentMismatch(apiKey: string, expectLivemode: boolean): Check | null {
+  const workosLive = !apiKey.startsWith("sk_test");
+  if (workosLive === expectLivemode) return null;
+  return {
+    level: "error",
+    title: "Environment mismatch",
+    detail: expectLivemode
+      ? "STRIPE_SECRET_KEY is a LIVE key and WORKOS_API_KEY is a test/staging key"
+      : "STRIPE_SECRET_KEY is a test key and WORKOS_API_KEY is a production key",
+    fix: "Point both at the same environment. Live cards charged against staging orgs write the customer mapping into the environment you are not watching",
+  };
+}
+
 export async function checkWorkOSSetup(opts: {
   /** True when the app mounts the MCP OAuth proxy (`createBilling({ oauthProxy })`).
    *  Only then is `REFRESH_TOKEN_SECRET` required. */
   oauthProxy?: boolean;
+  /**
+   * Which environment the STRIPE half is pointed at, so the two keys can be
+   * compared. Omit for a WorkOS-only audit: absent means "the caller did not say
+   * there is a Stripe half", never "the halves agree".
+   */
+  expectLivemode?: boolean;
 } = {}): Promise<DoctorResult> {
   const checks: Check[] = [];
 
@@ -942,6 +989,11 @@ export async function checkWorkOSSetup(opts: {
       title: "WorkOS environment",
       detail: staging ? "test/staging key" : "production key",
     });
+    const mismatch =
+      opts.expectLivemode === undefined
+        ? null
+        : environmentMismatch(apiKey, opts.expectLivemode);
+    if (mismatch) checks.push(mismatch);
   }
 
   // One real call, so a key that is present but revoked or from another
