@@ -1,3 +1,11 @@
+## [12.0.1](https://github.com/arnaudjnn/billing-tools/compare/v12.0.0...v12.0.1) (2026-08-04)
+
+
+### Bug Fixes
+
+* **billing:** resolve auto-reload tax only when a reload actually happens ([846455d](https://github.com/arnaudjnn/billing-tools/commit/846455da70d8cdfb3e68fce0f2657e6272920db5))
+* **tax:** the VAT id must belong to the country the customer is in ([6620afe](https://github.com/arnaudjnn/billing-tools/commit/6620afe95ea2aca84b0ff6750ae24c95f75983b8))
+
 # [12.0.0](https://github.com/arnaudjnn/billing-tools/compare/v11.0.2...v12.0.0) (2026-08-03)
 
 
