@@ -1,3 +1,10 @@
+# [15.2.0](https://github.com/arnaudjnn/billing-tools/compare/v15.1.0...v15.2.0) (2026-08-04)
+
+
+### Features
+
+* **checkout:** a hosted seat session, so an agent can finish a purchase ([7f1d1fe](https://github.com/arnaudjnn/billing-tools/commit/7f1d1fe6f772d612e2449fe41ff2a0435d198fb2))
+
 # [15.1.0](https://github.com/arnaudjnn/billing-tools/compare/v15.0.0...v15.1.0) (2026-08-04)
 
 
