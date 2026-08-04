@@ -217,6 +217,18 @@ export async function createCheckoutSession(opts: {
    * session lifetime).
    */
   reuse?: boolean | { ttlMs?: number };
+  /**
+   * The deployment's `BillingConfig` — where tax comes from when this call names
+   * none, and where `paymentMethods.link` is read.
+   *
+   * The body has always read it; the TYPE did not have it, so no TypeScript caller
+   * could pass it and every seat session fell back to "no declaration": mode
+   * `local` with the origin guessed from the Stripe account's country. Which is
+   * right by luck when the account and the establishment are the same country, and
+   * silently wrong for `mode: "none"`, `mode: "stripe"`, `registrations` and `oss`
+   * — the whole point of declaring tax once.
+   */
+  config?: BillingConfig;
 }): Promise<CheckoutSessionResult> {
   const key = reuseKeyFor(opts);
   if (key) {

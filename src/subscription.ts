@@ -339,6 +339,10 @@ export async function changePlan(
       returnUrl: opts.returnUrl,
       uiMode: opts.uiMode,
       customerId,
+      // The deployment's tax declaration. Without it this session resolved tax as
+      // if none had been made — and this is the FIRST purchase, so there are no
+      // subscription items to inherit rates from either.
+      config: opts.config,
       currency: opts.currency,
       taxRates: opts.taxRates,
       reuse: true,

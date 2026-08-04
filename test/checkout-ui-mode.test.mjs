@@ -129,6 +129,19 @@ test("hosted is the same session — same tax, same methods, same metadata", asy
   assert.deepEqual(hosted.params.line_items[0].tax_rates, ["txr_it_22"]);
 });
 
+test("`config` is a real input, not one only the tests could pass", async () => {
+  // The body always read `opts.config`; the public TYPE did not carry it, so no
+  // TypeScript caller could hand it over and every seat session resolved tax as if
+  // no declaration existed — right by luck where the Stripe account's country is the
+  // establishment, silently wrong for `mode: "none"` and for registrations.
+  const { params } = await open({
+    taxRates: undefined,
+    config: { baseUrl: "https://t.local", currency: "eur", tax: { mode: "none" } },
+  });
+  assert.deepEqual(params.automatic_tax, { enabled: false });
+  assert.equal(params.line_items[0].tax_rates, undefined, "`mode: none` still taxed the line");
+});
+
 test("a reused session is never handed to the other mode", async () => {
   // `reuse` keys on everything that shapes the session. Without the mode in that
   // key, a caller asking for a URL would be handed the elements session opened a
