@@ -313,9 +313,59 @@ test("an unverifiable VAT number is CHARGED, not exempted", async () => {
   __setVatValidatorForTests(async () => {
     throw new Error("VIES must not be asked about rubbish");
   });
-  const junk = await resolveTax({ originCountry: "IT", country: "DE", taxNumber: "not-a-vat-id" });
+  const junk = await resolveTax({ originCountry: "IT", country: "DE", taxNumber: "DE-not-a-number" });
   assert.equal(junk.reverseCharge, false);
   assert.equal(junk.percent, 19);
+});
+
+test("the VAT id must belong to the country the customer is IN", async () => {
+  // Self-serve VAT avoidance, until now. Reverse charge is for a taxable person
+  // established in ANOTHER member state and the VAT number is the evidence of where,
+  // so a German address presenting an Italian id is a contradiction, not a German
+  // business. An Italian company typing a German address alongside its own real
+  // Italian number was zero-rated by a seller who owed 22% on the sale.
+  viesSays(true); // even a number VIES fully confirms must not do this
+  const mismatch = await resolveTax({
+    originCountry: "IT",
+    country: "DE",
+    taxNumber: "IT12345678901",
+  });
+  assert.equal(mismatch.reverseCharge, false, "an Italian id is not evidence of a German business");
+  assert.equal(mismatch.percent, 19, "so the sale is taxed, which is the recoverable direction");
+
+  // The matching case is untouched.
+  const ok = await resolveTax({ originCountry: "IT", country: "DE", taxNumber: "DE143454214" });
+  assert.equal(ok.reverseCharge, true);
+});
+
+test("GREECE reverse-charges, despite filing under EL and being keyed GR", async () => {
+  // The dataset keys Greece as GR but writes its pattern as `^EL\\d{9}$` — the only
+  // entry carrying the prefix the others omit — so its own `validateFormat` rejects
+  // every spelling of a Greek number. Unhandled, that silently withdrew reverse charge
+  // from one member state: every Greek business charged VAT it should not have paid.
+  viesSays(true);
+  for (const taxNumber of ["EL123456789", "GR123456789", "el 123 456 789"]) {
+    const d = await resolveTax({ originCountry: "IT", country: "GR", taxNumber });
+    assert.equal(d.reverseCharge, true, `${taxNumber} should reverse charge`);
+    assert.equal(d.percent, 0);
+  }
+
+  // VIES is routed on EL, whichever spelling arrived — it has no member state "GR".
+  const asked = [];
+  __setVatValidatorForTests(async (vat) => {
+    asked.push(vat);
+    return true;
+  });
+  await resolveTax({ originCountry: "IT", country: "GR", taxNumber: "GR123456789" });
+  assert.deepEqual(asked, ["EL123456789"]);
+
+  // And a Greek number of the wrong LENGTH is still refused locally.
+  __setVatValidatorForTests(async () => {
+    throw new Error("VIES must not be asked about rubbish");
+  });
+  const short = await resolveTax({ originCountry: "IT", country: "GR", taxNumber: "EL12345" });
+  assert.equal(short.reverseCharge, false);
+  assert.equal(short.percent, 24, "the Greek standard rate is charged instead");
 });
 
 test("a seller we have no regime for IS approximate", async () => {

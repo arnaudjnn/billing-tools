@@ -202,7 +202,9 @@ export async function resolveTax(opts: {
   // and rejects most rubbish, so VIES is only asked about numbers that could be real.
   const crossBorderToEU = countryEU && !domestic;
   const reverseCharge =
-    crossBorderToEU && Boolean(opts.taxNumber) && (await isValidVatNumber(opts.taxNumber!));
+    crossBorderToEU &&
+    Boolean(opts.taxNumber) &&
+    (await isValidVatNumber(opts.taxNumber!, country));
   if (reverseCharge) {
     const info = getRate(country);
     return {
@@ -290,12 +292,57 @@ export async function resolveTax(opts: {
  * standard rate is charged, which is the recoverable direction: a wrongly charged
  * customer asks for it back, a wrongly exempted one leaves you owing the VAT.
  */
-async function isValidVatNumber(vatNumber: string): Promise<boolean> {
-  const clean = vatNumber.replace(/[\s-]/g, "").toUpperCase();
+async function isValidVatNumber(vatNumber: string, customerCountry: string): Promise<boolean> {
+  const parsed = parseVatNumber(vatNumber);
+  if (!parsed) return false;
+
+  // The id must belong to the country the customer is IN, and this was a hole worth
+  // naming. Reverse charge is for a taxable person established in ANOTHER member
+  // state, and the VAT number is the evidence of WHERE — so a German address
+  // presenting an Italian VAT number is not evidence of a German business, it is a
+  // contradiction. Unchecked it was self-serve VAT avoidance on a B2B checkout: an
+  // Italian company typing a German address alongside its own real Italian number was
+  // reverse-charged to 0% by a seller who owed 22% on the sale. A mismatch is refused
+  // rather than resolved, because either field could be the wrong one and charging is
+  // the recoverable direction.
+  if (parsed.country !== customerCountry) return false;
+
   // The format gate stays REAL under the test seam below: it costs nothing, and a
   // stub that also accepted malformed numbers would test a laxer function than ships.
-  if (!validateFormat(clean)) return false;
-  return vatValidator(clean);
+  if (!parsed.wellFormed) return false;
+  return vatValidator(parsed.vat);
+}
+
+/** Greece's own VAT pattern, because the dataset's copy of it cannot be used — below. */
+const GREEK_VAT = /^EL\d{9}$/;
+
+/**
+ * Split a VAT number into the id VIES wants and the ISO country an address carries.
+ *
+ * They are not always the same two letters. **Greece files VAT under `EL` while
+ * ISO-3166 calls the country `GR`**, and the rate dataset gets caught between the
+ * two: it keys Greece as `GR` but writes its pattern as `^EL\d{9}$` — the only entry
+ * that includes the prefix every other entry omits (`DE` is plain `^\d{9}$`). So
+ * `validateFormat` rejects EVERY spelling of a Greek number; measured against
+ * eu-vat-rates-data 2026.7.1, `EL999999999`, `GR999999999` and `GREL999999999` are
+ * all false. Left alone that quietly withdraws reverse charge from one member state:
+ * every Greek business is charged VAT it should never have paid, and the only clue is
+ * a complaint. Greece is therefore format-checked here instead.
+ */
+function parseVatNumber(
+  vatNumber: string,
+): { vat: string; country: string; wellFormed: boolean } | null {
+  const raw = vatNumber.replace(/[\s-]/g, "").toUpperCase();
+  if (raw.length < 3) return null;
+  const prefix = raw.slice(0, 2);
+
+  // Accept either spelling from the caller, and canonicalise to the EL form, which is
+  // both what VIES routes on (`/ms/EL/vat/…`) and what the pattern above expects.
+  if (prefix === "EL" || prefix === "GR") {
+    const vat = `EL${raw.slice(2)}`;
+    return { vat, country: "GR", wellFormed: GREEK_VAT.test(vat) };
+  }
+  return { vat: raw, country: prefix, wellFormed: validateFormat(raw) };
 }
 
 // The network leg, injectable.
@@ -309,11 +356,30 @@ async function isValidVatNumber(vatNumber: string): Promise<boolean> {
 // outage. Stubbing the leg makes both the valid and the unreachable case assertable.
 let vatValidator: (cleanVatNumber: string) => Promise<boolean> = viesLookup;
 
-/** Test seam: replace the VIES lookup. Call with nothing to restore the real one. */
+/**
+ * Test seam: replace the VIES lookup.
+ *
+ * **Calling it with nothing does NOT restore the real lookup — it installs one that
+ * refuses.** Restoring the real one would re-arm the network inside a suite that is
+ * offline by design, and the way that bites is months later: someone writes a test
+ * with a `taxNumber` and no stub, it passes on their machine because VIES happens to
+ * be up and the number happens to be live, and it fails in CI on a member state's
+ * outage. A deterministic failure that names the fix is worth more than a real lookup
+ * no test wants. Nothing in production calls this, so the real one is what ships.
+ */
 export function __setVatValidatorForTests(
   fn?: (cleanVatNumber: string) => Promise<boolean>,
 ): void {
-  vatValidator = fn ?? viesLookup;
+  vatValidator = fn ?? refuseUnstubbed;
+}
+
+async function refuseUnstubbed(vat: string): Promise<never> {
+  throw new Error(
+    `VIES was asked to validate ${vat} in a test with no validator stubbed. This suite is ` +
+      "offline by design (vitest.config.ts), so the lookup is not wired to the network here. " +
+      "Call __setVatValidatorForTests(async () => true) — or (async () => false) for the " +
+      "unreachable-VIES case — in the test that needs it.",
+  );
 }
 
 async function viesLookup(clean: string): Promise<boolean> {
