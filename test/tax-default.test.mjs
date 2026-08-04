@@ -1,5 +1,5 @@
 // The tax DEFAULT, which changed in 4.x: configuring nothing now means
-// `"local"` — this library's own `sales-tax` + VIES calculation, applied as
+// `"local"` — this library's own eu-vat-rates-data + VIES calculation, applied as
 // explicit Stripe TaxRates — where it used to mean `"none"`.
 //
 // The old default was the expensive direction. Silence meant no tax on anything the
@@ -107,48 +107,43 @@ test("an account with no country reports none, and is not re-read", async () => 
   assert.equal(calls, 1, "a settled answer should be remembered");
 });
 
-// ── US destinations are refused, not approximated ────────────────────────────
+// ── Where tax is due but no rate exists, the charge is REFUSED ───────────────
 //
-// `sales-tax` carries ONE rate per US state. US sales tax is destination-based
-// across 13 000+ jurisdictions — counties, cities and special districts stack on
-// the state rate — and SaaS is taxable in some states and not others. Illinois
-// reads 6.25% where a Chicago buyer owes ~10.25%.
+// The rate dataset is European-only, so there is no US figure here to fall back to —
+// and a state-level one would be wrong anyway: US sales tax is destination-based
+// across 13 000+ jurisdictions, with counties, cities and districts stacking on the
+// state rate, and SaaS taxable in some states and not others. Illinois reads 6.25%
+// where a Chicago buyer owes ~10.25%.
 //
-// Verified against npm while deciding this: no package ships accurate US local
-// rates. `taxjar` is a client for a paid API, `washington-state-sales-tax` covers
-// one state, `eu-vat-rates-data` is EU-only. The data is a licensed product, so
-// this is not a gap a dependency can close.
-//
-// So the rate is not silently applied. Under-collection is the one direction that
-// is not recoverable: the customer is gone and the difference is yours, with
-// interest. A charge that fails with a reason can be fixed.
+// So nothing is silently applied. Under-collection is the one direction that is not
+// recoverable — the customer is gone and the difference is yours, with interest —
+// while a charge that fails with a reason can be fixed.
 
 import {
   ApproximateTaxError,
   __setVatValidatorForTests,
+  invalidateVatNumbers,
   resolveTax,
   taxRatesFor,
 } from "../dist/tax.js";
 
 // Reverse charge needs a VALID VAT number, and "valid" is a live VIES answer about a
-// real company. These tests used to ask the European Commission — so they broke the
+// real company. These tests used to ask the European Commission, which broke the
 // suite's offline contract (vitest.config.ts) and went red whenever a member state's
-// node was down, which is the exact outage the fallback below exists for. The lookup
-// is stubbed per test; the local format check is not stubbed and still runs.
-// Reset to a validator that REFUSES rather than to the real one. Restoring the
-// real lookup re-arms the network between tests, so the next test written with a
-// `taxNumber` and no stub silently starts calling VIES — and fails months later,
-// intermittently, when a member state's node is down. That is how this file came
-// to be flaky in the first place. Failing deterministically with a message that
-// says what to do is strictly better than a test that usually passes.
-const unstubbed = async () => {
-  throw new Error(
-    "VIES was called without a stub. Tests must not depend on a third-party " +
-      "service being up: call viesSays(true|false) first.",
-  );
-};
-afterEach(() => __setVatValidatorForTests(unstubbed));
-__setVatValidatorForTests(unstubbed);
+// node was down — the exact outage the charge-rather-than-exempt fallback exists for.
+//
+// The bare reset installs a validator that REFUSES (see `__setVatValidatorForTests`),
+// so a test written with a `taxNumber` and no stub fails deterministically instead of
+// quietly re-arming the network. The local format check is not stubbed and still runs.
+//
+// Clearing the verified-number cache is not optional: a positive is remembered for a
+// day, so without this a number confirmed by one test would still be confirmed in the
+// next, and `viesSays(false)` would pass for the wrong reason.
+__setVatValidatorForTests();
+afterEach(() => {
+  __setVatValidatorForTests();
+  invalidateVatNumbers();
+});
 const viesSays = (isValid) => __setVatValidatorForTests(async () => isValid);
 
 test("a European seller exporting outside the EU is OUT OF SCOPE, not approximate", async () => {
@@ -318,6 +313,34 @@ test("an unverifiable VAT number is CHARGED, not exempted", async () => {
   assert.equal(junk.percent, 19);
 });
 
+test("a confirmed VAT number is remembered; a refusal is NOT", async () => {
+  // The asymmetry is the design. A registration VIES confirmed does not stop being
+  // real, so re-asking costs a request and can only change the answer for the worse —
+  // VIES going down would turn a verified B2B customer back into a taxed one.
+  let asked = 0;
+  __setVatValidatorForTests(async () => {
+    asked++;
+    return true;
+  });
+  const charge = () => resolveTax({ originCountry: "IT", country: "DE", taxNumber: "DE143454214" });
+  assert.equal((await charge()).reverseCharge, true);
+  assert.equal((await charge()).reverseCharge, true);
+  assert.equal(asked, 1, "a confirmed number must not be re-validated on every charge");
+
+  // A NEGATIVE is never cached. "Not valid" conflates "no such number" with "that
+  // member state is unreachable", and the second is temporary — storing it would
+  // extend one outage's over-charging for the whole TTL, long past the outage.
+  invalidateVatNumbers();
+  let refusals = 0;
+  __setVatValidatorForTests(async () => {
+    refusals++;
+    return false;
+  });
+  assert.equal((await charge()).reverseCharge, false);
+  assert.equal((await charge()).reverseCharge, false);
+  assert.equal(refusals, 2, "a refusal must be retried, since it may have been an outage");
+});
+
 test("the VAT id must belong to the country the customer is IN", async () => {
   // Self-serve VAT avoidance, until now. Reverse charge is for a taxable person
   // established in ANOTHER member state and the VAT number is the evidence of where,
@@ -351,6 +374,9 @@ test("GREECE reverse-charges, despite filing under EL and being keyed GR", async
   }
 
   // VIES is routed on EL, whichever spelling arrived — it has no member state "GR".
+  // Cleared first: the loop above already confirmed this number, and a confirmed one
+  // is not asked about again.
+  invalidateVatNumbers();
   const asked = [];
   __setVatValidatorForTests(async (vat) => {
     asked.push(vat);
@@ -404,22 +430,22 @@ test("minting a rate from an approximate decision throws, and says what to do", 
   );
 });
 
-test("the refusal has NO override flag, and that is deliberate", async () => {
-  // `allowApproximate` was removed rather than kept. It only ever fired where tax IS
-  // due and no rate exists, and by then it had exactly two effects: where you are not
-  // registered, `registrations` already answers 0% completely and needs no flag; where
-  // you ARE registered, suppressing this invoices 0% on tax you owe — the one
-  // unrecoverable direction. A flag whose only remaining use is silent under-collection
-  // is a footgun, so the escape hatches are the two that assert something.
-  await assert.rejects(
-    () => taxRatesFor({ originCountry: "US", country: "US", state: "IL", allowApproximate: true }),
-    ApproximateTaxError,
-    "a stale allowApproximate must not still suppress the refusal",
-  );
-
-  // And the honest way through, for a seller with no US nexus: say so.
+test("the refusal has NO override flag — you say where you are registered instead", async () => {
+  // Nothing suppresses it, because a flag that did could only ever under-collect
+  // silently. The honest way through, for a seller with no US nexus, is to say so.
   await assert.doesNotReject(() =>
     taxRatesFor({ originCountry: "US", country: "US", state: "IL", registrations: [] }),
+  );
+  // And declaring nexus there does NOT buy a pass — there is still no US rate.
+  await assert.rejects(
+    () =>
+      taxRatesFor({
+        originCountry: "US",
+        country: "US",
+        state: "IL",
+        registrations: [{ country: "US", state: "IL" }],
+      }),
+    ApproximateTaxError,
   );
 });
 

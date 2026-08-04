@@ -6,7 +6,7 @@
 // pre-tax amount and the seller owes the difference — and the account it happens
 // on is exactly the one that never opted into Stripe Tax and so never registered.
 //
-// The library ships its own calculation (`taxRatesFor` — sales-tax + VIES, applied
+// The library ships its own calculation (`taxRatesFor` — eu-vat-rates-data + VIES,
 // as an explicit Stripe TaxRate), so the default is now "nobody unless asked":
 // an untaxed session, which is right for an account that charges no tax and loud
 // enough to notice for one that does.
@@ -152,7 +152,7 @@ test("a config with `origin` taxes a seat checkout with no argument passed", asy
   );
   assert.deepEqual(params.automatic_tax, { enabled: false }, "not Stripe Tax");
   assert.equal(params.line_items[0].tax_rates.length, 1);
-  // 22% IVA, minted by the library from sales-tax's table.
+  // 22% IVA, minted by the library from its own rate table.
   assert.equal(stripe.taxRatesCreated[0].percentage, 22);
   assert.equal(stripe.taxRatesCreated[0].country, "IT");
   assert.equal(stripe.taxRatesCreated[0].inclusive, false);

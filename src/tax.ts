@@ -12,43 +12,31 @@ import type { BillingConfig } from "./types.js";
 // alternative to Stripe Tax, which bills 0.5% of every taxed transaction for a
 // calculation that is, for a mostly-domestic seller, a constant.
 //
-// `eu-vat-rates-data` supplies the rates — 45 European countries tracked daily
-// from the European Commission's own TEDB — and VIES supplies B2B validation. It
-// replaced `sales-tax`, whose rates were a static JSON published whenever someone
-// cut a release, and which carried no notion of EU membership so reverse charge
-// had to be taken on trust.
+// `eu-vat-rates-data` supplies the rates — 45 European countries tracked daily from
+// the European Commission's own TEDB — and VIES supplies B2B validation. EU
+// membership is part of the data, so reverse charge is decided rather than assumed.
 //
-// Europe ONLY, and that is the deliberate scope. EU VAT is tractable because it is
-// 27 states with one published standard rate each; everywhere else it is not, so a
-// destination where tax is due and no rate exists is marked `approximate` and
-// refused rather than charged a rate this library does not have. `sales-tax` did
-// carry 86 other countries, but a number with no authority behind it is worse than
-// no number: it invoices confidently and under-collects silently.
+// Two rules carry the whole file:
 //
-// **A rate is charged where the SELLER's regime says tax is due — never merely
-// because the dataset has a number for the destination.** The dataset covers 45
-// European countries, only 27 of which are in the EU, and conflating "we have a
-// rate" with "you owe it" was a real bug: GB, CH, NO, TR and IS passed the coverage
-// gate, fell through every EU branch and were charged their own domestic rate, so an
-// Italian seller invoiced 20% "VAT" to a UK customer. That is not EU VAT (the place
-// of supply is outside the EU, so none arises) and it is not UK VAT either unless
-// you hold a UK registration — it collected 20% with nowhere to pay it over, which
-// is the fault `oss: false` already exists to prevent, one border further out.
+// 1. **A rate is charged where the SELLER's regime says tax is due, never merely
+//    because the dataset has a number for the destination.** Only 27 of those 45
+//    countries are in the EU, so "we have a rate" is not "you owe it": GB, CH, NO,
+//    TR and IS once fell through every EU branch and were charged their own domestic
+//    rate, which is neither EU VAT (the place of supply is outside the EU, so none
+//    arises) nor collectable without a registration there. Where tax is due is a
+//    fact about YOUR registrations, which no dataset knows — hence `registrations`,
+//    and hence an unregistered US destination being 0% and CORRECT rather than a
+//    refusal. Where tax IS due and no rate exists, the charge is refused rather than
+//    silently zero-rated: a worldwide table with no authority behind it invoices
+//    confidently and under-collects silently.
 //
-// So there are two inputs, and `registrations` is the second: where tax is due is a
-// fact about YOUR registrations, which no dataset can know. Declaring them is the
-// only model the US has — post-Wayfair you must not collect in a state until you
-// have nexus there — and it is what makes an unregistered US destination 0% and
-// CORRECT rather than a refusal.
+// 2. **Every uncertainty resolves toward CHARGING.** A VAT number VIES cannot
+//    verify, an address that cannot be placed, a tax id whose country contradicts
+//    the address — all of them tax the sale. Wrongly charging is recoverable;
+//    wrongly exempting means owing the tax yourself, with interest.
 //
-// What Stripe Tax also gives you and this does NOT: US local jurisdictions,
-// evidence-of-location records for EU B2C, threshold monitoring, and filing
-// reports. Those become yours.
-//
-// The one behaviour worth knowing, because it is the safe direction: a tax
-// number that VIES cannot verify falls back to CHARGING tax, not exempting.
-// Wrongly charging is recoverable; wrongly exempting means owing the tax
-// yourself.
+// What Stripe Tax gives you and this does not: US local jurisdictions,
+// evidence-of-location records for EU B2C, threshold monitoring, and filing.
 
 export type TaxDecision = {
   /** e.g. 22 for 22%. Zero for reverse charge and out-of-scope sales. */
@@ -310,7 +298,40 @@ async function isValidVatNumber(vatNumber: string, customerCountry: string): Pro
   // The format gate stays REAL under the test seam below: it costs nothing, and a
   // stub that also accepted malformed numbers would test a laxer function than ships.
   if (!parsed.wellFormed) return false;
-  return vatValidator(parsed.vat);
+
+  // POSITIVES only, and the asymmetry is the whole design.
+  //
+  // A registration that VIES confirmed does not stop being real, so re-asking costs a
+  // request and can only change the answer for the worse — VIES going down would turn
+  // a verified B2B customer back into a taxed one. Caching the confirmation removes
+  // both the load and that flap.
+  //
+  // A NEGATIVE is never cached. "Not valid" here conflates "no such number" with "the
+  // member state's node is unreachable", and the second is temporary; storing it would
+  // extend one outage's over-charging for the whole TTL, long past the outage. So a
+  // failure is retried on the next charge, which is where it can come right.
+  const hit = verifiedVat.get(parsed.vat);
+  if (hit !== undefined && hit > Date.now()) return true;
+
+  const valid = await vatValidator(parsed.vat);
+  if (valid) verifiedVat.set(parsed.vat, Date.now() + VAT_CACHE_TTL_MS);
+  return valid;
+}
+
+/**
+ * VAT numbers VIES has confirmed → when to ask again.
+ *
+ * A day, not forever: a registration can be withdrawn, and a customer whose number
+ * has been cancelled should stop being zero-rated within a billing cycle rather than
+ * for as long as the process lives. Per process and unbounded is fine — the key set
+ * is the account's B2B customers, one short string each.
+ */
+const verifiedVat = new Map<string, number>();
+const VAT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** Forget the confirmed VAT numbers — for a test, or after a customer disputes one. */
+export function invalidateVatNumbers(): void {
+  verifiedVat.clear();
 }
 
 /** Greece's own VAT pattern, because the dataset's copy of it cannot be used — below. */
@@ -696,15 +717,9 @@ export async function taxRatesFor(opts: {
   registrations?: readonly TaxRegistration[];
 }): Promise<{ decision: TaxDecision; rateIds: string[] }> {
   const decision = await resolveTax(opts);
-  // Unconditional, and `allowApproximate` used to be the way past it. It was removed
-  // rather than kept, because once `registrations` exists there is no case where it
-  // is the right answer. It only ever fired where tax IS due and no rate exists —
-  // and where you are genuinely not registered, `registrations` reports 0% as a
-  // COMPLETE answer with no flag needed, while where you ARE registered, suppressing
-  // this invoices 0% on tax you owe, which is the one unrecoverable direction this
-  // whole file is written against. A flag whose only remaining use is to silently
-  // under-collect is a footgun, not an escape hatch. `mode: "none"` still says
-  // "charge nothing", deliberately and deployment-wide.
+  // Unconditional, with no override: the two ways past it both assert something true
+  // (`registrations` if you do not owe it there, `mode: "stripe"` if you do). A flag
+  // that merely suppressed this would only ever under-collect silently.
   if (decision.approximate) throw new ApproximateTaxError(decision);
   const id = await ensureStripeTaxRate(decision, { displayName: opts.displayName });
   return { decision, rateIds: id ? [id] : [] };
