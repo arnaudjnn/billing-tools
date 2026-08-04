@@ -922,6 +922,22 @@ export async function runBillingDoctor(opts: RunDoctorOptions = {}): Promise<voi
 // `.env.example` and `.env.local` while `oauthProxy: true` was set, so no agent
 // could connect and nothing said why.
 /**
+ * Which environment a WorkOS key names — and `"unknown"` is a real answer.
+ *
+ * Older keys are `sk_test_…` / `sk_live_…`. Newer ones are `sk_<base64 key id>`
+ * (decoding to `key_01…`), which carries no environment marker at all. Reading
+ * "anything that is not `sk_test` is production" therefore misreported every
+ * new-format staging key as production — and then made `environmentMismatch` accuse
+ * a perfectly matched local setup, which is the worse failure: a doctor whose errors
+ * are sometimes fiction is one people learn to scroll past.
+ */
+export function workosEnvironmentOf(apiKey: string): "test" | "live" | "unknown" {
+  if (apiKey.startsWith("sk_test")) return "test";
+  if (apiKey.startsWith("sk_live")) return "live";
+  return "unknown";
+}
+
+/**
  * The two keys, disagreeing about which environment this is.
  *
  * Nothing compared them before, and both halves of the report state their own
@@ -932,11 +948,14 @@ export async function runBillingDoctor(opts: RunDoctorOptions = {}): Promise<voi
  * that live in the wrong environment, and the mapping between the two (the org's
  * `stripeCustomerId`) is written into the environment nobody is looking at.
  *
- * Pure, and separate from the network call, so it is testable offline.
+ * Pure, and separate from the network call, so it is testable offline. Silent when
+ * the key does not name its environment: a comparison needs two answers, and
+ * inventing the missing one is how a guard becomes a false alarm.
  */
 export function environmentMismatch(apiKey: string, expectLivemode: boolean): Check | null {
-  const workosLive = !apiKey.startsWith("sk_test");
-  if (workosLive === expectLivemode) return null;
+  const env = workosEnvironmentOf(apiKey);
+  if (env === "unknown") return null;
+  if ((env === "live") === expectLivemode) return null;
   return {
     level: "error",
     title: "Environment mismatch",
@@ -980,14 +999,21 @@ export async function checkWorkOSSetup(opts: {
     });
   }
 
-  // Live-vs-test is a WorkOS ENVIRONMENT, and the key names it: a staging key in
-  // production points every org and API key at the wrong environment, silently.
+  // Live-vs-test is a WorkOS ENVIRONMENT, and a staging key in production points
+  // every org and API key at the wrong one, silently. The catch is that only the
+  // older `sk_test_…` / `sk_live_…` keys say which; a newer `sk_<key id>` does not,
+  // and claiming "production" for those was a guess dressed as a finding.
   if (apiKey) {
-    const staging = apiKey.startsWith("sk_test");
+    const env = workosEnvironmentOf(apiKey);
     checks.push({
       level: "ok",
       title: "WorkOS environment",
-      detail: staging ? "test/staging key" : "production key",
+      detail:
+        env === "test"
+          ? "test/staging key"
+          : env === "live"
+            ? "production key"
+            : "not stated by this key format — check the Dashboard which environment it belongs to",
     });
     const mismatch =
       opts.expectLivemode === undefined
@@ -1030,8 +1056,12 @@ export async function checkWorkOSSetup(opts: {
   }
 
   return {
-    // WorkOS has no `livemode` of its own; the key names the environment.
-    livemode: Boolean(apiKey) && !apiKey!.startsWith("sk_test"),
+    // WorkOS has no `livemode` of its own, and only an older key names the
+    // environment. When it doesn't, defer to what the run is ABOUT (the Stripe key)
+    // rather than guessing — this only labels the report header, and a header reading
+    // "LIVE MODE" off an unreadable prefix is how the misreport started.
+    livemode:
+      workosEnvironmentOf(apiKey ?? "") === "live" ? true : (opts.expectLivemode ?? false),
     checks,
     healthy: !checks.some((c) => c.level === "error"),
   };

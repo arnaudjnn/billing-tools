@@ -11,7 +11,12 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 
-import { environmentMismatch, runBillingDoctor, webhookUrlFromArgv } from "../dist/doctor.js";
+import {
+  environmentMismatch,
+  runBillingDoctor,
+  webhookUrlFromArgv,
+  workosEnvironmentOf,
+} from "../dist/doctor.js";
 import { runBillingCli } from "../dist/setup.js";
 
 const PLANS = {
@@ -121,6 +126,21 @@ test("a live Stripe key beside a staging WorkOS key is an error", () => {
   // Matching pairs say nothing at all — local dev and prod are both a matched pair.
   assert.equal(environmentMismatch("sk_test_123", false), null);
   assert.equal(environmentMismatch("sk_live_123", true), null);
+});
+
+test("a key that does not name its environment is not accused of anything", () => {
+  // WorkOS's newer keys are `sk_<base64 key id>` — decoding to `key_01…`, with no
+  // environment marker. Reading "not sk_test, therefore production" reported one of
+  // those as production and then flagged a correctly matched local setup as mixed.
+  // Caught on the first real run of this check, which is the argument for it being
+  // silent here: a doctor whose errors are sometimes fiction gets scrolled past.
+  const newFormat = "sk_a2V5XzAxSzYyM";
+  assert.equal(workosEnvironmentOf(newFormat), "unknown");
+  assert.equal(environmentMismatch(newFormat, true), null);
+  assert.equal(environmentMismatch(newFormat, false), null);
+
+  assert.equal(workosEnvironmentOf("sk_test_123"), "test");
+  assert.equal(workosEnvironmentOf("sk_live_123"), "live");
 });
 
 // ── One runner, two verbs ────────────────────────────────────────────────────
