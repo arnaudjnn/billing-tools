@@ -1,3 +1,10 @@
+# [13.1.0](https://github.com/arnaudjnn/billing-tools/compare/v13.0.0...v13.1.0) (2026-08-04)
+
+
+### Features
+
+* **tax:** support a small-business exemption, and the invoice wording it requires ([be0abf0](https://github.com/arnaudjnn/billing-tools/commit/be0abf0bd438e2dfdc8e51674a49f3d33e3122d1))
+
 # [13.0.0](https://github.com/arnaudjnn/billing-tools/compare/v12.0.1...v13.0.0) (2026-08-04)
 
 
