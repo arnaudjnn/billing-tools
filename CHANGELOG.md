@@ -1,3 +1,10 @@
+## [15.2.3](https://github.com/arnaudjnn/billing-tools/compare/v15.2.2...v15.2.3) (2026-08-04)
+
+
+### Bug Fixes
+
+* **doctor:** a WorkOS key that doesn't name its environment isn't production ([8d02e39](https://github.com/arnaudjnn/billing-tools/commit/8d02e3975ef3d9084f4bc08b5e4b96936c3a8f18))
+
 ## [15.2.2](https://github.com/arnaudjnn/billing-tools/compare/v15.2.1...v15.2.2) (2026-08-04)
 
 
