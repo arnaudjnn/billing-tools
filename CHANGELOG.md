@@ -1,3 +1,10 @@
+## [15.2.1](https://github.com/arnaudjnn/billing-tools/compare/v15.2.0...v15.2.1) (2026-08-04)
+
+
+### Bug Fixes
+
+* **tools:** default change_plan's returnUrl to config.baseUrl ([1f693c1](https://github.com/arnaudjnn/billing-tools/commit/1f693c1c622a07ca758c8e2cde6d4099d1b80d9d))
+
 # [15.2.0](https://github.com/arnaudjnn/billing-tools/compare/v15.1.0...v15.2.0) (2026-08-04)
 
 
