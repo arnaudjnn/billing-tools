@@ -1,3 +1,17 @@
+# [15.0.0](https://github.com/arnaudjnn/billing-tools/compare/v14.0.0...v15.0.0) (2026-08-04)
+
+
+* fix(tax)!: remove the Numeral adapter — it could not have worked ([a028985](https://github.com/arnaudjnn/billing-tools/commit/a028985131fc2e37849c8ebd47991adf2be9994e))
+
+
+### BREAKING CHANGES
+
+* `numeralTax` and `NumeralOptions` are removed. Wire your own
+`calculate` — but read the note on `TaxCalculator` first: a provider that needs the
+basket cannot be reached through this seam yet.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
 # [14.0.0](https://github.com/arnaudjnn/billing-tools/compare/v13.1.0...v14.0.0) (2026-08-04)
 
 
