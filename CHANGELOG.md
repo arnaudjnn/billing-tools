@@ -1,3 +1,10 @@
+# [15.1.0](https://github.com/arnaudjnn/billing-tools/compare/v15.0.0...v15.1.0) (2026-08-04)
+
+
+### Features
+
+* **doctor:** one runner with two verbs, and catch a mixed key pair ([fd9c0b8](https://github.com/arnaudjnn/billing-tools/commit/fd9c0b8cde403426dafbe46820756be45c381fc5))
+
 # [15.0.0](https://github.com/arnaudjnn/billing-tools/compare/v14.0.0...v15.0.0) (2026-08-04)
 
 
