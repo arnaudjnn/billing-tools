@@ -1,3 +1,5 @@
+import { isLocalTaxOrigin, type LocalTaxOrigin } from "./tax-origins.js";
+
 // The storage seam. `orgId` is an opaque string — a WorkOS org id, a Postgres
 // workspace id ("ws_…"), whatever the host uses. Implement this and the rest of
 // billing-tools (auth flow, metering, all Stripe math, tool/route/CLI surfaces)
@@ -178,107 +180,7 @@ export interface BillingConfig {
    * same account charged 22% IVA: nothing was wrong at any one site, there was
    * simply no single place that said what the account does.
    */
-  tax?: {
-    /**
-     * Where YOU are established, as an ISO country code ("IT", "FR", "US").
-     *
-     * Setting it selects `mode: "local"` — the library works the rate out
-     * itself (`eu-vat-rates-data` + VIES) from the customer's address and tax id, and
-     * applies it as an explicit Stripe TaxRate. It decides domestic vs
-     * cross-border, which is the whole question a VAT rate turns on, so there is
-     * nothing else to configure.
-     */
-    origin?: string;
-    /** Override the mode `origin` / `automatic` imply. See `TaxMode`. */
-    mode?: "local" | "stripe" | "none";
-    /**
-     * Where you are registered to collect tax, under `mode: "local"`.
-     *
-     * The second input a rate needs and no dataset can supply. `origin` says where
-     * you are established; this says where you have taken on an obligation, which is
-     * what actually decides whether a sale is taxed at all.
-     *
-     * **Undefined is "the caller did not say"**, never "registered nowhere": the
-     * regime rules alone then decide (your domestic sales, plus the EU cross-border
-     * rules), which is what every deployment predating this option already gets.
-     * Declaring it switches to one rule for everywhere, domestic included — tax is
-     * due where you say you are registered and nowhere else — so `[]` is a real
-     * statement and not the same as omitting it.
-     *
-     * ```ts
-     * // An Italian seller who also holds a UK registration.
-     * registrations: [{ country: "IT" }, { country: "GB" }]
-     * // A US seller with nexus in two states, and none anywhere else.
-     * registrations: [{ country: "US", state: "CA" }, { country: "US", state: "TX" }]
-     * ```
-     *
-     * This is what makes a US destination answerable rather than a refusal: post-
-     * Wayfair you must NOT collect in a state until you have nexus there, so for the
-     * common case — no registration — 0% is the complete and correct answer, needing
-     * no flag to permit it. Where you ARE registered, the charge still refuses,
-     * because this library has no US rate; that is what `mode: "stripe"` is for.
-     *
-     * One obligation is deliberately not gated by it: destination VAT on a sale from
-     * outside the EU to an EU consumer arises with no threshold to sit under, so an
-     * empty list cannot wish it away.
-     */
-    registrations?: readonly { country: string; state?: string }[];
-    /**
-     * Mandatory invoice wording, per outcome. `mode: "local"` only.
-     *
-     * ```ts
-     * // A French micro-entreprise under the franchise en base:
-     * notes: {
-     *   exempt: "TVA non applicable, art. 293 B du CGI",
-     *   reverseCharge: "Autoliquidation, art. 196 dir. 2006/112/CE",
-     * }
-     * ```
-     *
-     * Where a regime requires the invoice to state WHY a sale is untaxed, that
-     * mention is not decoration: France fines €15 per invoice missing the 293 B
-     * wording, and the CJEU held in C-247/21 that an omitted reverse-charge mention
-     * cannot be cured afterwards. Supplying `exempt` makes billing-tools mint a 0%
-     * Stripe TaxRate carrying it, so it renders as a tax line on every invoice from
-     * every charge path. Supply nothing and an untaxed sale carries no line, exactly
-     * as before.
-     *
-     * Stripe caps a TaxRate display name at 50 characters — the mention, not the
-     * explanation.
-     */
-    notes?: { exempt?: string; reverseCharge?: string };
-    /**
-     * Are you registered for the EU One-Stop Shop? Default true.
-     *
-     * It decides ONE case: a cross-border EU customer with no valid VAT number.
-     * Reverse charge needs a valid id, so without one the sale is taxed somewhere —
-     * registered, at the CUSTOMER's rate; not registered, at YOUR OWN, which is what
-     * the sub-€10 000 regime allows and the only rate you can remit without a
-     * foreign registration.
-     *
-     * Set `false` if you sell B2B and are not OSS-registered: an EU business that
-     * cannot produce a valid id (below its own registration threshold, a typo, or
-     * VIES unreachable — where this library charges rather than exempts) would
-     * otherwise be billed its country's VAT, which you would have collected with
-     * nowhere to pay it over.
-     *
-     * Domestic sales, valid-id reverse charge and non-EU sales are all unaffected.
-     */
-    oss?: boolean;
-    /**
-     * Resolve the TaxRate ids yourself, e.g. from your own records. Wins over
-     * `mode` when it returns any — the hook exists to be authoritative.
-     */
-    rates?: (stripeCustomerId: string) => Promise<string[]> | string[];
-    /**
-     * Use Stripe Tax. Equivalent to `mode: "stripe"`, and ignored when `rates`
-     * returns any (Stripe rejects both on one charge).
-     *
-     * Off unless set, everywhere: a charge with neither is untaxed rather than
-     * quietly handed to Stripe Tax, which without an active registration
-     * computes 0% and reports no error.
-     */
-    automatic?: boolean;
-  };
+  tax?: TaxConfig;
   /** What the payment forms offer. See `defaultPaymentMethodConfig`. */
   paymentMethods?: {
     /**
@@ -297,10 +199,211 @@ export interface BillingConfig {
 
 // `tax` and `paymentMethods` stay optional: they are "unset means Stripe's own
 // behaviour", which is not a value `resolveConfig` can invent.
+/**
+ * A third-party tax calculation, as an injected function.
+ *
+ * `mode: "external"` exists because the two built-in answers do not cover everyone:
+ * `local` cannot compute US sales tax (no national rate exists), and Stripe Tax costs
+ * 0.5% of every taxed transaction. A provider — Numeral, Anrok, Kintsugi, Vertex —
+ * sits between them, and the calculation is INJECTED rather than built in so the core
+ * stays free of network I/O and testable offline. `numeralTax()` is the shipped adapter;
+ * anything matching this shape works.
+ *
+ * Return `null` to mean "no tax applies", which is charged as untaxed. Throwing is
+ * also honest — it refuses the charge rather than guessing, which is what this library
+ * does everywhere else when it cannot answer.
+ */
+export type TaxCalculator = (input: {
+  /** The Stripe customer the charge is for. */
+  customerId: string;
+  /** Destination, from the customer's Stripe address. */
+  country?: string;
+  state?: string | null;
+  postalCode?: string | null;
+  /** The customer's tax id, if one is on file. Decides B2B treatment. */
+  taxNumber?: string | null;
+}) => Promise<TaxCalculation | null> | TaxCalculation | null;
+
+/** What a `TaxCalculator` answers. Applied as an explicit Stripe TaxRate. */
+export type TaxCalculation = {
+  /** e.g. 8.875 for 8.875%. Zero is a valid answer and means no tax is due. */
+  percent: number;
+  /** What the invoice line says. Keep to 50 chars — Stripe's TaxRate limit. */
+  displayName?: string;
+  /** ISO country the rate belongs to, for the TaxRate object. */
+  country?: string;
+  /** True for a tax already included in the price. */
+  inclusive?: boolean;
+  /** Set where the customer accounts for the tax, so the invoice says so. */
+  reverseCharge?: boolean;
+};
+
+/** Settings every tax mode shares. */
+type TaxConfigCommon = {
+  /**
+   * Where you are registered to collect tax.
+   *
+   * The second input a rate needs and no dataset can supply. `origin` says where you
+   * are established; this says where you took on an obligation, which is what decides
+   * whether a sale is taxed at all.
+   *
+   * ```ts
+   * registrations: [{ country: "IT" }, { country: "GB" }]     // VAT registrations
+   * registrations: [{ country: "US", state: "CA" }]           // US nexus
+   * ```
+   *
+   * **Undefined is "the caller did not say"**, never "registered nowhere": the regime
+   * rules alone then decide, which is what every deployment predating this option
+   * gets. Declared, there is ONE rule for everywhere including domestic — so `[]` says
+   * something omitting it cannot, and is how a small-business exemption (France's
+   * franchise en base, Germany's Kleinunternehmerregelung) is expressed: charge
+   * nothing, anywhere.
+   *
+   * One obligation is deliberately not gated by it: destination VAT on a sale from
+   * outside the EU to an EU consumer arises with no threshold to sit under.
+   */
+  registrations?: readonly { country: string; state?: string }[];
+  /**
+   * Mandatory invoice wording, per outcome.
+   *
+   * ```ts
+   * notes: {
+   *   exempt: "TVA non applicable, art. 293 B du CGI",
+   *   reverseCharge: "Autoliquidation, art. 196 dir. 2006/112/CE",
+   * }
+   * ```
+   *
+   * Where a regime requires the invoice to state WHY a sale is untaxed, that mention
+   * is not decoration: France fines €15 per invoice missing the 293 B wording, and the
+   * CJEU held in C-247/21 that an omitted reverse-charge mention cannot be cured
+   * afterwards. Supplying `exempt` mints a 0% Stripe TaxRate carrying it, so it renders
+   * as a tax line on every invoice from every charge path. Supply nothing and an
+   * untaxed sale carries no line, exactly as before.
+   *
+   * Stripe caps a TaxRate display name at 50 characters — the mention, not the
+   * explanation.
+   */
+  notes?: { exempt?: string; reverseCharge?: string };
+  /**
+   * Are you registered for the EU One-Stop Shop? Default true. `local` only.
+   *
+   * Decides ONE case: a cross-border EU customer with no valid VAT number. Reverse
+   * charge needs a valid id, so without one the sale is taxed somewhere — registered,
+   * at the CUSTOMER's rate; not registered, at YOUR OWN, which is what the sub-€10 000
+   * regime allows and the only rate you can remit without a foreign registration.
+   */
+  oss?: boolean;
+  /**
+   * Resolve the TaxRate ids yourself, e.g. from your own records.
+   *
+   * **Wins over `mode` when it returns any**, because the hook exists to be
+   * authoritative — which also makes it the one place a setting can go quietly dead:
+   * whatever this function does not account for is not applied, whatever the config
+   * says. Prefer `mode: "external"` with a `calculate` for a third-party provider;
+   * this is for per-ORG rates that `config.tax` cannot express.
+   */
+  rates?: (stripeCustomerId: string) => Promise<string[]> | string[];
+  /**
+   * Use Stripe Tax. Equivalent to `mode: "stripe"`, and ignored when `rates` returns
+   * any (Stripe rejects manual rates and `automatic_tax` on one charge).
+   *
+   * Off unless set: a charge with neither is untaxed rather than quietly handed to
+   * Stripe Tax, which without an active registration computes 0% and reports no error.
+   */
+  automatic?: boolean;
+};
+
+/**
+ * WHO calculates tax, declared ONCE for the whole deployment.
+ *
+ * Every charge the library builds reads this — the seat Checkout Session, the
+ * `buy_credits` top-up, the auto-reload invoice — so the answer to "does this account
+ * charge VAT" lives in one place instead of at each call site. That per-site
+ * arrangement is why the two charges with no form behind them once went out untaxed
+ * while every seat invoice on the same account charged 22% IVA.
+ *
+ * **The union is what makes `origin: "US"` with the local mode impossible to write.**
+ * The local engine has rates for 45 European countries and no others, so a US, AU, JP,
+ * SG, CA, IN, BR or MX establishment cannot compute its own domestic tax here. That
+ * used to typecheck and then throw on the first charge; it is now a compile error at
+ * the config site, which is where the decision was made.
+ */
+export type TaxConfig = TaxConfigCommon &
+  (
+    | {
+        /**
+         * This library calculates, in process, from `eu-vat-rates-data` + VIES, and
+         * applies the answer as an explicit Stripe TaxRate. The default.
+         */
+        mode?: "local";
+        /**
+         * Where YOU are established. Decides domestic vs cross-border, which is the
+         * whole question a VAT rate turns on.
+         *
+         * Constrained to the countries the local engine has rates for. If yours is
+         * absent — the US above all — that is a fact about published rate data, not an
+         * omission: use `mode: "stripe"` or `mode: "external"`.
+         *
+         * Omitted, it falls back to the Stripe account's own country, and a fallback
+         * the local engine cannot compute is caught at boot instead.
+         */
+        origin?: LocalTaxOrigin;
+      }
+    | {
+        /** Stripe Tax (`automatic_tax`). 0.5% per taxed transaction, and it needs
+         *  registrations — without one it returns ZERO tax rather than an error. */
+        mode: "stripe";
+        origin?: string;
+      }
+    | {
+        /** A third-party provider, injected. See `TaxCalculator`. */
+        mode: "external";
+        origin?: string;
+        /** The provider. `numeralTax({ apiKey })` is the shipped adapter. */
+        calculate: TaxCalculator;
+      }
+    | {
+        /** No tax on anything the library charges. Correct for an account that
+         *  genuinely charges none, and something you write down rather than arrive at
+         *  by omission. */
+        mode: "none";
+        origin?: string;
+      }
+  );
+
 export type ResolvedConfig = Required<Omit<BillingConfig, "tax" | "paymentMethods">> &
   Pick<BillingConfig, "tax" | "paymentMethods">;
 
+
+/** `taxModeOf` without importing tax.ts, which imports this file. Same precedence. */
+function taxModeOfConfig(tax: TaxConfig | undefined): "local" | "stripe" | "external" | "none" {
+  if (tax?.mode) return tax.mode;
+  if (tax?.automatic) return "stripe";
+  return "local";
+}
+
 export function resolveConfig(c: BillingConfig): ResolvedConfig {
+  // The half the type system cannot reach.
+  //
+  // `TaxConfig` makes `{ mode: "local", origin: "US" }` a compile error, which covers
+  // the case where the establishment is WRITTEN DOWN. It cannot cover the case where it
+  // is inferred: omit `origin` and the local engine falls back to the Stripe account's
+  // country, so a US Stripe account with no declared origin is a local-mode US seller
+  // that typechecks perfectly and then refuses its first charge.
+  //
+  // A cast is also a way in — `origin: x as LocalTaxOrigin`, or a config assembled from
+  // env strings. So the same rule is checked here, at boot, where it is loud and early and
+  // where the stack points at the config rather than at a customer's checkout.
+  const declared = c.tax && "origin" in c.tax ? c.tax.origin : undefined;
+  if (declared && taxModeOfConfig(c.tax) === "local" && !isLocalTaxOrigin(declared)) {
+    throw new Error(
+      `config.tax.origin "${declared}" cannot be used with mode "local": this library ` +
+        "has rates for 45 European countries and no others, so it cannot compute a " +
+        `domestic rate for ${declared}. That is a fact about published rate data, not a ` +
+        'gap — use `mode: "stripe"` (Stripe Tax, 0.5% per taxed transaction), or ' +
+        '`mode: "external"` with a provider such as `numeralTax({ apiKey })`.',
+    );
+  }
   return {
     freeCredits: c.freeCredits ?? 100,
     currency: c.currency ?? "usd",

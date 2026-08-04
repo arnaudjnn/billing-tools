@@ -508,3 +508,7 @@ export type { BillingProfile } from "./billing-profile.js";
 export type { BillingAddress } from "./billing-profile.js";
 export { listCustomerTaxIds, setCustomerTaxId } from "./tax-ids.js";
 export type { CustomerTaxId } from "./tax-ids.js";
+
+export { numeralTax, type NumeralOptions } from "./tax-numeral.js";
+export { LOCAL_TAX_ORIGINS, isLocalTaxOrigin, type LocalTaxOrigin } from "./tax-origins.js";
+export type { TaxConfig, TaxCalculator, TaxCalculation } from "./types.js";
