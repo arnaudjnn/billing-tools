@@ -588,8 +588,9 @@ export type TaxMode =
    * The middle ground the other two leave open: `local` cannot compute US sales tax
    * because no national rate exists, and Stripe Tax bills 0.5% of every taxed
    * transaction. The calculation is injected rather than built in, so this package
-   * keeps no network I/O and stays testable offline — `numeralTax()` is the shipped
-   * adapter, and any function of the same shape works.
+   * keeps no network I/O and stays testable offline. No adapter ships: the seam passes
+   * an address and expects a RATE, which does not fit Numeral, Anrok or Stripe's Tax
+   * API — those take a basket and return an amount. See `TaxCalculator` in types.ts.
    */
   | "external"
   /** No tax on anything the library charges. */

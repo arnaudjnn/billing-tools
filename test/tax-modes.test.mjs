@@ -13,7 +13,6 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 
 import { resolveConfig } from "../dist/types.js";
-import { numeralTax } from "../dist/tax-numeral.js";
 import { LOCAL_TAX_ORIGINS, isLocalTaxOrigin } from "../dist/tax-origins.js";
 import { taxFor, invalidateTaxOrigin, invalidateTaxRates } from "../dist/tax.js";
 import { __setStripeForTests } from "../dist/billing.js";
@@ -45,7 +44,10 @@ test("`local` with an origin it cannot compute throws AT BOOT", () => {
       assert.match(e.message, /cannot be used with mode "local"/);
       // A refusal that names no alternative is just a wall.
       assert.match(e.message, /mode: "stripe"/);
-      assert.match(e.message, /numeralTax/);
+      assert.match(e.message, /mode: "external"/);
+      // And it must not point at anything that does not exist — the message named a
+      // `numeralTax` adapter that has since been removed for not working.
+      assert.doesNotMatch(e.message, /numeralTax/);
       return true;
     },
   );
@@ -129,41 +131,4 @@ test("a provider that throws REFUSES the charge rather than untaxing it", async 
     /provider down/,
     "a 0% invoice is the failure nobody notices; the exception is the point",
   );
-});
-
-test("numeralTax refuses on a bad response instead of assuming 0%", async () => {
-  const calls = [];
-  const fetchStub = async (url, init) => {
-    calls.push({ url, body: JSON.parse(init.body), auth: init.headers.authorization });
-    return { ok: true, status: 200, json: async () => ({ tax_rate: 6.25, jurisdiction: "Texas" }) };
-  };
-  const calc = numeralTax({ apiKey: "key_123", fetch: fetchStub });
-  const ok = await calc({ customerId: "cus_1", country: "US", state: "TX", postalCode: "78701" });
-  assert.equal(ok.percent, 6.25);
-  assert.equal(ok.displayName, "Texas");
-  assert.equal(calls[0].auth, "Bearer key_123");
-  assert.equal(calls[0].body.address.postal_code, "78701");
-
-  // A 500 must not read as untaxed.
-  const failing = numeralTax({
-    apiKey: "k",
-    fetch: async () => ({ ok: false, status: 503, json: async () => ({}) }),
-  });
-  await assert.rejects(() => failing({ customerId: "c", country: "US" }), /503/);
-
-  // Neither must a 200 with no rate in it — the shape changing is not a 0% sale.
-  const empty = numeralTax({
-    apiKey: "k",
-    fetch: async () => ({ ok: true, status: 200, json: async () => ({ ok: true }) }),
-  });
-  await assert.rejects(() => empty({ customerId: "c", country: "US" }), /Refusing rather than/);
-
-  // And no address is refused before the network is touched at all.
-  const unreached = numeralTax({
-    apiKey: "k",
-    fetch: async () => {
-      throw new Error("must not be called without a destination");
-    },
-  });
-  await assert.rejects(() => unreached({ customerId: "c" }), /no address on file/);
 });

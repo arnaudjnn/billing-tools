@@ -204,10 +204,16 @@ export interface BillingConfig {
  *
  * `mode: "external"` exists because the two built-in answers do not cover everyone:
  * `local` cannot compute US sales tax (no national rate exists), and Stripe Tax costs
- * 0.5% of every taxed transaction. A provider — Numeral, Anrok, Kintsugi, Vertex —
- * sits between them, and the calculation is INJECTED rather than built in so the core
- * stays free of network I/O and testable offline. `numeralTax()` is the shipped adapter;
- * anything matching this shape works.
+ * 0.5% of every taxed transaction. A provider — Numeral, Anrok, Kintsugi, Vertex — sits
+ * between them, and the calculation is INJECTED rather than built in so this package
+ * keeps no network I/O and stays testable offline.
+ *
+ * **No adapter ships.** One did briefly, for Numeral, written from a docs summary
+ * rather than the OpenAPI spec — and it could not have worked: the version header is
+ * mandatory, `customer` / `origin_address` / `order_details` are all required, and the
+ * response carries `total_tax_amount` rather than any rate field, so it would have
+ * thrown on every call. Writing an adapter needs the provider's spec in front of you
+ * and one real call against a sandbox. This type is the contract for doing that.
  *
  * Return `null` to mean "no tax applies", which is charged as untaxed. Throwing is
  * also honest — it refuses the charge rather than guessing, which is what this library
@@ -220,11 +226,43 @@ export type TaxCalculator = (input: {
   country?: string;
   state?: string | null;
   postalCode?: string | null;
+  city?: string | null;
+  line1?: string | null;
   /** The customer's tax id, if one is on file. Decides B2B treatment. */
   taxNumber?: string | null;
 }) => Promise<TaxCalculation | null> | TaxCalculation | null;
 
-/** What a `TaxCalculator` answers. Applied as an explicit Stripe TaxRate. */
+// ── What this seam CANNOT do yet, stated so nobody rediscovers it ──────────────
+//
+// It passes a place of supply and expects a RATE back. That fits a rate-lookup
+// service, and it does NOT fit the major providers: Numeral, Anrok and Stripe's own
+// Tax API all take a BASKET (line items, quantities, currency) and return a tax
+// AMOUNT, because the amount is what gets filed. Two things block wiring one here:
+//
+//   1. `taxFor(customerId, tax)` has no basket to pass. The charge sites all know it
+//      — the Checkout Session, the auto-reload invoice, the top-up — so threading
+//      `currency` + `lineItems` through is the change that unblocks this, and it is a
+//      breaking signature change to an exported function on a money path.
+//   2. A returned amount has to become a percentage to ride a Stripe TaxRate, and
+//      that conversion can drift a cent from the provider's own figure — which is the
+//      figure on their return.
+//
+// Until both are settled, `mode: "stripe"` is the supported answer for a US
+// establishment: Stripe owns the calculation AND the invoice, so no conversion exists
+// to be wrong. An adapter written against this seam today must be for a provider that
+// answers with a rate.
+
+/**
+ * What a `TaxCalculator` answers. Applied as an explicit Stripe TaxRate.
+ *
+ * **A percentage, and that is an impedance mismatch worth knowing.** This library
+ * applies tax as a Stripe `TaxRate`, which is a percentage of the line — but providers
+ * return an AMOUNT (`total_tax_amount`), because that is what gets filed. Converting
+ * amount → percent can drift a cent from the provider's own figure on some baskets, and
+ * the provider's figure is the one on the return. If that matters for your volume, do
+ * not use this seam: charge through a provider that writes the amount itself, or use
+ * `mode: "stripe"`, where Stripe owns both the calculation and the invoice.
+ */
 export type TaxCalculation = {
   /** e.g. 8.875 for 8.875%. Zero is a valid answer and means no tax is due. */
   percent: number;
@@ -359,7 +397,8 @@ export type TaxConfig = TaxConfigCommon &
         /** A third-party provider, injected. See `TaxCalculator`. */
         mode: "external";
         origin?: string;
-        /** The provider. `numeralTax({ apiKey })` is the shipped adapter. */
+        /** Your provider. None ships — see the note on `TaxCalculator` for why, and
+         *  for what it cannot reach yet. */
         calculate: TaxCalculator;
       }
     | {
@@ -400,8 +439,9 @@ export function resolveConfig(c: BillingConfig): ResolvedConfig {
       `config.tax.origin "${declared}" cannot be used with mode "local": this library ` +
         "has rates for 45 European countries and no others, so it cannot compute a " +
         `domestic rate for ${declared}. That is a fact about published rate data, not a ` +
-        'gap — use `mode: "stripe"` (Stripe Tax, 0.5% per taxed transaction), or ' +
-        '`mode: "external"` with a provider such as `numeralTax({ apiKey })`.',
+        'gap — use `mode: "stripe"` (Stripe Tax, 0.5% per taxed transaction, and the ' +
+        'supported answer for a US establishment), or `mode: "external"` with your own ' +
+        "`calculate` if you have a provider that answers with a rate.",
     );
   }
   return {
