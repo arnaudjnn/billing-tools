@@ -1,3 +1,24 @@
+# [13.0.0](https://github.com/arnaudjnn/billing-tools/compare/v12.0.1...v13.0.0) (2026-08-04)
+
+
+* feat!: remove three deprecated options, and the stale references deleted features left ([7200ec9](https://github.com/arnaudjnn/billing-tools/commit/7200ec913d8ef0f2eb2d1703d332e97e70891dac))
+
+
+### Performance Improvements
+
+* **tax:** remember VAT numbers VIES has confirmed ([9a1af68](https://github.com/arnaudjnn/billing-tools/commit/9a1af68bf5dfd02c265fa7dc1048fbf64cf219fb))
+
+
+### BREAKING CHANGES
+
+* `checkBillingSetup({ expectTax })`, `MeterOptions.extraAllowance` and
+`DeriveCompareOptions.labels` are removed. `expectTax: true` → `taxMode: "stripe"`,
+`false` → `taxMode: "none"`, or pass `config` and let it read `config.tax`. Drop
+`extraAllowance` — it has had no effect for several majors. `labels: { unlimited,
+separator, monthly, yearly }` → the same four keys under `messages`.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+
 ## [12.0.1](https://github.com/arnaudjnn/billing-tools/compare/v12.0.0...v12.0.1) (2026-08-04)
 
 
