@@ -62,6 +62,9 @@ export interface PlanChangeResult {
   /** `checkout` only: mount these with BillingCheckoutSessionProvider. */
   sessionId?: string;
   clientSecret?: string | null;
+  /** `checkout` under `uiMode: "hosted"` — the page to send a customer to, and the
+   *  only usable answer for a caller that has no browser. */
+  checkoutUrl?: string | null;
 }
 
 export type PlanChangeErrorCode =
@@ -266,6 +269,9 @@ export async function changePlan(
     taxRates?: string[];
     /** Required for the no-subscription case, which opens a Checkout Session. */
     returnUrl?: string;
+    /** `"hosted"` makes that session a URL rather than a client secret — what a
+     *  caller with no browser needs. See `createCheckoutSession`. */
+    uiMode?: "elements" | "hosted";
     email?: string;
     metadata?: Record<string, string>;
     /** Disambiguates when a customer somehow has more than one live subscription.
@@ -331,6 +337,7 @@ export async function changePlan(
       interval,
       seats: opts.to.seats ?? defaultBasket(target),
       returnUrl: opts.returnUrl,
+      uiMode: opts.uiMode,
       customerId,
       currency: opts.currency,
       taxRates: opts.taxRates,
@@ -348,6 +355,7 @@ export async function changePlan(
       effectiveAt: null,
       sessionId: session.sessionId,
       clientSecret: session.clientSecret,
+      checkoutUrl: session.url,
     };
   }
 

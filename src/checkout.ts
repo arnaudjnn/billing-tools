@@ -111,8 +111,12 @@ function priceIdsFor(
 export type CheckoutSessionResult = {
   sessionId: string;
   customerId: string;
-  /** Pass to BillingCheckoutSessionProvider. Null only if Stripe returned none. */
+  /** Elements mode: pass to BillingCheckoutSessionProvider. Null under
+   *  `uiMode: "hosted"`, which has no elements to mount. */
   clientSecret: string | null;
+  /** Hosted mode: Stripe's own payment page. Null in elements mode — a session
+   *  the browser confirms itself has no page to send anyone to. */
+  url: string | null;
 };
 
 /**
@@ -130,8 +134,24 @@ export async function createCheckoutSession(opts: {
   plan: string;
   interval: BillingInterval;
   seats: Quantities;
-  /** Where Stripe returns the browser after an off-site step (3DS, bank app). */
+  /** Where Stripe returns the browser after an off-site step (3DS, bank app), and
+   *  the `success_url` under `uiMode: "hosted"`. */
   returnUrl: string;
+  /**
+   * Who draws the payment form, and therefore what comes back.
+   *
+   * `"elements"` (default) mounts our own layout and returns a **client secret**.
+   * `"hosted"` is Stripe's page and returns a **URL** — which is the only form a
+   * caller with no browser can use, so it is what an agent-facing tool wants: an
+   * MCP caller handed a client secret cannot do anything with it, and the first
+   * purchase is exactly where that caller arrives. Hand-rolling the hosted session
+   * to get a URL is how a consumer ends up with a second checkout that inherits
+   * neither the deployment's tax nor its payment-method configuration.
+   */
+  uiMode?: "elements" | "hosted";
+  /** Hosted mode only: where Stripe sends a customer who backs out. Defaults to
+   *  `returnUrl`. */
+  cancelUrl?: string;
   /** Reuse an existing customer, else one is created from `email`. */
   customerId?: string;
   email?: string;
@@ -246,12 +266,18 @@ function reuseKeyFor(opts: {
   taxIdCollection?: boolean;
   paymentMethods?: string[] | "automatic";
   metadata?: Record<string, string>;
+  uiMode?: "elements" | "hosted";
+  cancelUrl?: string;
 }): string | null {
   if (!opts.reuse || !opts.customerId) return null;
   return JSON.stringify([
     opts.customerId,
     opts.plan,
     opts.interval,
+    // Part of the identity: handing an elements session back to a caller that asked
+    // for a URL would return `url: null` and look like Stripe's fault.
+    opts.uiMode ?? "elements",
+    opts.cancelUrl ?? null,
     Object.entries(opts.seats)
       .filter(([, qty]) => qty > 0)
       .sort(([a], [b]) => (a < b ? -1 : 1)),
@@ -285,6 +311,8 @@ async function openCheckoutSession(opts: {
   interval: BillingInterval;
   seats: Quantities;
   returnUrl: string;
+  uiMode?: "elements" | "hosted";
+  cancelUrl?: string;
   customerId?: string;
   email?: string;
   currency?: string;
@@ -340,15 +368,22 @@ async function openCheckoutSession(opts: {
     ...(tax.taxRates?.length ? { tax_rates: tax.taxRates } : {}),
   }));
 
+  const hosted = opts.uiMode === "hosted";
   const session = await stripe.checkout.sessions.create({
     mode: "subscription",
-    // Elements mode: Stripe hosts no page, we mount the elements and own the
-    // layout. The value was RENAMED "custom" → "elements"; the pinned SDK still
-    // sends "custom" (and its types only allow that), and the API accepts it and
-    // echoes back `ui_mode: "elements"`. A newer API version rejects it outright —
-    // "The ui_mode value `custom` is no longer supported. Use `elements` instead."
+    // Elements mode (the default): Stripe hosts no page, we mount the elements and
+    // own the layout. The value was RENAMED "custom" → "elements"; the pinned SDK
+    // still sends "custom" (and its types only allow that), and the API accepts it
+    // and echoes back `ui_mode: "elements"`. A newer API version rejects it outright
+    // — "The ui_mode value `custom` is no longer supported. Use `elements` instead."
     // So when the stripe dependency is bumped, this line changes with it.
-    ui_mode: "custom",
+    //
+    // Hosted is Stripe's own page, and the difference that matters is the RETURN
+    // VALUE: a URL anyone can open, versus a client secret that only a browser
+    // running Stripe.js can do anything with.
+    ...(hosted
+      ? { success_url: opts.returnUrl, cancel_url: opts.cancelUrl ?? opts.returnUrl }
+      : { ui_mode: "custom" as const, return_url: opts.returnUrl }),
     line_items,
     customer: customerId,
     // Writes the address (and business name) the customer types onto the Customer.
@@ -366,7 +401,6 @@ async function openCheckoutSession(opts: {
     // ("auto", country + postal code inside the payment element) is enough for
     // tax in most places but not everywhere, and an invoice wants the real thing.
     billing_address_collection: "required",
-    return_url: opts.returnUrl,
     // A configuration wins: it is the only lever that removes Link, and Stripe
     // rejects a session that carries both it and an explicit method list.
     ...(pmc
@@ -384,6 +418,7 @@ async function openCheckoutSession(opts: {
     sessionId: session.id,
     customerId,
     clientSecret: session.client_secret,
+    url: session.url,
   };
 }
 

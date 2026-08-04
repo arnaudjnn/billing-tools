@@ -162,6 +162,11 @@ is pending resumes it. Preview the cost first with preview_plan_change.`,
             timing,
             proration,
             returnUrl: opts.returnUrl,
+            // Hosted, because THIS caller has no browser. An agent handed a client
+            // secret can do nothing with it — which is how a consumer ends up
+            // hand-rolling a hosted session next to this one and losing the
+            // deployment's tax and payment-method configuration with it.
+            uiMode: "hosted",
             taxRates: await rates(auth.orgId),
           });
           return json({
@@ -172,7 +177,9 @@ is pending resumes it. Preview the cost first with preview_plan_change.`,
             subscription_id: r.subscriptionId,
             // Only on the first-purchase path: there is nothing to change yet, so
             // the caller has to send someone through Checkout.
-            ...(r.kind === "checkout" ? { checkout_client_secret: r.clientSecret, checkout_session_id: r.sessionId } : {}),
+            ...(r.kind === "checkout"
+              ? { checkout_url: r.checkoutUrl, checkout_session_id: r.sessionId }
+              : {}),
           });
         } catch (e) {
           return toolError(e);

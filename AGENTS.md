@@ -70,6 +70,8 @@ Deliberate exceptions — don't "fix" these:
 
 **The rule: anything the app's own UI can do, an API / CLI / MCP caller can do too.** When adding a capability, register the tool in the same change — a function reachable only from a React component is the failure mode this rule exists to prevent.
 
+**A registered tool is not reachable until what it RETURNS is usable without a browser.** `change_plan` on the first-purchase path returned a Checkout **client secret**, which needs Stripe.js mounted, so the one caller the tool exists for could not finish the purchase. Hence `createCheckoutSession({ uiMode: "hosted" })` — the same session, same tax, same payment-method configuration, a URL instead (`test/checkout-ui-mode.test.mjs` pins that the two modes differ in nothing else). The cost of not having it was measured in a consumer: scartoffie hand-rolled a hosted `checkout.sessions.create` to get a URL, and that second path inherited neither `config.tax` nor the method configuration — **every human paid 22% IVA and every agent 0%**, on the same account.
+
 REST and MCP get it structurally (`createDispatcher` monkey-patches `server.tool`, so every registered tool is an endpoint). `test/surface.test.mjs` asserts `BILLING_TOOL_NAMES` matches what registration produces, **in both directions and by count**. The CLI is hand-written and is the one surface that can silently fall behind, so `test/conventions.test.mjs` asserts it reaches every tool. Coverage is per tool, not per command: `get_api_key` has no command because `auth` performs that flow, `preview_credit_purchase` is `buy --quote`, `set_spend_controls` is `spend limit` / `spend alerts`.
 
 ### The 33 tools
