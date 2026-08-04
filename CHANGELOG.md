@@ -1,3 +1,10 @@
+## [15.2.2](https://github.com/arnaudjnn/billing-tools/compare/v15.2.1...v15.2.2) (2026-08-04)
+
+
+### Bug Fixes
+
+* **checkout:** let a caller actually pass `config`, and pass it from changePlan ([4049c09](https://github.com/arnaudjnn/billing-tools/commit/4049c098eb248688734f89ac1bec8acb50fe519f))
+
 ## [15.2.1](https://github.com/arnaudjnn/billing-tools/compare/v15.2.0...v15.2.1) (2026-08-04)
 
 
