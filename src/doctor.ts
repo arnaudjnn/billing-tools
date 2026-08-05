@@ -126,6 +126,34 @@ export async function checkBillingSetup(opts: {
     });
   }
 
+  // Where the seller is established, declared vs what Stripe was told at onboarding.
+  //
+  // `originFor` prefers `config.tax.origin` and never looks at the account when one is
+  // set, so the two can disagree in silence — and origin is what decides domestic vs
+  // cross-border, i.e. every rate the local engine computes. Measured on a real
+  // consumer: its `TAX_ORIGIN` said FR while its own setup script registered IT.
+  //
+  // A WARNING, not an error: Stripe's onboarding country is where the business is
+  // established, so a mismatch is nearly always a config mistake — but "nearly", and a
+  // doctor that hard-fails a legitimate setup is one people learn to skip.
+  if (taxMode === "local" && opts.config?.tax?.origin && account.country) {
+    const declared = opts.config.tax.origin;
+    checks.push(
+      declared === account.country
+        ? {
+            level: "ok",
+            title: "Tax origin",
+            detail: `${declared}, matching the Stripe account's country`,
+          }
+        : {
+            level: "warn",
+            title: "Tax origin",
+            detail: `config.tax.origin is ${declared} but this Stripe account is registered in ${account.country}`,
+            fix: `Origin decides domestic vs cross-border, so it changes every rate charged. Stripe's country is where the business was onboarded as established — if ${declared} is right, the account is on the wrong entity; if ${account.country} is right, fix config.tax.origin`,
+          },
+    );
+  }
+
   if (taxMode === "stripe") {
     // The silent one: with no registration Stripe Tax returns ZERO tax rather
     // than an error, so the checkout total simply drops to the pre-tax amount.

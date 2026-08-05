@@ -149,3 +149,38 @@ test("the account's environment and country are reported", async () => {
   assert.match(c.detail, /IT/);
   assert.match(c.detail, /test/i, "a sk_test key must read as test mode");
 });
+
+// ── Declared origin vs the account's country ─────────────────────────────────
+//
+// `originFor` prefers `config.tax.origin` and never consults the account when one is
+// set, so the two disagree in silence — and origin decides domestic vs cross-border,
+// which is every rate the local engine computes. Measured on a real consumer: its
+// TAX_ORIGIN said FR while its own setup script registered IT.
+test("a declared origin that contradicts the Stripe account is reported", async () => {
+  __setStripeForTests(fakeStripe({ country: "IT" }));
+  const r = await checkBillingSetup({ config: config({ origin: "FR" }) });
+
+  const origin = find(r, "Tax origin");
+  assert.equal(origin?.level, "warn");
+  assert.match(origin.detail, /origin is FR but this Stripe account is registered in IT/);
+  // A warning, not an error: a doctor that hard-fails a legitimate setup gets skipped.
+  assert.equal(r.healthy, true);
+});
+
+test("a matching origin says so, and silence where there is nothing to contradict", async () => {
+  __setStripeForTests(fakeStripe({ country: "IT" }));
+  assert.equal(find(await checkBillingSetup({ config: config({ origin: "IT" }) }), "Tax origin")?.level, "ok");
+
+  // Undeclared is the documented fallback — `originFor` reads the account country, so
+  // there is nothing to contradict and nothing to report.
+  __setStripeForTests(fakeStripe({ country: "IT" }));
+  assert.equal(find(await checkBillingSetup({ config: config(undefined) }), "Tax origin"), undefined);
+
+  // `mode: "stripe"` hands the calculation to Stripe, so our origin is no longer the
+  // input and comparing it would be noise.
+  __setStripeForTests(fakeStripe({ country: "IT" }));
+  assert.equal(
+    find(await checkBillingSetup({ config: config({ mode: "stripe", origin: "FR" }) }), "Tax origin"),
+    undefined,
+  );
+});
