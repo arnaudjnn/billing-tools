@@ -1,3 +1,10 @@
+# [15.5.0](https://github.com/arnaudjnn/billing-tools/compare/v15.4.0...v15.5.0) (2026-08-05)
+
+
+### Features
+
+* **workos:** provision the roles, and print what cannot be provisioned ([18e37d4](https://github.com/arnaudjnn/billing-tools/commit/18e37d4d3c4596b6f95cb4dccefc6dbcc98bf47b))
+
 # [15.4.0](https://github.com/arnaudjnn/billing-tools/compare/v15.3.0...v15.4.0) (2026-08-05)
 
 
