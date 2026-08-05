@@ -1,3 +1,10 @@
+## [15.15.3](https://github.com/arnaudjnn/billing-tools/compare/v15.15.2...v15.15.3) (2026-08-05)
+
+
+### Bug Fixes
+
+* **subscription:** three defects the plan-move matrix found, and a wrong doc claim ([09c8f6a](https://github.com/arnaudjnn/billing-tools/commit/09c8f6ada1559ac6bc2569fdf588f4ee612d97d7))
+
 ## [15.15.2](https://github.com/arnaudjnn/billing-tools/compare/v15.15.1...v15.15.2) (2026-08-05)
 
 
