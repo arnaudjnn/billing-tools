@@ -338,3 +338,68 @@ test("commander is not something a consumer has to install", async () => {
     assert.ok(verbs.has(verb), `\`${verb}\` was not registered (got: ${[...verbs].join(", ")})`);
   }
 });
+
+// ── The CLI is gated by the catalogue, like the tools ────────────────────────
+//
+// The tool surface is derived: a flat/pooled catalogue registers no seat or top-up
+// tools. The CLI was not, so the same deployment shipped `seats`, `assign-seat` and
+// five `topup` commands that called tools which had never been registered — they
+// could only ever answer "Unknown tool", and a customer cannot tell that from
+// holding it wrong. Measured on gtm-tools: 7 such commands.
+test("the CLI registers the same groups the tools do", async () => {
+  const { registerBillingCommands } = await import("../dist/cli/commands.js");
+
+  const verbsFor = (plans) => {
+    const names = [];
+    const make = () => ({
+      command(name) { names.push(name.split(" ")[0]); return make(); },
+      description() { return this; },
+      option() { return this; },
+      action() { return this; },
+      opts() { return {}; },
+    });
+    const root = make();
+    registerBillingCommands(root, {
+      configDir: "~/.t", envPrefix: "T", defaultUrl: "https://t.local", ...(plans ? { plans } : {}),
+    });
+    return new Set(names);
+  };
+
+  const FLAT = {
+    pro: {
+      sells: { kind: "flat", price: { monthly: 1000, yearly: 10000 } },
+      cap: { kind: "pool", credits: 1000 },
+      replenish: { purchase: {} },
+      sale: "self_serve",
+    },
+  };
+  const SEATS = {
+    team: {
+      sells: { kind: "seats", seatTypes: { standard: { price: { monthly: 2000, yearly: 20000 } } } },
+      cap: { kind: "per_seat", perSeat: 1000 },
+      replenish: { purchase: {}, request: {} },
+      sale: "self_serve",
+    },
+  };
+
+  const flat = verbsFor(FLAT);
+  assert.ok(!flat.has("seats"), "a flat catalogue must not ship a `seats` command");
+  assert.ok(!flat.has("assign-seat"), "…nor `assign-seat`");
+  assert.ok(!flat.has("topup"), "…nor the top-up queue: `replenish.request` is unset");
+  // What it must still have: the wallet, the reads, and the lifecycle it does sell.
+  for (const v of ["balance", "buy", "invoices", "usage", "plans", "plan", "spend", "cards"]) {
+    assert.ok(flat.has(v), `\`${v}\` must survive gating (got: ${[...flat].sort().join(", ")})`);
+  }
+
+  const seats = verbsFor(SEATS);
+  assert.ok(seats.has("seats") && seats.has("assign-seat") && seats.has("topup"),
+    "a seat catalogue with `request` must ship all three");
+
+  // Omitting the catalogue means "the caller did not say", never "nothing applies" —
+  // the same rule registerBillingTools follows, so an existing consumer that passes
+  // no plans keeps every command it had.
+  const ungated = verbsFor(null);
+  for (const v of ["seats", "assign-seat", "topup", "plan", "plans"]) {
+    assert.ok(ungated.has(v), `no catalogue must register everything, missing \`${v}\``);
+  }
+});

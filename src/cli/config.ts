@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, isAbsolute } from "node:path";
+import type { PlanCatalog } from "../plan-model.js";
 
 // Parameterized CLI config store. The host supplies configDir (e.g. "~/.myapp"
 // or an absolute path), an env-var prefix (e.g. "MYAPP" → MYAPP_API_KEY /
@@ -10,6 +11,21 @@ export interface CliOptions {
   configDir: string;
   envPrefix: string;
   defaultUrl: string;
+  /**
+   * The app's catalogue, so the COMMANDS are gated exactly as the TOOLS are.
+   *
+   * Omit and everything registers — `undefined` is "the caller did not say", never
+   * "nothing applies", the same rule `registerBillingTools` follows. Pass it and a
+   * flat/pooled deployment stops shipping `seats` and `topup` commands, which on
+   * that catalogue call tools that were never registered and can only answer
+   * "Unknown tool". A dead command is the same false statement as a dead tool: the
+   * customer cannot tell "not for you" from "you are holding it wrong".
+   *
+   * The gating reads `toolCapabilities`, the same function `registerBillingTools`
+   * reads, so the two surfaces cannot disagree about what a catalogue supports.
+   * `plan-model` carries no external dependency, so `/cli` stays a leaf.
+   */
+  plans?: PlanCatalog;
 }
 
 export interface CliConfig {

@@ -1,5 +1,6 @@
 import { rmSync } from "node:fs";
 import { callTool, type ApiClientConfig } from "./client.js";
+import { toolCapabilities } from "../plan-model.js";
 import {
   type CliOptions,
   configPath,
@@ -165,9 +166,17 @@ export function registerBillingCommands(program: CommandLike, opts: CliOptions) 
       print(await callTool(requireConfig(), "get_usage", args));
     });
 
-  program
-    .command("seats")
-    .description("List per-member seat-type assignments")
+  // Gated exactly as the TOOLS are, by the same `toolCapabilities`. A flat/pooled
+  // catalogue registers no seat or top-up tools, so these commands could only ever
+  // answer "Unknown tool" — and a customer cannot tell that from holding it wrong.
+  // No catalogue passed means "the caller did not say", so everything registers.
+  const caps = opts.plans ? toolCapabilities(opts.plans) : null;
+  const has = (key: "seats" | "request" | "lifecycle") => !caps || caps[key];
+
+  if (has("seats")) {
+    program
+      .command("seats")
+      .description("List per-member seat-type assignments")
     .action(async () => print(await callTool(requireConfig(), "list_seats")));
 
   program
@@ -217,8 +226,13 @@ export function registerBillingCommands(program: CommandLike, opts: CliOptions) 
     .command("deny <request_id>")
     .description("Deny a pending top-up request")
     .action(async (id: string) => print(await callTool(requireConfig(), "deny_top_up", { request_id: id })));
+  }
 
-  registerPlanCommands(program, requireConfig);
+  // `plans` and `plan show` are READS and always register, matching the tool rule:
+  // "what is on offer" and "what am I on" are answerable on any catalogue, including
+  // a wholly quote-only one. Only the moves that CHANGE a subscription need a plan a
+  // customer can buy without a salesperson.
+  registerPlanCommands(program, requireConfig, has("lifecycle"));
 }
 
 // ── Plans, the billing account, and the rest of the tool surface ────────────
@@ -227,7 +241,11 @@ export function registerBillingCommands(program: CommandLike, opts: CliOptions) 
 // the SAME tools the API and MCP expose, so a command exists here if and only if
 // a tool exists there — a capability reachable from one surface and not another
 // is the gap this whole pass was about.
-function registerPlanCommands(program: CommandLike, requireConfig: () => ApiClientConfig) {
+function registerPlanCommands(
+  program: CommandLike,
+  requireConfig: () => ApiClientConfig,
+  lifecycle: boolean,
+) {
   program
     .command("plans")
     .description("List the available plans, with prices and included usage")
@@ -238,6 +256,10 @@ function registerPlanCommands(program: CommandLike, requireConfig: () => ApiClie
     .command("show", { isDefault: true })
     .description("Current plan, any scheduled change, and the moves available")
     .action(async () => print(await callTool(requireConfig(), "get_plan")));
+  // Only the three that CHANGE a subscription. On a catalogue that is entirely free
+  // or quote-only there is no such move, so `change_plan` is not registered and these
+  // could only refuse — while `plans` and `plan show` above stay useful reads.
+  if (lifecycle) {
   plan
     .command("preview <plan>")
     .description("What moving to a plan would cost — prorated, without making the change")
@@ -263,6 +285,7 @@ function registerPlanCommands(program: CommandLike, requireConfig: () => ApiClie
     .command("cancel")
     .description("Cancel at the end of the period already paid for")
     .action(async () => print(await callTool(requireConfig(), "cancel_plan")));
+  }
 
   program
     .command("limits")
