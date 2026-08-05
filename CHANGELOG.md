@@ -1,3 +1,10 @@
+# [15.7.0](https://github.com/arnaudjnn/billing-tools/compare/v15.6.1...v15.7.0) (2026-08-05)
+
+
+### Features
+
+* **cli:** gate the commands by the catalogue, like the tools ([286db70](https://github.com/arnaudjnn/billing-tools/commit/286db7084097a6ae8498f7ae33cd39b741aa37a5))
+
 ## [15.6.1](https://github.com/arnaudjnn/billing-tools/compare/v15.6.0...v15.6.1) (2026-08-05)
 
 

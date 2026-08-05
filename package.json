@@ -1,6 +1,6 @@
 {
   "name": "@arnaudjnn/billing-tools",
-  "version": "15.6.1",
+  "version": "15.7.0",
   "description": "The get-paid engine for Stripe + WorkOS apps, for humans and AI agents. Drop-in API-key auth, credit + subscription billing, auth.md agent registration, and MPP machine payments, as MCP tools, a REST API, and a CLI. Framework-agnostic, storage-pluggable.",
   "license": "MIT",
   "author": "Arnaud Jeannin",
