@@ -1,3 +1,10 @@
+# [15.3.0](https://github.com/arnaudjnn/billing-tools/compare/v15.2.3...v15.3.0) (2026-08-05)
+
+
+### Features
+
+* **create-billing:** derive the billing script's options from the composition ([f5bb51b](https://github.com/arnaudjnn/billing-tools/commit/f5bb51b8ca26243ce4c2416643349f73592a0182))
+
 ## [15.2.3](https://github.com/arnaudjnn/billing-tools/compare/v15.2.2...v15.2.3) (2026-08-04)
 
 
