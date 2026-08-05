@@ -891,7 +891,14 @@ export async function runBillingDoctor(opts: RunDoctorOptions = {}): Promise<voi
     const w = typeof opts.workos === "object" ? opts.workos : {};
     try {
       const workos = formatDoctorResult(
-        await checkWorkOSSetup({ ...w, expectLivemode: stripeLivemode }),
+        // `baseUrl` so the report prints the redirect URI to allowlist. It belongs on
+        // THIS verb above all: `doctor` is the one people run, and the manual step is
+        // useless advice if only the provisioning verb mentions it.
+        await checkWorkOSSetup({
+          ...w,
+          expectLivemode: stripeLivemode,
+          baseUrl: opts.config?.baseUrl,
+        }),
       );
       log(workos.text);
       workosExit = workos.exitCode;
