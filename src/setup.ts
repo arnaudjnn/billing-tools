@@ -14,11 +14,7 @@ import { ensureMeters } from "./usage-ledger.js";
 import { ensureTaxSetup, type TaxRegistrationSpec } from "./tax-setup.js";
 import { ensureWebhookEndpoint } from "./webhook-setup.js";
 import { taxModeOf } from "./tax.js";
-import {
-  ADMIN_ROLE_SLUG,
-  ensureWorkOSRoles,
-  type WorkOSRoleSpec,
-} from "./workos-setup.js";
+import { ensureWorkOSRoles, type WorkOSRoleSpec } from "./workos-setup.js";
 import type { BillingConfig } from "./types.js";
 import type { PlanCatalog } from "./plans.js";
 
@@ -90,11 +86,10 @@ export interface SetupOptions {
   /**
    * Provision and audit the WorkOS half.
    *
-   * PROVISIONED: the environment **roles**, because `isAdmin` matches a member's role
-   * slug against `ADMIN_ROLE_SLUG` and an environment without it answers 403 from
-   * every admin-gated tool for every human — while org API keys keep working, which
-   * is why it survives a headless pass and fails on the first real person. Idempotent;
-   * pass `roles` to add your own.
+   * PROVISIONED: only the roles YOU name in `roles`. WorkOS ships `admin` and
+   * `member`, so there is no default list — a step that never fires would still read
+   * as one that does something. Whether the `admin` slug is present is checked by the
+   * doctor, which is a different claim.
    *
    * NOT provisioned, because v10 exposes no API for either: AuthKit's **redirect
    * URIs** and its appearance/settings. The SDK's only writable `redirect_uris`
@@ -258,22 +253,21 @@ export async function setupBilling(opts: SetupOptions): Promise<SetupResult> {
       healthy: false,
     };
   }
-  // ── WorkOS ────────────────────────────────────────────────────────────────
+  // ── WorkOS roles ──────────────────────────────────────────────────────────
   //
-  // Only the roles. They are the one part of a WorkOS environment this library's own
-  // behaviour depends on and the API can write: `isAdmin` matches a member's role
-  // slug against ADMIN_ROLE_SLUG, so an environment without that role answers 403
-  // from every admin-gated tool for every human — while org API keys keep working,
-  // which is why it survives a headless test pass.
+  // Only the roles the APP invents. WorkOS environments ship `admin` and `member`
+  // already, so provisioning those would be a step that never fires while reading
+  // like it does something. Whether the `admin` slug is actually present is a
+  // different question and the doctor's, not this step's.
   //
-  // AuthKit's redirect URIs and appearance are NOT provisioned, because v10 exposes
-  // no API for them (the SDK's `redirect_uris` belong to Connect applications). The
-  // closing report prints the exact redirect URI to paste instead of implying it was
-  // handled.
-  if (opts.workos) {
-    const w = typeof opts.workos === "object" ? opts.workos : {};
+  // Nothing else about WorkOS is provisioned: AuthKit's redirect URIs and appearance
+  // have no API in v10 (its only writable `redirect_uris` belong to a Connect
+  // application, a different object), and orgs, memberships and `sk_` keys are
+  // created lazily per customer, which is the behaviour you want.
+  const workosRoles = typeof opts.workos === "object" ? opts.workos.roles : undefined;
+  if (workosRoles?.length) {
     try {
-      const roles = await ensureWorkOSRoles({ roles: w.roles });
+      const roles = await ensureWorkOSRoles({ roles: workosRoles });
       ok(
         "workos",
         "WorkOS roles",
@@ -286,11 +280,11 @@ export async function setupBilling(opts: SetupOptions): Promise<SetupResult> {
         "workos",
         "WorkOS roles",
         e,
-        `Needs a WORKOS_API_KEY that can write /authorization/roles. Without the "${ADMIN_ROLE_SLUG}" role every admin-gated tool answers 403 to every member`,
+        "Needs a WORKOS_API_KEY that can write /authorization/roles",
       );
     }
   } else {
-    skip("workos", "WorkOS roles", "not requested (pass `workos: true`)");
+    skip("workos", "WorkOS roles", "none declared; `admin`/`member` ship with the environment");
   }
 
   const plans = opts.plans

@@ -27,30 +27,19 @@ export interface WorkOSRoleSpec {
   description?: string;
 }
 
-/**
- * The roles this library's own behaviour depends on.
- *
- * A WorkOS environment normally ships with both, so this is usually a no-op — but
- * "usually" is not a guarantee, and the failure mode is bad enough to be worth
- * asserting: `enforceAdmin` refuses with 403 when `adapter.isAdmin` says no, and
- * `isAdmin` asks whether the member's role slug is `admin`. No such role in the
- * environment means no membership can carry it, so **every admin-gated tool refuses
- * every human** — seat assignment, top-up approval, the spend ceiling, plan changes.
- * Org API keys are unaffected (they carry no principal and are owner-level), which is
- * exactly why this survives a headless test pass and fails on the first real person.
- */
-export const DEFAULT_WORKOS_ROLES: WorkOSRoleSpec[] = [
-  {
-    slug: ADMIN_ROLE_SLUG,
-    name: "Admin",
-    description: "Full access to the workspace, its billing and its members.",
-  },
-  {
-    slug: "member",
-    name: "Member",
-    description: "Uses the workspace. Cannot change billing or manage members.",
-  },
-];
+// There is deliberately NO default role list.
+//
+// A WorkOS environment ships with `admin` and `member` already (verified against a
+// live one), so provisioning them would be a step that never fires while reading like
+// it does something — and it would cost a `listEnvironmentRoles` call on every deploy
+// to discover that. What the API is genuinely good for is the roles an APP invents,
+// which only the app knows. So this creates what you name and nothing else.
+//
+// The `admin` slug is still WORTH CHECKING, which the doctor does, and that is a
+// different claim: not "did we create it" but "does the slug `isAdmin` matches on
+// exist here". A team that renames or deletes it gets `isAdmin` false for everyone
+// and a 403 from every admin-gated tool, while org API keys keep working — which is
+// why that one survives a headless pass and fails on the first real person.
 
 export interface EnsureRolesResult {
   created: string[];
@@ -58,7 +47,8 @@ export interface EnsureRolesResult {
 }
 
 /**
- * Create any missing environment roles. Idempotent, and safe on every deploy.
+ * Create any of YOUR environment roles that are missing. Idempotent, safe on every
+ * deploy, and a no-op (no request at all) when you name none.
  *
  * Which environment is decided by `WORKOS_API_KEY`, exactly as the Stripe half is
  * decided by `STRIPE_SECRET_KEY`.
@@ -66,7 +56,10 @@ export interface EnsureRolesResult {
 export async function ensureWorkOSRoles(
   opts: { roles?: WorkOSRoleSpec[] } = {},
 ): Promise<EnsureRolesResult> {
-  const wanted = opts.roles ?? DEFAULT_WORKOS_ROLES;
+  const wanted = opts.roles ?? [];
+  // Nothing asked for, nothing read: the common case must not spend a round trip
+  // discovering that it had nothing to do.
+  if (!wanted.length) return { created: [], existing: [] };
   const workos = getWorkOS();
 
   const list = await workos.authorization.listEnvironmentRoles();

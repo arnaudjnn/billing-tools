@@ -437,14 +437,14 @@ export {
 // Provision + verify one Stripe environment in one call — the deploy-time twin of
 // the lazy provisioning the request path does. `billing-tools dev` / `doctor` (the
 // bin) cover the parts that need no app config.
-// The WorkOS half of provisioning: the roles this library's own gate depends on.
-// AuthKit redirect URIs stay manual — v10 has no API for them.
+// The WorkOS half of provisioning: the roles an APP invents (`admin`/`member` ship
+// with the environment, so there is no default list). AuthKit redirect URIs stay
+// manual — v10 has no API for them, so the doctor prints the URI instead.
 export {
   ensureWorkOSRoles,
   listWorkOSRoleSlugs,
   oauthCallbackUri,
   ADMIN_ROLE_SLUG,
-  DEFAULT_WORKOS_ROLES,
   type WorkOSRoleSpec,
   type EnsureRolesResult,
 } from "./workos-setup.js";
