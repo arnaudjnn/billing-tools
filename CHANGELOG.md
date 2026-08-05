@@ -1,3 +1,10 @@
+# [15.15.0](https://github.com/arnaudjnn/billing-tools/compare/v15.14.0...v15.15.0) (2026-08-05)
+
+
+### Features
+
+* **routes:** let a route carry a principal, and answer 403 with 403 ([6c15bba](https://github.com/arnaudjnn/billing-tools/commit/6c15bba8c67608bc723126b1a6ce0fe3d64cda23))
+
 # [15.14.0](https://github.com/arnaudjnn/billing-tools/compare/v15.13.0...v15.14.0) (2026-08-05)
 
 
