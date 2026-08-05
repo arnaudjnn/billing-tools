@@ -1,3 +1,10 @@
+# [15.13.0](https://github.com/arnaudjnn/billing-tools/compare/v15.12.0...v15.13.0) (2026-08-05)
+
+
+### Features
+
+* **checkout:** expose taxIdRequired, and record what it cannot do ([79b3d3a](https://github.com/arnaudjnn/billing-tools/commit/79b3d3a90c966c63632e222db8184bb59e63be4d))
+
 # [15.12.0](https://github.com/arnaudjnn/billing-tools/compare/v15.11.0...v15.12.0) (2026-08-05)
 
 
