@@ -546,4 +546,4 @@ export { listCustomerTaxIds, setCustomerTaxId } from "./tax-ids.js";
 export type { CustomerTaxId } from "./tax-ids.js";
 
 export { LOCAL_TAX_ORIGINS, isLocalTaxOrigin, type LocalTaxOrigin } from "./tax-origins.js";
-export type { TaxConfig, TaxCalculator, TaxCalculation } from "./types.js";
+export type { TaxConfig } from "./types.js";

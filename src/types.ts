@@ -197,85 +197,6 @@ export interface BillingConfig {
   };
 }
 
-// `tax` and `paymentMethods` stay optional: they are "unset means Stripe's own
-// behaviour", which is not a value `resolveConfig` can invent.
-/**
- * A third-party tax calculation, as an injected function.
- *
- * `mode: "external"` exists because the two built-in answers do not cover everyone:
- * `local` cannot compute US sales tax (no national rate exists), and Stripe Tax costs
- * 0.5% of every taxed transaction. A provider — Numeral, Anrok, Kintsugi, Vertex — sits
- * between them, and the calculation is INJECTED rather than built in so this package
- * keeps no network I/O and stays testable offline.
- *
- * **No adapter ships.** One did briefly, for Numeral, written from a docs summary
- * rather than the OpenAPI spec — and it could not have worked: the version header is
- * mandatory, `customer` / `origin_address` / `order_details` are all required, and the
- * response carries `total_tax_amount` rather than any rate field, so it would have
- * thrown on every call. Writing an adapter needs the provider's spec in front of you
- * and one real call against a sandbox. This type is the contract for doing that.
- *
- * Return `null` to mean "no tax applies", which is charged as untaxed. Throwing is
- * also honest — it refuses the charge rather than guessing, which is what this library
- * does everywhere else when it cannot answer.
- */
-export type TaxCalculator = (input: {
-  /** The Stripe customer the charge is for. */
-  customerId: string;
-  /** Destination, from the customer's Stripe address. */
-  country?: string;
-  state?: string | null;
-  postalCode?: string | null;
-  city?: string | null;
-  line1?: string | null;
-  /** The customer's tax id, if one is on file. Decides B2B treatment. */
-  taxNumber?: string | null;
-}) => Promise<TaxCalculation | null> | TaxCalculation | null;
-
-// ── What this seam CANNOT do yet, stated so nobody rediscovers it ──────────────
-//
-// It passes a place of supply and expects a RATE back. That fits a rate-lookup
-// service, and it does NOT fit the major providers: Numeral, Anrok and Stripe's own
-// Tax API all take a BASKET (line items, quantities, currency) and return a tax
-// AMOUNT, because the amount is what gets filed. Two things block wiring one here:
-//
-//   1. `taxFor(customerId, tax)` has no basket to pass. The charge sites all know it
-//      — the Checkout Session, the auto-reload invoice, the top-up — so threading
-//      `currency` + `lineItems` through is the change that unblocks this, and it is a
-//      breaking signature change to an exported function on a money path.
-//   2. A returned amount has to become a percentage to ride a Stripe TaxRate, and
-//      that conversion can drift a cent from the provider's own figure — which is the
-//      figure on their return.
-//
-// Until both are settled, `mode: "stripe"` is the supported answer for a US
-// establishment: Stripe owns the calculation AND the invoice, so no conversion exists
-// to be wrong. An adapter written against this seam today must be for a provider that
-// answers with a rate.
-
-/**
- * What a `TaxCalculator` answers. Applied as an explicit Stripe TaxRate.
- *
- * **A percentage, and that is an impedance mismatch worth knowing.** This library
- * applies tax as a Stripe `TaxRate`, which is a percentage of the line — but providers
- * return an AMOUNT (`total_tax_amount`), because that is what gets filed. Converting
- * amount → percent can drift a cent from the provider's own figure on some baskets, and
- * the provider's figure is the one on the return. If that matters for your volume, do
- * not use this seam: charge through a provider that writes the amount itself, or use
- * `mode: "stripe"`, where Stripe owns both the calculation and the invoice.
- */
-export type TaxCalculation = {
-  /** e.g. 8.875 for 8.875%. Zero is a valid answer and means no tax is due. */
-  percent: number;
-  /** What the invoice line says. Keep to 50 chars — Stripe's TaxRate limit. */
-  displayName?: string;
-  /** ISO country the rate belongs to, for the TaxRate object. */
-  country?: string;
-  /** True for a tax already included in the price. */
-  inclusive?: boolean;
-  /** Set where the customer accounts for the tax, so the invoice says so. */
-  reverseCharge?: boolean;
-};
-
 /** Settings every tax mode shares. */
 type TaxConfigCommon = {
   /**
@@ -337,7 +258,7 @@ type TaxConfigCommon = {
    * **Wins over `mode` when it returns any**, because the hook exists to be
    * authoritative — which also makes it the one place a setting can go quietly dead:
    * whatever this function does not account for is not applied, whatever the config
-   * says. Prefer `mode: "external"` with a `calculate` for a third-party provider;
+   * says. Use `mode: "stripe"` for an establishment the local engine cannot compute;
    * this is for per-ORG rates that `config.tax` cannot express.
    */
   rates?: (stripeCustomerId: string) => Promise<string[]> | string[];
@@ -380,7 +301,7 @@ export type TaxConfig = TaxConfigCommon &
          *
          * Constrained to the countries the local engine has rates for. If yours is
          * absent — the US above all — that is a fact about published rate data, not an
-         * omission: use `mode: "stripe"` or `mode: "external"`.
+         * omission: use `mode: "stripe"`.
          *
          * Omitted, it falls back to the Stripe account's own country, and a fallback
          * the local engine cannot compute is caught at boot instead.
@@ -392,14 +313,6 @@ export type TaxConfig = TaxConfigCommon &
          *  registrations — without one it returns ZERO tax rather than an error. */
         mode: "stripe";
         origin?: string;
-      }
-    | {
-        /** A third-party provider, injected. See `TaxCalculator`. */
-        mode: "external";
-        origin?: string;
-        /** Your provider. None ships — see the note on `TaxCalculator` for why, and
-         *  for what it cannot reach yet. */
-        calculate: TaxCalculator;
       }
     | {
         /** No tax on anything the library charges. Correct for an account that
@@ -415,7 +328,7 @@ export type ResolvedConfig = Required<Omit<BillingConfig, "tax" | "paymentMethod
 
 
 /** `taxModeOf` without importing tax.ts, which imports this file. Same precedence. */
-function taxModeOfConfig(tax: TaxConfig | undefined): "local" | "stripe" | "external" | "none" {
+function taxModeOfConfig(tax: TaxConfig | undefined): "local" | "stripe" | "none" {
   if (tax?.mode) return tax.mode;
   if (tax?.automatic) return "stripe";
   return "local";
@@ -440,8 +353,7 @@ export function resolveConfig(c: BillingConfig): ResolvedConfig {
         "has rates for 45 European countries and no others, so it cannot compute a " +
         `domestic rate for ${declared}. That is a fact about published rate data, not a ` +
         'gap — use `mode: "stripe"` (Stripe Tax, 0.5% per taxed transaction, and the ' +
-        'supported answer for a US establishment), or `mode: "external"` with your own ' +
-        "`calculate` if you have a provider that answers with a rate.",
+        "supported answer for a US establishment).",
     );
   }
   return {

@@ -582,17 +582,6 @@ export type TaxMode =
   | "local"
   /** Stripe Tax (`automatic_tax`). Requires registrations, or it computes 0%. */
   | "stripe"
-  /**
-   * A third-party provider, injected as `config.tax.calculate`.
-   *
-   * The middle ground the other two leave open: `local` cannot compute US sales tax
-   * because no national rate exists, and Stripe Tax bills 0.5% of every taxed
-   * transaction. The calculation is injected rather than built in, so this package
-   * keeps no network I/O and stays testable offline. No adapter ships: the seam passes
-   * an address and expects a RATE, which does not fit Numeral, Anrok or Stripe's Tax
-   * API — those take a basket and return an amount. See `TaxCalculator` in types.ts.
-   */
-  | "external"
   /** No tax on anything the library charges. */
   | "none";
 
@@ -696,42 +685,6 @@ export async function taxFor(
       return { automaticTax: true };
     case "none":
       return {};
-    case "external": {
-      // A provider answers, and the answer is applied the same way the local engine's
-      // is — as an explicit Stripe TaxRate — so it renders on the invoice, dedupes
-      // through the same cache, and needs no per-charge-site wiring.
-      //
-      // The provider is NOT called when there is no customer to place: a calculation
-      // without a destination is a guess, and this library refuses rather than guesses.
-      const calculate = tax && "calculate" in tax ? tax.calculate : undefined;
-      if (!calculate || !stripeCustomerId) return {};
-      const where = await customerPlaceOfSupply(stripeCustomerId);
-      // Deliberately NOT caught. A provider that is down or misconfigured must refuse
-      // the charge, not silently untax it — the whole reason to pay one is that its
-      // answer is the authority, and an exception here is louder than a 0% invoice
-      // nobody reads. `mode: "none"` is how a deployment says "charge no tax".
-      const result = await calculate({
-        customerId: stripeCustomerId,
-        country: where?.country,
-        state: where?.state,
-        postalCode: where?.postalCode,
-        taxNumber: where?.taxNumber,
-      });
-      if (!result) return {};
-      const id = await ensureStripeTaxRate(
-        {
-          percent: result.percent,
-          reverseCharge: result.reverseCharge ?? false,
-          country: (result.country ?? where?.country ?? "").toUpperCase(),
-          type: result.percent > 0 ? "tax" : "none",
-        },
-        { displayName: result.displayName ?? noteFor(
-            { percent: result.percent, reverseCharge: result.reverseCharge ?? false, country: "", type: "none" },
-            tax?.notes,
-          ) },
-      );
-      return id ? { taxRates: [id] } : {};
-    }
     case "local": {
       const originCountry = await originFor(tax);
       if (!originCountry) {

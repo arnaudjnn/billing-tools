@@ -1,4 +1,4 @@
-// WHO calculates: `local`, `stripe`, `external`, `none` — and the two properties that
+// WHO calculates: `local`, `stripe`, `none` — and the two properties that
 // make the choice safe.
 //
 // 1. A `local` origin the engine has no rates for is impossible to configure. The type
@@ -44,7 +44,9 @@ test("`local` with an origin it cannot compute throws AT BOOT", () => {
       assert.match(e.message, /cannot be used with mode "local"/);
       // A refusal that names no alternative is just a wall.
       assert.match(e.message, /mode: "stripe"/);
-      assert.match(e.message, /mode: "external"/);
+      // And it must not offer `external`, which was removed: an alternative that does
+      // not exist is worse than none, because someone would go looking for it.
+      assert.doesNotMatch(e.message, /mode: "external"/);
       // And it must not point at anything that does not exist — the message named a
       // `numeralTax` adapter that has since been removed for not working.
       assert.doesNotMatch(e.message, /numeralTax/);
@@ -61,74 +63,7 @@ test("but the same origin is fine under every other mode", () => {
   for (const mode of ["stripe", "none"]) {
     assert.doesNotThrow(() => resolveConfig({ ...base, tax: { mode, origin: "US" } }));
   }
-  assert.doesNotThrow(() =>
-    resolveConfig({ ...base, tax: { mode: "external", origin: "US", calculate: () => null } }),
-  );
   // And a covered origin on local is untouched.
   assert.doesNotThrow(() => resolveConfig({ ...base, tax: { origin: "FR" } }));
   assert.doesNotThrow(() => resolveConfig({ ...base, tax: undefined }));
-});
-
-test("`external` applies the provider's answer as a Stripe TaxRate", async () => {
-  invalidateTaxOrigin();
-  invalidateTaxRates();
-  const minted = [];
-  __setStripeForTests({
-    accounts: { retrieve: async () => ({ id: "acct", country: "US" }) },
-    customers: {
-      retrieve: async () => ({
-        deleted: false,
-        address: { country: "US", state: "NY", postal_code: "10001" },
-        tax_ids: { data: [] },
-      }),
-    },
-    taxRates: {
-      list: () => stripeList([]),
-      create: async (p) => {
-        minted.push(p);
-        return { id: `txr_${minted.length}`, ...p };
-      },
-    },
-  });
-
-  const seen = [];
-  const out = await taxFor("cus_1", {
-    mode: "external",
-    origin: "US",
-    calculate: (input) => {
-      seen.push(input);
-      return { percent: 8.875, displayName: "New York City", country: "US" };
-    },
-  });
-
-  assert.deepEqual(out, { taxRates: ["txr_1"] });
-  assert.equal(minted[0].percentage, 8.875);
-  assert.equal(minted[0].display_name, "New York City");
-  // The postal code is threaded through, because US tax is destination-based below the
-  // state and a provider given only "NY" cannot answer for a city surcharge.
-  assert.equal(seen[0].postalCode, "10001");
-  assert.equal(seen[0].state, "NY");
-  assert.equal(seen[0].customerId, "cus_1");
-});
-
-test("a provider that throws REFUSES the charge rather than untaxing it", async () => {
-  invalidateTaxOrigin();
-  __setStripeForTests({
-    accounts: { retrieve: async () => ({ id: "acct", country: "US" }) },
-    customers: {
-      retrieve: async () => ({ deleted: false, address: { country: "US" }, tax_ids: { data: [] } }),
-    },
-    taxRates: { list: () => stripeList([]), create: async (p) => ({ id: "txr_x", ...p }) },
-  });
-  await assert.rejects(
-    () =>
-      taxFor("cus_1", {
-        mode: "external",
-        calculate: () => {
-          throw new Error("provider down");
-        },
-      }),
-    /provider down/,
-    "a 0% invoice is the failure nobody notices; the exception is the point",
-  );
 });

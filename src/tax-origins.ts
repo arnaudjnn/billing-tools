@@ -25,8 +25,9 @@ export const LOCAL_TAX_ORIGINS = [
  *
  * If your establishment is not in this list — the United States above all — the local
  * mode cannot help you, and that is a fact about published rate data rather than a
- * gap someone forgot to fill. Use `mode: "stripe"`, or `mode: "external"` with a
- * provider that covers you.
+ * gap someone forgot to fill. Use `mode: "stripe"`, which is the supported answer for
+ * a US establishment — Stripe owns both the calculation and the invoice, so no rate
+ * conversion exists to be wrong.
  */
 export type LocalTaxOrigin = (typeof LOCAL_TAX_ORIGINS)[number];
 

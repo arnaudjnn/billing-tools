@@ -403,3 +403,37 @@ test("the CLI registers the same groups the tools do", async () => {
     assert.ok(ungated.has(v), `no catalogue must register everything, missing \`${v}\``);
   }
 });
+
+// ── A removed mode stays removed ─────────────────────────────────────────────
+//
+// `mode: "external"` took an injected calculator for a third-party provider and no
+// adapter ever shipped — but the reason it went is that the SEAM could not reach one:
+// it passed an address and expected a RATE, while every such provider takes a basket
+// and returns an AMOUNT. An extension point that cannot reach the thing it exists for
+// is a false statement about what the library supports.
+//
+// This asserts it does not come back by accident, and that nothing still POINTS at it —
+// an error message offering an alternative that no longer exists sends someone looking.
+test("the external tax mode is gone, and nothing advertises it", () => {
+  const files = [];
+  const walk = (dir) => {
+    for (const e of readdirSync(dir)) {
+      if (e === "node_modules" || e === "dist") continue;
+      const p = join(dir, e);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (/\.tsx?$/.test(e)) files.push(p);
+    }
+  };
+  walk(join(ROOT, "src"));
+
+  for (const f of files) {
+    const src = readFileSync(f, "utf8");
+    const rel = f.replace(ROOT + "/", "");
+    assert.ok(!/mode:\s*"external"/.test(src), `${rel} still references mode: "external"`);
+    assert.ok(!/\bTaxCalculator\b/.test(src), `${rel} still references TaxCalculator`);
+  }
+
+  // And the boot refusal must not offer it as the way out.
+  const types = readFileSync(join(ROOT, "src/types.ts"), "utf8");
+  assert.ok(!types.includes('`mode: "external"`'), "the resolveConfig error still offers external");
+});
