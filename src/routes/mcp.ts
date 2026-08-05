@@ -17,6 +17,22 @@ export interface McpTransportOptions {
   /** Advertise the auth.md PRM discovery doc in the 401 WWW-Authenticate header
    *  (`resource_metadata="…"`) so agents can bootstrap. String or per-request. */
   resourceMetadata?: string | ((request: Request) => string);
+  /**
+   * Require a resolvable org before the MCP handler runs at all, so the HANDSHAKE
+   * is gated too — `initialize` and `tools/list`, not just the tool calls.
+   *
+   * Default false, which is the looser posture and the one every deployment on this
+   * factory already has: each tool calls `enforceAccess` itself, so an anonymous
+   * client can complete the handshake and enumerate the catalogue, then be refused
+   * on every call. That is fine for a public catalogue and wrong for a private one —
+   * "which tools exist, and what do they cost" is itself information, and an
+   * unauthenticated client that connects successfully and fails on use looks like a
+   * broken product rather than a closed door.
+   *
+   * On, a request with no usable credential gets 401 + `WWW-Authenticate` before the
+   * handler is reached, which is also what starts OAuth discovery.
+   */
+  requireAuth?: boolean;
 }
 
 function wwwAuth(realm: string, resourceMetadata?: string): string {
@@ -56,6 +72,32 @@ export function createMcpTransport(opts: McpTransportOptions) {
       const orgId = await opts.adapter.resolveOauthOrg(token);
       if (orgId) return runWithResolvedOrg(authHeader, orgId, () => mcp(request));
     }
+
+    // Gated: resolve the org HERE, so a caller with no usable credential never
+    // reaches the handshake. An API key is validated through the adapter; anything
+    // else has already had its chance above.
+    if (opts.requireAuth) {
+      let orgId: string | null = null;
+      if (token) {
+        try {
+          orgId = token.startsWith(apiKeyPrefix)
+            ? ((await opts.adapter.validateApiKey(token))?.orgId ?? null)
+            : null;
+        } catch {
+          orgId = null;
+        }
+      }
+      if (!orgId) {
+        return Response.json(
+          { error: "unauthorized" },
+          { status: 401, headers: { "WWW-Authenticate": wwwAuth(realm, rm) } },
+        );
+      }
+      // Pre-resolved, so `enforceAccess` reads it from the store rather than
+      // validating the same key a second time on every tool call.
+      return runWithResolvedOrg(authHeader, orgId, () => mcp(request));
+    }
+
     const res = await runWithAuth(authHeader, () => mcp(request));
     return withAuthHeader(res, rm);
   }

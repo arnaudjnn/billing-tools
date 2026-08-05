@@ -71,7 +71,9 @@ export interface CreateBillingOptions {
    */
   webhook?: (WebhookOptions & { currency?: string }) | false;
   /** MCP transport overrides. */
-  mcp?: { apiKeyPrefix?: string; maxDuration?: number };
+  /** MCP transport overrides. `requireAuth` gates the handshake itself — see
+   *  `createMcpTransport`. */
+  mcp?: { apiKeyPrefix?: string; maxDuration?: number; requireAuth?: boolean };
   /** Enable MPP machine payments (pay-per-request 402). Omit to leave it off. */
   machinePayment?: MachinePaymentOptions;
   /** Enable the MCP OAuth 2.1 + Dynamic Client Registration proxy, so MCP
@@ -197,6 +199,7 @@ export function createBilling(opts: CreateBillingOptions) {
     realm: opts.realm,
     apiKeyPrefix: opts.mcp?.apiKeyPrefix,
     maxDuration: opts.mcp?.maxDuration,
+    requireAuth: opts.mcp?.requireAuth,
     resourceMetadata,
   });
   const webhook =

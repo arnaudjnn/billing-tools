@@ -79,8 +79,20 @@ export function createToolDispatchHandler(opts: {
         if (/\bUnauthorized\b|\b401\b/i.test(message)) {
           return Response.json({ error: message }, { status: 401, headers: { "WWW-Authenticate": wwwAuth(realm, rm) } });
         }
+        // 402 for an empty wallet, because this library is the one that WROTE that
+        // message (`enforceCredits`, `describeDenial`) and 500 tells the caller the
+        // server is broken when the truthful answer is "buy credits" — the one
+        // refusal an agent can act on without a human. A consumer had already
+        // hand-rolled this mapping over the same string; it belongs here, next to
+        // the 401 and 429 that were already mapped for the same reason.
         const status =
-          err instanceof ToolValidationError ? 400 : message.includes("Unknown tool") ? 404 : 500;
+          err instanceof ToolValidationError
+            ? 400
+            : /\bInsufficient credits\b/i.test(message)
+              ? 402
+              : message.includes("Unknown tool")
+                ? 404
+                : 500;
         return Response.json({ error: message }, { status });
       }
     });
