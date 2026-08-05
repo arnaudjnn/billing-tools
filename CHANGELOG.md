@@ -1,3 +1,10 @@
+## [15.15.1](https://github.com/arnaudjnn/billing-tools/compare/v15.15.0...v15.15.1) (2026-08-05)
+
+
+### Bug Fixes
+
+* **subscription:** four plan-change defects a real Stripe request surfaces ([5f875a5](https://github.com/arnaudjnn/billing-tools/commit/5f875a5777015f0784a7b4f9f9eba15fe8f7f664))
+
 # [15.15.0](https://github.com/arnaudjnn/billing-tools/compare/v15.14.0...v15.15.0) (2026-08-05)
 
 
