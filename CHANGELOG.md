@@ -1,3 +1,10 @@
+## [15.15.2](https://github.com/arnaudjnn/billing-tools/compare/v15.15.1...v15.15.2) (2026-08-05)
+
+
+### Bug Fixes
+
+* **deps:** move commander in the lockfile, so CI can install again ([120f1d5](https://github.com/arnaudjnn/billing-tools/commit/120f1d50abeb5d815544a8e0765ad1bc8333838e))
+
 ## [15.15.1](https://github.com/arnaudjnn/billing-tools/compare/v15.15.0...v15.15.1) (2026-08-05)
 
 
