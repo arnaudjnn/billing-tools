@@ -184,3 +184,28 @@ test("a matching origin says so, and silence where there is nothing to contradic
     undefined,
   );
 });
+
+test("an undeclared origin on a non-European account is an ERROR, not a warning", async () => {
+  // The one case neither the type system nor `resolveConfig` can see: omitting the
+  // field is legal, and resolveConfig is synchronous so it cannot read the account.
+  // Every charge would go out untaxed with a console warning as its only signal —
+  // which is the whole argument for the doctor existing rather than being replaced by
+  // "just read Stripe".
+  __setStripeForTests(fakeStripe({ country: "US" }));
+  const r = await checkBillingSetup({ config: config(undefined) });
+  const origin = find(r, "Tax origin");
+  assert.equal(origin?.level, "error");
+  assert.match(origin.detail, /not one of the 45/);
+  assert.equal(r.healthy, false, "untaxed charges must fail the run");
+
+  // A European account needs no declaration — the fallback is the documented design.
+  __setStripeForTests(fakeStripe({ country: "IT" }));
+  assert.equal(find(await checkBillingSetup({ config: config(undefined) }), "Tax origin"), undefined);
+
+  // And `mode: "none"` is how "untaxed, deliberately" is said, so it is not flagged.
+  __setStripeForTests(fakeStripe({ country: "US" }));
+  assert.equal(
+    find(await checkBillingSetup({ config: config({ mode: "none" }) }), "Tax origin"),
+    undefined,
+  );
+});

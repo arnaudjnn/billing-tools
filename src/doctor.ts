@@ -10,6 +10,7 @@ import {
 import { USAGE_SCOPE_KIND } from "./usage-scopes.js";
 import { BILLING_WEBHOOK_EVENTS } from "./webhook-setup.js";
 import { taxModeOf, type TaxMode } from "./tax.js";
+import { isLocalTaxOrigin } from "./tax-origins.js";
 import {
   ADMIN_ROLE_SLUG,
   listWorkOSRoleSlugs,
@@ -136,6 +137,24 @@ export async function checkBillingSetup(opts: {
   // A WARNING, not an error: Stripe's onboarding country is where the business is
   // established, so a mismatch is nearly always a config mistake — but "nearly", and a
   // doctor that hard-fails a legitimate setup is one people learn to skip.
+  // The case nothing else can catch: no origin declared, and the account's country is
+  // outside the 45 the local dataset covers.
+  //
+  // `resolveConfig` validates a DECLARED origin at boot and throws — but it is
+  // synchronous, and this needs the account, so it cannot see this one. The type system
+  // cannot either: omitting the field is legal. AGENTS.md's own words for it are "a US
+  // Stripe account with no declared origin is a local-mode US seller that typechecks
+  // perfectly and then refuses its first charge". This is the only place it is visible
+  // before that charge, which is the argument for the doctor existing at all.
+  if (taxMode === "local" && !opts.config?.tax?.origin && account.country && !isLocalTaxOrigin(account.country)) {
+    checks.push({
+      level: "error",
+      title: "Tax origin",
+      detail: `nothing declared, and the Stripe account's country (${account.country}) is not one of the 45 this library has rates for`,
+      fix: `Every charge will go out UNTAXED with a console warning as the only signal. Declare \`tax: { mode: "stripe" }\` — the supported answer for a US establishment — or \`mode: "none"\` if untaxed is deliberate`,
+    });
+  }
+
   if (taxMode === "local" && opts.config?.tax?.origin && account.country) {
     const declared = opts.config.tax.origin;
     checks.push(
