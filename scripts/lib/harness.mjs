@@ -187,9 +187,17 @@ export function defer(label, fn) {
 export function ignoreMissing(e) {
   const message = e instanceof Error ? e.message : String(e);
   const code = e?.code ?? e?.raw?.code;
-  if (code === "resource_missing" || e?.statusCode === 404 || /No such |already been deleted/i.test(message)) {
-    return null;
-  }
+  const missing =
+    // Stripe
+    code === "resource_missing" ||
+    e?.statusCode === 404 ||
+    e?.status === 404 ||
+    /No such |already been deleted/i.test(message) ||
+    // WorkOS words it differently and throws its own class — the first version of this only
+    // knew Stripe's phrasing, so three already-deleted objects were reported as LEAKED.
+    e?.constructor?.name === "NotFoundException" ||
+    /\bnot found\b/i.test(message);
+  if (missing) return null;
   throw e;
 }
 

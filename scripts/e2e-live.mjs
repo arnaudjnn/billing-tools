@@ -61,6 +61,8 @@ const SECTIONS = [
   // last — 05 has already advanced the shared clock past a period boundary.
   ["07", "mid-cycle documents", () => import("./live/07-mid-cycle-documents.mjs")],
   ["08", "plan moves", () => import("./live/08-plan-moves.mjs")],
+  ["09", "roles and isolation", () => import("./live/09-roles-and-isolation.mjs")],
+  ["10", "workspace close", () => import("./live/10-workspace-close.mjs")],
 ];
 
 async function main() {

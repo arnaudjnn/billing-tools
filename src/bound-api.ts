@@ -30,7 +30,7 @@
 // there is nothing to bind, and `api.customerId(orgId)` is the one line that gets
 // you from one to the other. Importing them from the root is already the short way.
 
-import { enforceAccess, enforceAdmin, enforceCredits, isInternalOrg } from "./auth.js";
+import { enforceAccess, enforceAdmin, enforceCredits, enforceMember, isInternalOrg } from "./auth.js";
 import {
   ensureStripeCustomer,
   getBillingCustomerId,
@@ -48,7 +48,7 @@ import {
   listPaymentMethods,
   setDefaultPaymentMethod,
 } from "./payment-methods.js";
-import { assignSeatType, getSeatType, listSeatAssignments } from "./seats.js";
+import { assignSeatType, clearMemberRecords, getSeatType, listSeatAssignments } from "./seats.js";
 import { cancelPlan, changePlan, previewPlanChange } from "./subscription.js";
 import {
   approveTopUp,
@@ -59,6 +59,7 @@ import {
   listTopUpRequests,
   requestTopUp,
 } from "./topup.js";
+import { closeWorkspace, findOrphanedSubscriptions } from "./close-workspace.js";
 import { currentCycle, resolveAllowance } from "./allowance.js";
 import { memberUsage, usageSummary } from "./usage.js";
 import type { PlanCatalog } from "./plans.js";
@@ -158,6 +159,10 @@ export function createBoundApi(deps: BoundApiDeps) {
     seats: {
       list: (orgId: string) => listSeatAssignments(adapter, orgId),
       get: (orgId: string, memberId: string) => getSeatType(adapter, orgId, memberId),
+      /** Drop a workspace's entries from these members' own metadata — what `workspace.close`
+       *  calls, and what removing a single member should call for that member. */
+      clearRecords: (orgId: string, memberIds: readonly string[]) =>
+        clearMemberRecords(adapter, orgId, memberIds),
       assign: (orgId: string, memberId: string, seatType: string | null) =>
         assignSeatType(adapter, orgId, memberId, seatType),
     },
@@ -239,6 +244,20 @@ export function createBoundApi(deps: BoundApiDeps) {
         extraAllowance(adapter, orgId, memberId, cycle),
     },
 
+    workspace: {
+      /**
+       * Close a workspace: stop its billing, KEEP its invoices, return each member's metadata
+       * budget, then remove it — in that order, and it refuses to remove one whose billing is
+       * still live. The old one-call deletion left a subscription charging a card for a
+       * workspace that no longer existed, with the pointer to it destroyed.
+       */
+      close: (orgId: string, opts?: Parameters<typeof closeWorkspace>[2]) =>
+        closeWorkspace(adapter, orgId, opts),
+      /** Live subscriptions whose org no longer resolves — the wreckage of the old way. */
+      orphans: (opts?: Parameters<typeof findOrphanedSubscriptions>[1]) =>
+        findOrphanedSubscriptions(adapter, opts),
+    },
+
     /**
      * The gates, for a surface that is not an MCP tool.
      *
@@ -250,6 +269,11 @@ export function createBoundApi(deps: BoundApiDeps) {
     auth: {
       access: () => enforceAccess(adapter),
       admin: (action: string) => enforceAdmin(adapter, action),
+      /** Refuse a `member_id` that is not in this workspace. Any surface taking one from a
+       *  caller needs it: the org gate answers "which workspace", never "is this person in
+       *  it". */
+      member: (orgId: string, memberId: string, action: string) =>
+        enforceMember(adapter, orgId, memberId, action),
       credits: (orgId: string, toolName: string, cost: number) =>
         enforceCredits(adapter, config, orgId, toolName, cost),
     },

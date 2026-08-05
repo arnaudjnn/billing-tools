@@ -401,6 +401,17 @@ export class WorkOSOrgAdapter implements BillingAdapter {
    * does not exist in the environment, no membership can carry it, so this returns
    * false and `enforceAdmin` 403s every human.
    */
+  /**
+   * Delete the WorkOS organization.
+   *
+   * Only ever call this through `closeWorkspace`, which stops the billing FIRST: the org holds
+   * `stripeCustomerId`, so deleting it destroys the only mapping from a live subscription back
+   * to anything, and the charge keeps recurring with nothing to attribute it to.
+   */
+  async deleteOrg(orgId: string): Promise<void> {
+    await this.workos.organizations.deleteOrganization(orgId);
+  }
+
   async isAdmin(orgId: string, userId: string): Promise<boolean> {
     const r = await this.workos.userManagement.listOrganizationMemberships({
       organizationId: await this.wid(orgId),

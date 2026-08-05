@@ -144,6 +144,11 @@ export interface BillingAdapter {
   listMemberIds?(orgId: string): Promise<string[]>;
   /** Whether a user is an admin/owner of the org (gates auto-top-up + approvals). */
   isAdmin?(orgId: string, userId: string): Promise<boolean>;
+  /** Remove the workspace. Called LAST by `closeWorkspace`, never before its billing has
+   *  been stopped — the org holds the Stripe pointer, so deleting it first orphans the
+   *  subscription. Absent means the caller removes the org itself. */
+  deleteOrg?(orgId: string): Promise<void>;
+
 }
 
 export interface BillingConfig {

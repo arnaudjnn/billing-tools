@@ -20,6 +20,7 @@ export {
   enforceAdmin,
   type Principal,
   enforceCredits,
+  enforceMember,
 } from "./auth.js";
 
 // The two SDK clients. Both are memoised singletons that read the env lazily,
@@ -547,3 +548,10 @@ export type { CustomerTaxId } from "./tax-ids.js";
 
 export { LOCAL_TAX_ORIGINS, isLocalTaxOrigin, type LocalTaxOrigin } from "./tax-origins.js";
 export type { TaxConfig } from "./types.js";
+
+export {
+  closeWorkspace,
+  findOrphanedSubscriptions,
+  type CloseWorkspaceOptions,
+  type CloseWorkspaceResult,
+} from "./close-workspace.js";

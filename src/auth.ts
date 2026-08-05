@@ -137,6 +137,49 @@ export async function enforceAdmin(
   return { authorized: true, orgId: auth.orgId, principal };
 }
 
+/**
+ * Refuse a `member_id` that does not belong to the caller's workspace.
+ *
+ * Three tools take one — `assign_seat_type`, `grant_top_up`, `request_top_up` — and none of
+ * them checked it, so ANY valid org key could name ANY user id in the environment. The org
+ * gate was doing its job and still let this through, because it answers "which workspace is
+ * calling", never "is this person in it".
+ *
+ * What that reaches, measured: all three write to the named user's WorkOS **user** metadata,
+ * which is global to the user rather than scoped to an org. Per-org keying meant the victim's
+ * own seat was not overwritten — so the damage is not a wrong seat, it is the BUDGET. WorkOS
+ * allows 10 keys and 600 characters per value, and `setUserMetadata` rejects the whole object
+ * once it overflows; enough writes from a stranger and the victim's real workspace can no
+ * longer assign a seat or record a grant. A cross-tenant denial of service, from a legitimate
+ * key, against a store whose limits this file already treats as a budget.
+ *
+ * An adapter with no `listMemberIds` cannot answer, so the call is allowed — the same
+ * trade-off `enforceAdmin` documents above, for the same reason: disabling seats and top-ups
+ * outright for every adapter without a membership concept is a worse failure than the one
+ * being prevented. `WorkOSOrgAdapter` has it, so the shipped path is checked.
+ */
+export async function enforceMember(
+  adapter: BillingAdapter,
+  orgId: string,
+  memberId: string,
+  action: string,
+): Promise<ToolErrorResult | null> {
+  if (!adapter.listMemberIds) return null;
+  const members = await adapter.listMemberIds(orgId);
+  if (members.includes(memberId)) return null;
+  return {
+    isError: true,
+    content: [
+      {
+        type: "text",
+        // "Forbidden (403)" is the wire contract the REST and MCP routes pattern-match on,
+        // so this refusal reaches an HTTP caller as a 403 rather than a 500.
+        text: `Forbidden (403): ${action} names a user who is not a member of this workspace.`,
+      },
+    ],
+  };
+}
+
 export async function isInternalOrg(
   adapter: BillingAdapter,
   orgId: string,

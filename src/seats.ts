@@ -121,3 +121,53 @@ export async function getSeatType(
   }
   return (await readOrgMap(adapter, orgId))[memberId] ?? null;
 }
+
+/**
+ * Drop a workspace's entries from each member's own metadata, and report how many were.
+ *
+ * Called when a workspace closes. Both per-member stores are keyed by org
+ * (`{ [orgId]: … }`) precisely so one workspace cannot read or overwrite another's — the same
+ * keying means a closed workspace's entries would otherwise sit in every ex-member's record
+ * for ever, spending a budget measured in characters (10 keys, 600 chars per value) that their
+ * REMAINING workspaces still need. A person who has passed through a few dead workspaces would
+ * eventually be unable to be assigned a seat anywhere.
+ *
+ * A `""` tombstone is NOT written here, unlike a cleared seat: there is no legacy org map left
+ * to fall back to, because the org is going away with it.
+ */
+export async function clearMemberRecords(
+  adapter: BillingAdapter,
+  orgId: string,
+  memberIds: readonly string[],
+): Promise<number> {
+  if (!adapter.getUserMetadata || !adapter.setUserMetadata) return 0;
+  let cleared = 0;
+  for (const memberId of memberIds) {
+    const meta = await adapter.getUserMetadata(memberId).catch(() => null);
+    if (!meta) continue;
+    const patch: Record<string, string | null> = {};
+    for (const key of [MEMBER_KEY, MEMBER_GRANTS_KEY_FOR_CLEANUP]) {
+      const raw = meta[key];
+      if (!raw) continue;
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(raw) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      if (!(orgId in parsed)) continue;
+      delete parsed[orgId];
+      // An empty object is written as null (delete the key) rather than "{}", so the budget is
+      // actually returned rather than merely reduced.
+      patch[key] = Object.keys(parsed).length ? JSON.stringify(parsed) : null;
+    }
+    if (Object.keys(patch).length) {
+      await adapter.setUserMetadata(memberId, patch);
+      cleared++;
+    }
+  }
+  return cleared;
+}
+
+/** Kept beside `MEMBER_KEY` so one cleanup knows both stores. Mirrors topup.ts. */
+const MEMBER_GRANTS_KEY_FOR_CLEANUP = "btTopUpGrants";

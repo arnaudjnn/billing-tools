@@ -9,7 +9,7 @@
 
 import { getWorkOS } from "../../dist/workos.js";
 import { ADMIN_ROLE_SLUG, listWorkOSRoleSlugs } from "../../dist/workos-setup.js";
-import { defer, note } from "./harness.mjs";
+import { defer, ignoreMissing, note } from "./harness.mjs";
 import { RUN } from "./scratch-stripe.mjs";
 
 /**
@@ -41,20 +41,24 @@ export async function preflightRoles() {
  * No `domainData`: a verified domain would make the org match `internalDomains` on some
  * configs and be silently unmetered, which would quietly void the usage assertions.
  */
-export async function createScratchOrg({ name = `E2E Live ${RUN}` } = {}) {
+export async function createScratchOrg({ name = `E2E Live ${RUN}`, suffix = "" } = {}) {
   const workos = getWorkOS();
 
   const org = await workos.organizations.createOrganization({ name });
-  defer(`WorkOS org ${org.id}`, () => workos.organizations.deleteOrganization(org.id));
+  // `ignoreMissing`, because section 10 CLOSES a workspace on purpose: its teardown finding
+  // the org already gone is the one tolerated outcome. Anything else still fails the run.
+  defer(`WorkOS org ${org.id}`, () => workos.organizations.deleteOrganization(org.id).catch(ignoreMissing));
 
   const mkUser = async (role) => {
     const user = await workos.userManagement.createUser({
-      email: `${RUN}-${role}@example.test`,
+      // `suffix` keeps a SECOND org's users from colliding: WorkOS requires a unique email,
+      // so cross-org isolation could not be tested without it.
+      email: `${RUN}${suffix}-${role}@example.test`,
       firstName: role === "admin" ? "Ada" : "Mem",
-      lastName: RUN,
+      lastName: `${RUN}${suffix}`,
       emailVerified: true,
     });
-    defer(`WorkOS user ${role} ${user.id}`, () => workos.userManagement.deleteUser(user.id));
+    defer(`WorkOS user ${role} ${user.id}`, () => workos.userManagement.deleteUser(user.id).catch(ignoreMissing));
 
     const membership = await workos.userManagement.createOrganizationMembership({
       organizationId: org.id,
@@ -62,7 +66,7 @@ export async function createScratchOrg({ name = `E2E Live ${RUN}` } = {}) {
       roleSlug: role,
     });
     defer(`membership ${role} ${membership.id}`, () =>
-      workos.userManagement.deleteOrganizationMembership(membership.id),
+      workos.userManagement.deleteOrganizationMembership(membership.id).catch(ignoreMissing),
     );
     return { userId: user.id, membershipId: membership.id };
   };

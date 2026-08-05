@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { BillingAdapter, ResolvedConfig } from "../types.js";
-import { currentPrincipal, enforceAccess, enforceAdmin } from "../auth.js";
+import { currentPrincipal, enforceAccess, enforceAdmin, enforceMember } from "../auth.js";
 import { getBillingCustomerId, usageSince, stripeConfigured } from "../billing.js";
 import {
   requestTopUp,
@@ -192,6 +192,9 @@ the assignment (back to the default seat).`,
         // wherever the caller is a known person.
         const auth = await enforceAdmin(adapter, "assign_seat_type");
         if ("isError" in auth) return auth;
+        // Being an admin of YOUR workspace says nothing about whether this user is in it.
+        const stranger = await enforceMember(adapter, auth.orgId, member_id, "assign_seat_type");
+        if (stranger) return stranger;
         const st = seat_type && seat_type.length ? seat_type : null;
         if (st && knownSeatTypes.size && !knownSeatTypes.has(st)) {
           return err(`Unknown seat type "${st}". Known: ${[...knownSeatTypes].join(", ") || "(none configured)"}.`);
@@ -243,6 +246,8 @@ approve_top_up). Use when a user seat has hit its per-cycle pack.`,
           const admin = principal.isAdmin ?? (await adapter.isAdmin?.(auth.orgId, principal.userId)) ?? true;
           if (!admin) return err("Forbidden (403): you can only request a top-up for yourself.");
         }
+        const stranger = await enforceMember(adapter, auth.orgId, member_id, "request_top_up");
+        if (stranger) return stranger;
         const id = crypto.randomUUID();
         const c = cycle ?? (await cycleFor(auth.orgId)).key;
         await requestTopUp(adapter, auth.orgId, {
@@ -296,6 +301,8 @@ request it, as a percentage of their own seat pack (default 25%). Admin action.`
         // let a member simply grant themselves what they would have had to ask for.
         const auth = await enforceAdmin(adapter, "grant_top_up");
         if ("isError" in auth) return auth;
+        const stranger = await enforceMember(adapter, auth.orgId, member_id, "grant_top_up");
+        if (stranger) return stranger;
         if (!opts.plans) return err("No plans configured.");
 
         const plan = opts.resolvePlan
