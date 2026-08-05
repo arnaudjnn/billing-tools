@@ -1,3 +1,10 @@
+## [15.6.1](https://github.com/arnaudjnn/billing-tools/compare/v15.6.0...v15.6.1) (2026-08-05)
+
+
+### Bug Fixes
+
+* **cli:** drop commander — describe the shape instead of depending on it ([fe2c3c1](https://github.com/arnaudjnn/billing-tools/commit/fe2c3c1a65c1b269f3d887b623e182f821bc1a90))
+
 # [15.6.0](https://github.com/arnaudjnn/billing-tools/compare/v15.5.1...v15.6.0) (2026-08-05)
 
 
