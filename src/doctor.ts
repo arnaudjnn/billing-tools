@@ -797,7 +797,13 @@ export function formatDoctorResult(result: DoctorResult): { text: string; exitCo
 export function webhookUrlFromArgv(argv: string[], fallback?: string): string | undefined {
   if (argv.includes("--no-webhook")) return undefined;
   const i = argv.indexOf("--url");
-  return i !== -1 ? argv[i + 1] : fallback;
+  if (i !== -1) return argv[i + 1];
+  // `BILLING_WEBHOOK_URL` before the code-level fallback, because WHERE this is
+  // deployed is an environment fact, not a source fact. Hardcoding the production URL
+  // in a script means a laptop holding live keys registers the production endpoint —
+  // both consumers had that string in their ops script with a comment warning about
+  // exactly that. In the env it travels with the environment it describes.
+  return process.env.BILLING_WEBHOOK_URL || fallback;
 }
 
 export interface RunDoctorOptions {
@@ -812,7 +818,9 @@ export interface RunDoctorOptions {
   /** True when a checkout is mounted, so self-serve plans are not flagged as
    *  advertised-but-unbuyable. */
   hasCheckout?: boolean;
-  /** The deployed endpoint, used unless `--url` or `--no-webhook` says otherwise. */
+  /** The deployed endpoint. Lowest precedence: `--url`, then `--no-webhook`, then
+   *  `BILLING_WEBHOOK_URL`, then this. Prefer the env var — where a deployment lives
+   *  is an environment fact, and a production URL in source is one a laptop registers. */
   webhookUrl?: string;
   /** Audit WorkOS too — the other half of the substrate. Pass `{ oauthProxy: true }`
    *  when the app mounts the MCP OAuth proxy, which is what makes

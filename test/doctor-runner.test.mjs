@@ -148,11 +148,39 @@ test("a key that does not name its environment is not accused of anything", () =
 test("the flags parse the same for both verbs", () => {
   // One parser, because both verbs take both flags and the two hand-written copies
   // of this had already drifted.
-  assert.equal(webhookUrlFromArgv(["--no-webhook"], "https://deployed.example/hook"), undefined);
-  assert.equal(webhookUrlFromArgv(["--url", "https://other.example/hook"]), "https://other.example/hook");
-  assert.equal(webhookUrlFromArgv([], "https://deployed.example/hook"), "https://deployed.example/hook");
-  // A flag must not be read as the verb, or `billing --no-webhook` would provision.
-  assert.equal(webhookUrlFromArgv(["setup", "--no-webhook"], "https://x/y"), undefined);
+  const saved = process.env.BILLING_WEBHOOK_URL;
+  delete process.env.BILLING_WEBHOOK_URL;
+  try {
+    assert.equal(webhookUrlFromArgv(["--no-webhook"], "https://deployed.example/hook"), undefined);
+    assert.equal(webhookUrlFromArgv(["--url", "https://other.example/hook"]), "https://other.example/hook");
+    assert.equal(webhookUrlFromArgv([], "https://deployed.example/hook"), "https://deployed.example/hook");
+    // A flag must not be read as the verb, or `billing --no-webhook` would provision.
+    assert.equal(webhookUrlFromArgv(["setup", "--no-webhook"], "https://x/y"), undefined);
+  } finally {
+    if (saved !== undefined) process.env.BILLING_WEBHOOK_URL = saved;
+  }
+});
+
+test("BILLING_WEBHOOK_URL beats the code fallback, and --no-webhook beats both", () => {
+  // Where a deployment lives is an environment fact. Both consumers had their
+  // production URL hardcoded in an ops script, each with a comment warning that
+  // running it from a laptop would register the production endpoint against a test
+  // key — a hazard the env var removes rather than documents.
+  const saved = process.env.BILLING_WEBHOOK_URL;
+  process.env.BILLING_WEBHOOK_URL = "https://from-env.example/hook";
+  try {
+    assert.equal(webhookUrlFromArgv([], "https://in-source.example/hook"), "https://from-env.example/hook");
+    // An explicit flag still wins — it is the most local statement of intent.
+    assert.equal(webhookUrlFromArgv(["--url", "https://flag.example/hook"]), "https://flag.example/hook");
+    // And "there is no endpoint" must beat a stale env var, or a local run checks prod.
+    assert.equal(webhookUrlFromArgv(["--no-webhook"]), undefined);
+    // Empty is not a URL: an unset-but-present var must fall through, not check "".
+    process.env.BILLING_WEBHOOK_URL = "";
+    assert.equal(webhookUrlFromArgv([], "https://in-source.example/hook"), "https://in-source.example/hook");
+  } finally {
+    if (saved === undefined) delete process.env.BILLING_WEBHOOK_URL;
+    else process.env.BILLING_WEBHOOK_URL = saved;
+  }
 });
 
 async function cli(opts) {
