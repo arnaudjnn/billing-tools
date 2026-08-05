@@ -1,3 +1,10 @@
+# [15.6.0](https://github.com/arnaudjnn/billing-tools/compare/v15.5.1...v15.6.0) (2026-08-05)
+
+
+### Features
+
+* **doctor:** read the webhook URL from BILLING_WEBHOOK_URL ([7478b9b](https://github.com/arnaudjnn/billing-tools/commit/7478b9b2e59d3103a024611c56d65ccb7dc5d46c))
+
 ## [15.5.1](https://github.com/arnaudjnn/billing-tools/compare/v15.5.0...v15.5.1) (2026-08-05)
 
 
