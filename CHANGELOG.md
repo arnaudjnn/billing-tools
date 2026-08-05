@@ -1,3 +1,10 @@
+# [15.16.0](https://github.com/arnaudjnn/billing-tools/compare/v15.15.3...v15.16.0) (2026-08-05)
+
+
+### Features
+
+* **workspace:** close a workspace safely, and stop a stranger writing to your members ([ff0ea0c](https://github.com/arnaudjnn/billing-tools/commit/ff0ea0c66fb835ce48e64eb2f7c95d4b60bbd729))
+
 ## [15.15.3](https://github.com/arnaudjnn/billing-tools/compare/v15.15.2...v15.15.3) (2026-08-05)
 
 
