@@ -1,3 +1,10 @@
+## [15.16.2](https://github.com/arnaudjnn/billing-tools/compare/v15.16.1...v15.16.2) (2026-08-05)
+
+
+### Bug Fixes
+
+* **sync:** invoice.subscription no longer exists, and two branches were dead ([8b1c632](https://github.com/arnaudjnn/billing-tools/commit/8b1c63210d33295e158b738edb132ae90279c38b))
+
 ## [15.16.1](https://github.com/arnaudjnn/billing-tools/compare/v15.16.0...v15.16.1) (2026-08-05)
 
 
