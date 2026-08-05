@@ -36,3 +36,9 @@ export * from "../i18n.js";
 // abstraction is exactly what lets a non-WorkOS adapter satisfy the interface, and
 // it is why they belong in a pure entry.
 export * from "../types.js";
+
+// The seller's own regime → `config.tax`. Pure: three facts in, a plain object out, so
+// it belongs on the leaf beside the config types it builds. A consumer's catalogue and
+// its entity declaration are the same module more often than not, and neither should
+// have to reach the engine to state where the business is established.
+export { sellerRegime, type SellerRegime } from "../tax-regime.js";
