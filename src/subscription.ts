@@ -219,6 +219,32 @@ async function desiredPrices(
   return desired;
 }
 
+/**
+ * A stable, compact fingerprint of the item mutations a plan change will send.
+ *
+ * It covers the SUBSCRIPTION ITEM ids, not just prices, which is the part that is easy to
+ * get wrong: upgrade → downgrade → upgrade back returns to the same prices and quantities,
+ * so a key built from those alone repeats — while the request does not, because a released
+ * schedule replaces the items and the diff now deletes a different `si_…`. Stripe answers a
+ * reused key whose params changed with a 400 naming a key the caller has never seen.
+ *
+ * Compact because Stripe caps a key at 255 characters and a full id per line overruns that
+ * on a wide basket. An id's tail is its random part, so it identifies the object alone.
+ */
+function itemFingerprint(items: Stripe.SubscriptionUpdateParams.Item[], carried: string[]): string {
+  const tail = (v: unknown) => String(v ?? "").slice(-8);
+  const parts = items
+    .map((i) =>
+      i.id
+        ? `${tail(i.id)}${i.deleted ? "-" : `x${i.quantity ?? 1}`}`
+        : `+${tail(i.price)}x${i.quantity ?? 1}`,
+    )
+    .sort();
+  // The rates ride the same request, so a tax change with an identical basket is a
+  // different request too.
+  return [...parts, ...carried.map(tail).sort()].join(",");
+}
+
 /** The item mutations that turn `sub` into `desired`, plus the tax rates that
  *  must ride along. Also shared between the change and its preview. */
 function diffItems(
@@ -229,8 +255,21 @@ function diffItems(
   // Tax rates already on the subscription carry onto ADDED lines. Without this, an
   // account that computes its own tax (manual TaxRates rather than Stripe Tax)
   // invoices a newly added line at 0%.
+  //
+  // BOTH places have to be read. Checkout writes the rates per LINE ITEM, but a
+  // subscription schedule can only carry them at the SUBSCRIPTION level
+  // (`default_tax_rates` — the phases this file writes, and `createSubscriptionSchedule`).
+  // So once a scheduled downgrade released, the items held no rates and the next upgrade's
+  // added line went out at 0% — the very bug the paragraph above is about, reappearing on
+  // any subscription that had ever been through a schedule.
   const carried =
-    taxRates ?? [...new Set(sub.items.data.flatMap((i) => (i.tax_rates ?? []).map((r) => r.id)))];
+    taxRates ??
+    [
+      ...new Set([
+        ...sub.items.data.flatMap((i) => (i.tax_rates ?? []).map((r) => r.id)),
+        ...(sub.default_tax_rates ?? []).map((r) => (typeof r === "string" ? r : r.id)),
+      ]),
+    ];
 
   const items: Stripe.SubscriptionUpdateParams.Item[] = [];
   const seen = new Set<string>();
@@ -388,6 +427,17 @@ export async function changePlan(
     if (sub.cancel_at_period_end) {
       return { kind: "canceling", customerId, subscriptionId: sub.id, plan: currentPlanKey, status: sub.status, effectiveAt };
     }
+    // A schedule OWNS the cancellation behaviour: while one is attached, Stripe refuses
+    // `cancel_at_period_end` outright ("updating any cancelation behavior directly is not
+    // allowed"). So a customer who had scheduled a downgrade could not cancel at all — the
+    // one sequence a downgrade makes likely. Releasing detaches the schedule and leaves the
+    // subscription exactly as it is, and abandoning a scheduled downgrade is right here:
+    // they are cancelling, so the tier they would have moved to is moot.
+    if (sub.schedule) {
+      await stripe.subscriptionSchedules.release(
+        typeof sub.schedule === "string" ? sub.schedule : sub.schedule.id,
+      );
+    }
     const canceling = await stripe.subscriptions.update(sub.id, {
       cancel_at_period_end: true,
       metadata: { ...sub.metadata, org_id: orgId, pending_plan: target.key },
@@ -466,20 +516,49 @@ export async function changePlan(
     return { kind: "scheduled", customerId, subscriptionId: sub.id, plan: currentPlanKey, status: sub.status, effectiveAt };
   }
 
+  // `pending_if_incomplete` supports ONLY the params that control proration or generate an
+  // invoice — no tax parameter of any kind, neither `items[].tax_rates` nor
+  // `default_tax_rates` — and Stripe hard-400s rather than ignoring one. So an account
+  // computing its own tax (the default) could not run an `invoice_now` upgrade at all: the
+  // added line always carries a rate. Measured, not inferred; both spellings were refused.
+  //
+  // Tax is a CONFIGURATION change though, which Stripe applies immediately and which
+  // generates no invoice, so it moves OUT of the gated update: set the subscription's
+  // `default_tax_rates` first and the line added below inherits them. The alternative —
+  // dropping `pending_if_incomplete` — would silently give up the thing it is there for,
+  // which is applying the upgrade only once its invoice is actually paid.
+  const pending = proration === "invoice_now";
+  if (pending && carried.length) {
+    const already = new Set(
+      (sub.default_tax_rates ?? []).map((r) => (typeof r === "string" ? r : r.id)),
+    );
+    if (carried.some((id) => !already.has(id))) {
+      await stripe.subscriptions.update(sub.id, { default_tax_rates: carried });
+    }
+  }
+
   const updated = await stripe.subscriptions.update(
     sub.id,
     {
-      items,
+      // Stripped for the same reason, on the same path.
+      items: pending ? items.map(({ tax_rates: _tax, ...rest }) => rest) : items,
       proration_behavior,
       // The live-subscription equivalent of `default_incomplete`: the change
       // applies only once the invoice it generates is paid, and the original
       // subscription is untouched if it never is.
-      ...(proration === "invoice_now" ? { payment_behavior: "pending_if_incomplete" as const } : {}),
+      ...(pending ? { payment_behavior: "pending_if_incomplete" as const } : {}),
       metadata: { ...sub.metadata, org_id: orgId, plan: target.key },
     },
     // Keyed on the target, so a double-clicked Confirm inside Stripe's 24h window
     // is a no-op rather than a second proration invoice.
-    { idempotencyKey: `plan:${sub.id}:${target.key}:${interval}:${JSON.stringify([...desired].sort())}:${timing}:${proration}` },
+    //
+    // The MUTATION is in the key, not just the target — see `itemFingerprint`. A genuine
+    // double-click sends the identical diff, so it still dedupes.
+    {
+      idempotencyKey: ["plan", sub.id, target.key, interval, itemFingerprint(items, carried), timing, proration].join(
+        ":",
+      ),
+    },
   );
 
   if (record) {
