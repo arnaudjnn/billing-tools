@@ -672,6 +672,26 @@ Every form the library builds — the seat checkout, the credit top-up, the card
 collects a **required billing address** and a **tax id**, and writes both back to the
 Customer, so the next charge and the invoice have them.
 
+**Where you owe tax is library data; where you are registered is yours.** What each
+country demands of a seller with no establishment there lives in one file
+(`src/tax-obligations.ts`), because those rules move and no developer should have to
+research them. The doctor reads it against your real Stripe customers and tells you the
+declaration is incomplete:
+
+```
+✗ Unregistered exposure: GB — 2 customer(s) are in GB, which taxes a non-established
+  seller from the first consumer sale (no threshold), and config.tax.registrations
+  does not include it
+    → B2B there is reverse-charged and needs no registration, so requiring a VAT id is
+      the alternative to registering. Register (UK VAT registration (NETP)) and add
+      { country: "GB" } to registrations, or do not sell B2C there.
+```
+
+A **zero-threshold** country (the UK) is an error — the obligation starts at the first
+consumer sale, so it needs no knowledge of your turnover. A **thresholded** one (Norway
+NOK 50 000, Australia A$75 000) can only warn. A country the file makes no claim about
+stays silent, because absence means "unknown", never "no obligation".
+
 **What no library can do:** tell you when €10 000 was crossed, or that you now owe UK
 VAT. Those are facts about your turnover. `checkBillingSetup` reports what the config
 claims and cannot audit it — declaring `vatRegistered: false` with no registrations says

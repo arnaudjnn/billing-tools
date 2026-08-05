@@ -11,6 +11,7 @@ import { USAGE_SCOPE_KIND } from "./usage-scopes.js";
 import { BILLING_WEBHOOK_EVENTS } from "./webhook-setup.js";
 import { taxModeOf, type TaxMode } from "./tax.js";
 import { isLocalTaxOrigin } from "./tax-origins.js";
+import { describeThreshold, nonResidentRule } from "./tax-obligations.js";
 import {
   ADMIN_ROLE_SLUG,
   listWorkOSRoleSlugs,
@@ -298,6 +299,9 @@ export async function checkBillingSetup(opts: {
   // extra requests. Declared out here because the sample is inside `if (currency)`
   // and the check is not.
   let usCustomers = 0;
+  /** customer country → count, for the unregistered-exposure check. Declared out here
+   *  for the same reason as `usCustomers`: the walk is inside `if (currency)`. */
+  const byCountry = new Map<string, number>();
   if (currency) {
     const want = currency.toLowerCase();
     const sample: string[] = [];
@@ -328,6 +332,11 @@ export async function checkBillingSetup(opts: {
       // seller with only EU customers has none — the earlier version of this check
       // keyed off `config.tax.origin` and had it exactly backwards.
       if (customer.address?.country?.toUpperCase() === "US") usCustomers++;
+      // Where a customer is, against what that country demands of a seller with no
+      // establishment there. Counted per country so the report can name the exposure
+      // instead of describing it — a threshold in prose is a threshold nobody applies.
+      const cc = customer.address?.country?.toUpperCase();
+      if (cc) byCountry.set(cc, (byCountry.get(cc) ?? 0) + 1);
       if (customer.metadata?.auto_reload_enabled === "true" && reloadNoCard.length < 5) {
         const pms = await stripe.paymentMethods.list({ customer: customer.id, type: "card", limit: 1 });
         if (pms.data.length === 0) reloadNoCard.push(customer.id);
@@ -336,6 +345,45 @@ export async function checkBillingSetup(opts: {
       // every customer of a live account is not what a preflight should do.
       if (seen >= 500) break;
     }
+    // ── Selling where you are not registered ──────────────────────────────
+    //
+    // The check that needed a rules file to exist. `registrations` says where you
+    // collect; NON_RESIDENT_RULES says what each country demands of a seller who is not
+    // established there. Neither alone can tell you the declaration is incomplete.
+    //
+    // A zero-threshold country is an ERROR because it needs no knowledge of your
+    // turnover: the obligation starts at the first consumer sale, so a customer there
+    // and no registration is a certainty, not a risk. A country WITH a threshold can
+    // only ever be a warning — whether you crossed it is a fact about your books, and a
+    // library that pretended to know would be guessing.
+    //
+    // B2B is excluded where the country reverse-charges, which is nearly everywhere:
+    // the customer self-accounts and no registration is needed for those sales at all.
+    if (opts.config?.tax) {
+      const declared = new Set(
+        (("registrations" in opts.config.tax ? opts.config.tax.registrations : undefined) ?? []).map(
+          (r) => r.country.toUpperCase(),
+        ),
+      );
+      const origin = "origin" in opts.config.tax ? opts.config.tax.origin?.toUpperCase() : undefined;
+      for (const [country, count] of [...byCountry].sort((a, b) => b[1] - a[1])) {
+        if (country === origin || declared.has(country)) continue;
+        const rule = nonResidentRule(country);
+        if (!rule) continue; // no claim made about this country — say nothing
+        const zero = rule.b2cThreshold === "first-sale";
+        checks.push({
+          level: zero ? "error" : "warn",
+          title: `Unregistered exposure: ${country}`,
+          detail:
+            `${count} customer(s) are in ${country}, which taxes a non-established seller ` +
+            `${describeThreshold(rule)}, and config.tax.registrations does not include it`,
+          fix:
+            `${rule.note ?? ""} ${rule.b2bReverseCharge ? "B2B there is reverse-charged and needs no registration, so requiring a VAT id is the alternative to registering." : ""} ` +
+            `Register (${rule.scheme ?? "local scheme"}) and add { country: "${country}" } to registrations, or do not sell B2C there. Source: ${rule.source}`.trim(),
+        });
+      }
+    }
+
     if (reloadNoCard.length) {
       checks.push({
         level: "warn",

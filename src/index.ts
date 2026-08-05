@@ -442,6 +442,18 @@ export {
 // exemption is said, and that `oss` covers the member states independently of it.
 export { sellerRegime, type SellerRegime } from "./tax-regime.js";
 
+// WHERE a non-established seller owes tax, in ONE file, because these rules move. The
+// half no rate dataset can answer: not "what is Italy's rate" but "does a French seller
+// owe UK VAT on its first sale". Read by the doctor to tell you `registrations` is
+// incomplete; an absent country means "no claim", never "no obligation".
+export {
+  NON_RESIDENT_RULES,
+  nonResidentRule,
+  zeroThresholdCountries,
+  describeThreshold,
+  type NonResidentRule,
+} from "./tax-obligations.js";
+
 // The WorkOS half of provisioning: the roles an APP invents (`admin`/`member` ship
 // with the environment, so there is no default list). AuthKit redirect URIs stay
 // manual — v10 has no API for them, so the doctor prints the URI instead.
