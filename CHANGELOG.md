@@ -1,3 +1,10 @@
+## [15.5.1](https://github.com/arnaudjnn/billing-tools/compare/v15.5.0...v15.5.1) (2026-08-05)
+
+
+### Bug Fixes
+
+* **doctor:** print the manual redirect URI on the verb people actually run ([3106015](https://github.com/arnaudjnn/billing-tools/commit/3106015771495f0560c318b2cf30ef6ee829929b))
+
 # [15.5.0](https://github.com/arnaudjnn/billing-tools/compare/v15.4.0...v15.5.0) (2026-08-05)
 
 
