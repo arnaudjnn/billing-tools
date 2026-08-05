@@ -1,3 +1,10 @@
+## [15.16.1](https://github.com/arnaudjnn/billing-tools/compare/v15.16.0...v15.16.1) (2026-08-05)
+
+
+### Bug Fixes
+
+* **seats:** check membership on the bound API too, not only in the tool ([61d4a50](https://github.com/arnaudjnn/billing-tools/commit/61d4a50256b8cbf035251204dd02cb711358bca5))
+
 # [15.16.0](https://github.com/arnaudjnn/billing-tools/compare/v15.15.3...v15.16.0) (2026-08-05)
 
 
