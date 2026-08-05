@@ -103,7 +103,8 @@
     "clean": "rm -rf dist",
     "prepublishOnly": "npm run build",
     "test": "npm run build && vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "e2e:live": "npm run build && node scripts/e2e-live.mjs"
   },
   "dependencies": {
     "@stripe/react-stripe-js": "^6",

@@ -45,7 +45,7 @@ async function halfwayThroughPro(prices, label) {
     address: { line1: "Via Test 1", city: "Savona", postal_code: "17100", country: "IT" },
   });
   created.customers.push(customer.id);
-  const card = await stripe.paymentMethods.create({ type: "card", card: { credit: "tok_visa" } });
+  const card = await stripe.paymentMethods.create({ type: "card", card: { token: "tok_visa" } });
   await stripe.paymentMethods.attach(card.id, { customer: customer.id });
   await stripe.customers.update(customer.id, {
     invoice_settings: { default_payment_method: card.id },
@@ -216,6 +216,9 @@ try {
   await main();
 } catch (e) {
   console.error("\nFAILED:", e?.message ?? e);
+  // Without this the script exited 0 having measured nothing — it printed FAILED and
+  // reported success, which is the one outcome a measurement script must not produce.
+  process.exitCode = 1;
 } finally {
   await cleanup();
 }
