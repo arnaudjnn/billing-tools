@@ -1,3 +1,10 @@
+# [15.4.0](https://github.com/arnaudjnn/billing-tools/compare/v15.3.0...v15.4.0) (2026-08-05)
+
+
+### Features
+
+* **routes:** 402 for an empty wallet, and an option to gate the MCP handshake ([4577b7a](https://github.com/arnaudjnn/billing-tools/commit/4577b7a05b23f31562d20969b61dc9fe7e49ce59))
+
 # [15.3.0](https://github.com/arnaudjnn/billing-tools/compare/v15.2.3...v15.3.0) (2026-08-05)
 
 
