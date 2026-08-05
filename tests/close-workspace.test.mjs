@@ -334,3 +334,84 @@ test("the scan is bounded by what it EXAMINED, not by what it found", async () =
 
   assert.ok(yielded <= 26, `stopped after ${yielded}, not 500`);
 });
+
+// ── the bound API's own membership check ─────────────────────────────────────
+
+test("api.seats.assign refuses a member who is not in the workspace", async () => {
+  // The tool's check does not protect a consumer that writes its own server action, and one
+  // does: scartoffie's seat control calls the library function directly, so its admin path had
+  // no membership check while the tool's was being fixed. The bound API is the surface a server
+  // action is told to use, so the check has to be here too.
+  const { createBoundApi } = await import("../dist/bound-api.js");
+  const written = [];
+  const api = createBoundApi({
+    adapter: {
+      async getBillingCustomerId() {
+        return "cus_1";
+      },
+      async getOrgDomains() {
+        return [];
+      },
+      async validateApiKey() {
+        return { orgId: "org_1" };
+      },
+      async listMemberIds() {
+        return ["user_in"];
+      },
+      async getUserMetadata() {
+        return {};
+      },
+      async setUserMetadata(userId, patch) {
+        written.push({ userId, patch });
+      },
+      async getOrgMetadata() {
+        return {};
+      },
+      async setOrgMetadata() {},
+    },
+    config: { freeCredits: 0, currency: "eur", baseUrl: "https://x.test", internalDomains: [] },
+  });
+
+  await assert.rejects(() => api.seats.assign("org_1", "user_stranger", "premium"), /not a member/);
+  assert.deepEqual(written, [], "nothing was written to the stranger's record");
+
+  await api.seats.assign("org_1", "user_in", "premium");
+  assert.equal(written.length, 1, "a real member still works");
+});
+
+test("assignUnchecked stays available for seating an invitee who has not accepted", async () => {
+  // `listMemberIds` returns ACTIVE memberships, so a pending invitee is not one. An app that
+  // deliberately seats them up front needs a way through that is not a lie about membership.
+  const { createBoundApi } = await import("../dist/bound-api.js");
+  const written = [];
+  const api = createBoundApi({
+    adapter: {
+      async getBillingCustomerId() {
+        return null;
+      },
+      async getOrgDomains() {
+        return [];
+      },
+      async validateApiKey() {
+        return { orgId: "org_1" };
+      },
+      async listMemberIds() {
+        return [];
+      },
+      async getUserMetadata() {
+        return {};
+      },
+      async setUserMetadata(userId, patch) {
+        written.push({ userId, patch });
+      },
+      async getOrgMetadata() {
+        return {};
+      },
+      async setOrgMetadata() {},
+    },
+    config: { freeCredits: 0, currency: "eur", baseUrl: "https://x.test", internalDomains: [] },
+  });
+
+  await api.seats.assignUnchecked("org_1", "user_invited", "premium");
+  assert.equal(written.length, 1);
+});

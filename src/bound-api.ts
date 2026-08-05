@@ -163,7 +163,25 @@ export function createBoundApi(deps: BoundApiDeps) {
        *  calls, and what removing a single member should call for that member. */
       clearRecords: (orgId: string, memberIds: readonly string[]) =>
         clearMemberRecords(adapter, orgId, memberIds),
-      assign: (orgId: string, memberId: string, seatType: string | null) =>
+      /**
+       * Assign a seat, refusing a `memberId` that is not in this workspace.
+       *
+       * The check lives HERE as well as in the `assign_seat_type` tool, because a consumer
+       * that writes its own server action bypasses the tool entirely — scartoffie's does, and
+       * so its admin path had no membership check at all while the tool's was being fixed.
+       * That is the failure this file exists to prevent: the logic a hand-written wrapper ends
+       * up owning is exactly the logic that must not be duplicated.
+       *
+       * `assignSeatType` itself stays a pure storage write, so an app that deliberately seats
+       * a not-yet-active invitee can still call it directly.
+       */
+      assign: async (orgId: string, memberId: string, seatType: string | null) => {
+        const stranger = await enforceMember(adapter, orgId, memberId, "assign seat");
+        if (stranger) throw new Error(stranger.content[0].text);
+        return assignSeatType(adapter, orgId, memberId, seatType);
+      },
+      /** The raw write, no membership check — for seating an invitee who has not accepted. */
+      assignUnchecked: (orgId: string, memberId: string, seatType: string | null) =>
         assignSeatType(adapter, orgId, memberId, seatType),
     },
 
