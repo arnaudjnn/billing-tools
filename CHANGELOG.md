@@ -1,3 +1,10 @@
+# [15.9.0](https://github.com/arnaudjnn/billing-tools/compare/v15.8.0...v15.9.0) (2026-08-05)
+
+
+### Features
+
+* **doctor:** an undeclared origin on a non-European account is an error ([cdf9c06](https://github.com/arnaudjnn/billing-tools/commit/cdf9c06a56b1712390e046aa084fcc111468e3e3))
+
 # [15.8.0](https://github.com/arnaudjnn/billing-tools/compare/v15.7.0...v15.8.0) (2026-08-05)
 
 
