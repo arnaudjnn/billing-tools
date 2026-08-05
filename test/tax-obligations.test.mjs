@@ -126,3 +126,60 @@ test("every rule carries a source and a review date", async () => {
   // The UK is the one this file exists for; a regression that dropped it would be quiet.
   assert.ok(zeroThresholdCountries().includes("GB"));
 });
+
+// ── The supplier's own VAT number ────────────────────────────────────────────
+//
+// Art. 226(3) requires an invoice to carry the SUPPLIER's VAT identification number,
+// and for a reverse-charged EU B2B supply it is mandatory beside the customer's. Stripe
+// prints the account's name and address but no tax id of its own, and the number lives
+// in the app's entity declaration — so every invoice was missing it, and list_invoices /
+// view_invoice returned that incomplete document faithfully.
+test("an account with no tax id of its own is reported", async () => {
+  const stripe = fakeStripe([customer("FR")]);
+  stripe.taxIds = { list: async () => ({ data: [] }) };
+  __setStripeForTests(stripe);
+
+  const r = await checkBillingSetup({ config: config(FRANCHISE) });
+  const hit = find(r, "Supplier VAT number");
+  assert.equal(hit?.level, "warn");
+  assert.match(hit.detail, /no tax id of its own/);
+  assert.match(hit.fix, /226\(3\)/);
+});
+
+test("an id that exists but is not the invoice default prints on nothing", async () => {
+  const stripe = fakeStripe([customer("FR")]);
+  stripe.taxIds = { list: async () => ({ data: [{ id: "txi_1", type: "eu_vat", value: "FR12345678901" }] }) };
+  // No `default_account_tax_ids` on the account.
+  __setStripeForTests(stripe);
+
+  const r = await checkBillingSetup({ config: config(FRANCHISE) });
+  const hit = find(r, "Supplier VAT number");
+  assert.equal(hit?.level, "warn");
+  assert.match(hit.detail, /none is the invoice default/);
+});
+
+test("set as the default, it is reported as printed", async () => {
+  const stripe = fakeStripe([customer("FR")]);
+  stripe.taxIds = { list: async () => ({ data: [{ id: "txi_1", type: "eu_vat", value: "FR12345678901" }] }) };
+  stripe.accounts = {
+    retrieve: async () => ({
+      id: "acct_1",
+      country: "FR",
+      settings: { invoices: { default_account_tax_ids: ["txi_1"] } },
+    }),
+  };
+  __setStripeForTests(stripe);
+
+  const r = await checkBillingSetup({ config: config(FRANCHISE) });
+  const hit = find(r, "Supplier VAT number");
+  assert.equal(hit?.level, "ok");
+  assert.match(hit.detail, /eu_vat FR12345678901/);
+});
+
+test("`mode: none` has no supply to identify, so it is not asked for one", async () => {
+  const stripe = fakeStripe([customer("FR")]);
+  stripe.taxIds = { list: async () => ({ data: [] }) };
+  __setStripeForTests(stripe);
+  const r = await checkBillingSetup({ config: config({ mode: "none" }) });
+  assert.equal(find(r, "Supplier VAT number"), undefined);
+});

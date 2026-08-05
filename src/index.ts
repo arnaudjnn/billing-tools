@@ -442,6 +442,10 @@ export {
 // exemption is said, and that `oss` covers the member states independently of it.
 export { sellerRegime, type SellerRegime } from "./tax-regime.js";
 
+// The SELLER's own VAT number, on every invoice. Art. 226(3) requires it and Stripe
+// prints no tax id of its own, so without this every invoice was defective.
+export { ensureAccountTaxId, accountTaxIds, type AccountTaxIdResult } from "./tax-setup.js";
+
 // WHERE a non-established seller owes tax, in ONE file, because these rules move. The
 // half no rate dataset can answer: not "what is Italy's rate" but "does a French seller
 // owe UK VAT on its first sale". Read by the doctor to tell you `registrations` is

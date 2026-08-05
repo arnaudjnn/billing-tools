@@ -11,7 +11,7 @@ import {
 } from "./doctor.js";
 import { ensurePlans } from "./plans.js";
 import { ensureMeters } from "./usage-ledger.js";
-import { ensureTaxSetup, type TaxRegistrationSpec } from "./tax-setup.js";
+import { ensureAccountTaxId, ensureTaxSetup, type TaxRegistrationSpec } from "./tax-setup.js";
 import { ensureWebhookEndpoint } from "./webhook-setup.js";
 import { taxModeOf } from "./tax.js";
 import { ensureWorkOSRoles, type WorkOSRoleSpec } from "./workos-setup.js";
@@ -81,6 +81,15 @@ export interface SetupOptions {
     registrations: TaxRegistrationSpec[];
     taxCode?: string;
   };
+  /**
+   * The seller's OWN tax id, printed on every invoice.
+   *
+   * Art. 226(3) requires it, and for a reverse-charged EU B2B supply the supplier's
+   * intracommunity number is mandatory beside the customer's — from the first euro, even
+   * under a small-business exemption. Independent of `stripeTax`: it is about what the
+   * invoice SAYS, not who calculates.
+   */
+  accountTaxId?: { type: string; value: string };
   /** Create the usage meter eagerly. Default true. */
   meter?: boolean;
   /**
@@ -253,6 +262,26 @@ export async function setupBilling(opts: SetupOptions): Promise<SetupResult> {
       healthy: false,
     };
   }
+  if (opts.accountTaxId) {
+    try {
+      const r = await ensureAccountTaxId(opts.accountTaxId);
+      ok(
+        "tax",
+        "Supplier VAT number",
+        `${opts.accountTaxId.value}${r.created ? " (created)" : ""}${r.isDefault ? ", default on invoices" : ""}`,
+      );
+    } catch (e) {
+      fail(
+        "tax",
+        "Supplier VAT number",
+        e,
+        "Art. 226(3) requires the supplier's VAT number on the invoice; without it every invoice this account issues is defective",
+      );
+    }
+  } else {
+    skip("tax", "Supplier VAT number", "no `accountTaxId` passed; invoices carry none");
+  }
+
   // ── WorkOS roles ──────────────────────────────────────────────────────────
   //
   // Only the roles the APP invents. WorkOS environments ship `admin` and `member`

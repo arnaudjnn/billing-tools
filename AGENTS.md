@@ -308,6 +308,12 @@ Everything else comes from the CUSTOMER: their Stripe address decides the place 
 
 `checkBillingSetup({ taxMode })` names WHERE calculation happens: `"local"` (the default, and deliberately not `"auto"`, which would name this mode after `automatic_tax`, its alternative) lists the TaxRates that exist — the audit trail of what the account charged, legitimately empty on a fresh one; `"stripe"` audits head office, registrations and `tax_behavior`; `"none"` skips it. `ensureTaxSetup` is explicit-only.
 
+### What an invoice must SAY, not just what it charges
+
+**The supplier's own VAT number was on none of them.** Art. 226(3) of the VAT Directive requires an invoice to carry the SUPPLIER's VAT identification number, and for a reverse-charged EU B2B supply it is mandatory beside the customer's (C-247/21 again: an omitted mention cannot be cured afterwards). Stripe prints the account's business name and address from Dashboard settings but **no tax id of its own**, and the number lives in the consuming app's entity declaration — so every invoice this library produced was defective, and `list_invoices` / `view_invoice` returned that document faithfully. `ensureAccountTaxId({ type, value })` creates it as a tax id owned by the ACCOUNT (not a customer) and sets `default_account_tax_ids`, because an id that exists but is not the default prints on nothing. Idempotent by value: a second id with the same number would leave Stripe choosing which to print. It THROWS, unlike the lazy provisioning — a missing supplier VAT number is a defective invoice, not a degraded one.
+
+**Every path collects the customer's half, and the tools match the forms.** The seat checkout, the top-up and the add-card form all set `billing_address_collection: "required"` + `tax_id_collection` + `customer_update`; `set_billing_profile` (full address, company name, invoice locale) and `set_tax_id` are the programmatic equivalents, so an API/CLI/MCP caller can supply exactly what a browser can. The top-up was the exception until this audit — see above.
+
 ### Charges the library raises itself
 
 A subscription is taxed by whoever builds its Checkout Session. Two charges have no session: the **auto-reload invoice** (covered by `config.tax`) and the **top-up** via `buy_credits` (`registerBillingTools({ topUp })`).

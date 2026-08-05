@@ -12,6 +12,7 @@ import { BILLING_WEBHOOK_EVENTS } from "./webhook-setup.js";
 import { taxModeOf, type TaxMode } from "./tax.js";
 import { isLocalTaxOrigin } from "./tax-origins.js";
 import { describeThreshold, nonResidentRule } from "./tax-obligations.js";
+import { accountTaxIds } from "./tax-setup.js";
 import {
   ADMIN_ROLE_SLUG,
   listWorkOSRoleSlugs,
@@ -126,6 +127,52 @@ export async function checkBillingSetup(opts: {
             .join(", ")}`
         : "billing-tools (taxRatesFor) — no rate minted yet; the first taxed checkout creates one",
     });
+  }
+
+  // ── The supplier's own VAT number, on the invoice ─────────────────────────
+  //
+  // Art. 226(3) of the VAT Directive requires an invoice to carry the SUPPLIER's VAT
+  // identification number, and for a reverse-charged EU B2B supply it is mandatory
+  // beside the customer's. Stripe prints the account's name and address from Dashboard
+  // settings but not a tax id, and the number itself usually lives in the app's own
+  // entity declaration — so every invoice was missing it, and the invoice-reading tools
+  // returned that incomplete document faithfully.
+  //
+  // Only checked where tax is calculated at all: `mode: "none"` charges nothing and has
+  // no supply to identify.
+  if (taxMode !== "none") {
+    try {
+      const ids = await accountTaxIds();
+      const defaults = account.settings?.invoices?.default_account_tax_ids ?? [];
+      checks.push(
+        ids.length === 0
+          ? {
+              level: "warn",
+              title: "Supplier VAT number on invoices",
+              detail: "the account holds no tax id of its own, so invoices carry no supplier VAT number",
+              fix: 'Art. 226(3) requires it, and for a reverse-charged EU B2B supply it is mandatory beside the customer\'s. Run `ensureAccountTaxId({ type: "eu_vat", value: … })` — the intracommunity number is required from the first euro even under a small-business exemption',
+            }
+          : defaults.length === 0
+            ? {
+                level: "warn",
+                title: "Supplier VAT number on invoices",
+                detail: `${ids.length} account tax id(s) exist (${ids.map((t) => t.value).join(", ")}) but none is the invoice default, so none is printed`,
+                fix: "Pass `makeDefault: true` to `ensureAccountTaxId` — an id that exists but is not the default appears on nothing",
+              }
+            : {
+                level: "ok",
+                title: "Supplier VAT number on invoices",
+                detail: `${ids.map((t) => `${t.type} ${t.value}`).join(", ")} — printed on every invoice`,
+              },
+      );
+    } catch (e) {
+      checks.push({
+        level: "warn",
+        title: "Supplier VAT number on invoices",
+        detail: `could not be read: ${e instanceof Error ? e.message : String(e)}`,
+        fix: "Needs a key that can read /v1/tax_ids. Unchecked, invoices may be missing the supplier VAT number Art. 226(3) requires",
+      });
+    }
   }
 
   // Where the seller is established, declared vs what Stripe was told at onboarding.

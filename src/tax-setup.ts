@@ -134,3 +134,85 @@ export async function ensureTaxSetup(opts: {
     unmanaged: [...activeCountries].filter((c) => !wanted.has(c)),
   };
 }
+
+// ── The SELLER's own VAT number, on every invoice ───────────────────────────
+//
+// Art. 226(3) of the VAT Directive requires an invoice to carry the SUPPLIER's VAT
+// identification number, and for a reverse-charged EU B2B supply the supplier's
+// intracommunity number is mandatory beside the customer's — CJEU C-247/21 again: an
+// omitted mention cannot be cured after the fact.
+//
+// Nothing here put it there. Stripe prints the account's business name and address from
+// Dashboard settings, and the number itself lives in the consuming app's own entity
+// declaration (`LEGAL_VAT_INTRA`), which never reached Stripe. So every invoice this
+// library produced — subscription, top-up, auto-reload — was missing it, and the
+// invoice-reading tools returned that same incomplete document faithfully.
+//
+// Stripe models it as a tax id OWNED BY THE ACCOUNT rather than by a customer, plus an
+// account-level default so it lands on every invoice without being passed per charge.
+
+export interface AccountTaxIdResult {
+  id: string;
+  created: boolean;
+  /** True when it is now the account's invoice default. */
+  isDefault: boolean;
+}
+
+/**
+ * Put the seller's own tax id on the account, and make it the invoice default.
+ *
+ * Idempotent by VALUE: an existing id with the same number is reused, because creating a
+ * second one would leave Stripe choosing which to print. Safe to call from a deploy step;
+ * it THROWS, unlike the lazy provisioning on a charge path — a missing supplier VAT
+ * number is a defective invoice, not a degraded one, so it should stop a deploy.
+ *
+ * ```ts
+ * // A French micro-entreprise: not VAT-registered, but it holds an intracommunity
+ * // number, which is mandatory on EU B2B invoices from the first euro.
+ * await ensureAccountTaxId({ type: "eu_vat", value: process.env.LEGAL_VAT_INTRA! });
+ * ```
+ */
+export async function ensureAccountTaxId(opts: {
+  /** Stripe's tax id type — "eu_vat", "gb_vat", "ch_vat", … */
+  type: string;
+  /** The number itself, as it must appear on the invoice. */
+  value: string;
+  /** Also set it as the account's `default_account_tax_ids`. Default true — an id that
+   *  exists but is not the default prints on nothing. */
+  makeDefault?: boolean;
+}): Promise<AccountTaxIdResult> {
+  const stripe = getStripe();
+  const wanted = opts.value.replace(/\s+/g, "").toUpperCase();
+
+  const existing = (await stripe.taxIds.list({ limit: 100 })).data.find(
+    (t) => t.value.replace(/\s+/g, "").toUpperCase() === wanted,
+  );
+  const id =
+    existing?.id ??
+    (
+      await stripe.taxIds.create({
+        type: opts.type as Parameters<typeof stripe.taxIds.create>[0]["type"],
+        value: opts.value,
+        owner: { type: "account" },
+      })
+    ).id;
+
+  let isDefault = false;
+  if (opts.makeDefault !== false) {
+    // `accounts.update` needs the account id even for your own account — the
+    // no-argument form updates nothing and typechecks as a string parameter.
+    const account = await stripe.accounts.retrieve();
+    await stripe.accounts.update(account.id, {
+      settings: { invoices: { default_account_tax_ids: [id] } },
+    });
+    isDefault = true;
+  }
+  return { id, created: !existing, isDefault };
+}
+
+/** The account's own tax ids, for the doctor. Never throws — a restricted key that
+ *  cannot read them is a different finding from having none. */
+export async function accountTaxIds(): Promise<Array<{ id: string; type: string; value: string }>> {
+  const list = await getStripe().taxIds.list({ limit: 100 });
+  return list.data.map((t) => ({ id: t.id, type: t.type, value: t.value }));
+}
