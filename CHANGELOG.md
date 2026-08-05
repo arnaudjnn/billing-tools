@@ -1,3 +1,10 @@
+# [15.12.0](https://github.com/arnaudjnn/billing-tools/compare/v15.11.0...v15.12.0) (2026-08-05)
+
+
+### Features
+
+* **tax:** put the supplier's own VAT number on the invoice ([5848fec](https://github.com/arnaudjnn/billing-tools/commit/5848fec38b5e5871af31f2cce51780b57a6abed7))
+
 # [15.11.0](https://github.com/arnaudjnn/billing-tools/compare/v15.10.1...v15.11.0) (2026-08-05)
 
 
