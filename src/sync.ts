@@ -195,6 +195,38 @@ function subscriptionPeriod(sub: Stripe.Subscription): {
   };
 }
 
+/**
+ * The subscription an invoice belongs to — from BOTH places Stripe has kept it.
+ *
+ * `invoice.subscription` is **gone** in the API version this SDK pins (2026-02-25): it moved
+ * to `invoice.parent.subscription_details.subscription`, exactly as `current_period_end` moved
+ * off `Subscription` onto `SubscriptionItem`. Reading the old field yielded `undefined`, and
+ * both invoice branches below open with `if (!invoice.subscription) return` — so on a live
+ * account they returned immediately, every time:
+ *
+ *   • `invoice.paid` never granted renewal credits. Any plan with a `grant` gave a paying
+ *     subscriber nothing, every month, silently. (Both shipped consumers use `grant: none`,
+ *     so no live deployment lost credits — but the branch existed for the ones that don't.)
+ *   • `invoice.payment_failed` never recorded `past_due` and never fired `onPaymentFailed`,
+ *     so an app could not tell that Stripe was dunning its customer.
+ *
+ * Measured against a real event, not inferred. Both spellings are read so the handler works
+ * either side of the version change, and `parent` also carries the subscription's METADATA —
+ * which is where `org_id` lives, so the org resolves without a retrieve when it is present.
+ */
+function subscriptionRefOf(invoice: Stripe.Invoice & { subscription?: string | null }): {
+  subscriptionId: string | null;
+  orgId: string | null;
+} {
+  const parent = (invoice as { parent?: { subscription_details?: { subscription?: string | Stripe.Subscription | null; metadata?: Record<string, string> | null } | null } }).parent;
+  const details = parent?.subscription_details ?? null;
+  const fromParent = details?.subscription;
+  const subscriptionId =
+    (typeof fromParent === "string" ? fromParent : (fromParent?.id ?? null)) ??
+    (typeof invoice.subscription === "string" ? invoice.subscription : null);
+  return { subscriptionId, orgId: details?.metadata?.org_id ?? null };
+}
+
 export function createStripeEventHandler(opts: {
   adapter: WorkOSOrgAdapter;
   plans: PlanCatalog;
@@ -259,9 +291,10 @@ export function createStripeEventHandler(opts: {
         customer?: string | null;
       };
       if (invoice.billing_reason !== "subscription_create" && invoice.billing_reason !== "subscription_cycle") return;
-      if (!invoice.subscription || !invoice.customer) return;
-      const sub = await getStripe().subscriptions.retrieve(invoice.subscription);
-      const orgId = sub.metadata?.org_id;
+      const ref = subscriptionRefOf(invoice);
+      if (!ref.subscriptionId || !invoice.customer) return;
+      const sub = await getStripe().subscriptions.retrieve(ref.subscriptionId);
+      const orgId = sub.metadata?.org_id ?? ref.orgId;
       if (!orgId) return;
       // All line items of a subscription share one plan (only the seat type
       // varies), so the first item resolves the plan.
@@ -308,11 +341,12 @@ export function createStripeEventHandler(opts: {
 
     if (event.type === "invoice.payment_failed") {
       const invoice = event.data.object as Stripe.Invoice & { subscription?: string | null };
-      if (!invoice.subscription) return; // one-off top-ups don't affect subscription state
-      const sub = (await getStripe().subscriptions.retrieve(invoice.subscription)) as Stripe.Subscription & {
+      const ref = subscriptionRefOf(invoice);
+      if (!ref.subscriptionId) return; // one-off top-ups don't affect subscription state
+      const sub = (await getStripe().subscriptions.retrieve(ref.subscriptionId)) as Stripe.Subscription & {
         current_period_end?: number;
       };
-      const orgId = sub.metadata?.org_id;
+      const orgId = sub.metadata?.org_id ?? ref.orgId;
       if (!orgId) return;
       await opts.adapter.setSubscription(orgId, {
         status: "past_due",

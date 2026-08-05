@@ -63,6 +63,7 @@ const SECTIONS = [
   ["08", "plan moves", () => import("./live/08-plan-moves.mjs")],
   ["09", "roles and isolation", () => import("./live/09-roles-and-isolation.mjs")],
   ["10", "workspace close", () => import("./live/10-workspace-close.mjs")],
+  ["11", "refusals and dunning", () => import("./live/11-refusals-and-dunning.mjs")],
 ];
 
 async function main() {

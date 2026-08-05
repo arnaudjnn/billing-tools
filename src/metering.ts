@@ -329,15 +329,39 @@ export function createApiMeterGuard<R extends Record<string, number>>(
       caller: { kind: "api", ...(auth.keyId ? { id: auth.keyId } : {}) },
       units: opts?.units,
     })
-    if (!res.ok) return jsonResponse(402, { error: res.message ?? "Insufficient balance." })
+    if (!res.ok) {
+      // The STATUS has to match the reason, and it did not: every refusal came back 402,
+      // so a caller that had merely hit a rate limit was told to buy credits. The body
+      // carried the right sentence and the status contradicted it — and a status is what an
+      // HTTP client acts on. This is the same mapping `createToolDispatchHandler` already
+      // does for the tool surface; the two must not disagree about one refusal.
+      //
+      // A rate limit and a spend ceiling both RESET, and buying fixes neither: the first is
+      // the product's pace, the second the customer's own cap, which they can also raise.
+      // So both are 429 with `Retry-After`, and the rest stay 402 because money is the
+      // remedy — an exhausted committed pool included, where the remedy is a conversation.
+      const waitable = res.reason === "rate_limit_reached" || res.reason === "spend_limit_reached"
+      const retryAfter =
+        res.retryAt != null ? Math.max(1, Math.ceil((res.retryAt - Date.now()) / 1000)) : null
+      return jsonResponse(
+        waitable ? 429 : 402,
+        {
+          error: res.message ?? "Insufficient balance.",
+          // Named, so a client can branch on the cause instead of parsing the sentence.
+          reason: res.reason,
+          ...(retryAfter != null ? { retry_after_seconds: retryAfter } : {}),
+        },
+        waitable && retryAfter != null ? { "Retry-After": String(retryAfter) } : undefined,
+      )
+    }
     return null
   }
 }
 
-function jsonResponse(status: number, body: unknown): Response {
+function jsonResponse(status: number, body: unknown, extraHeaders?: Record<string, string>): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...extraHeaders },
   })
 }
 function unauthorized(realm: string): Response {
