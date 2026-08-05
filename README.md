@@ -654,7 +654,7 @@ tax: sellerRegime({
 })
 ```
 
-What each produces, asserted in `test/seller-regime.test.mjs`:
+What each produces, asserted in `tests/seller-regime.test.mjs`:
 
 | | domestic | EU B2C | EU B2B (valid VAT id) | UK B2C |
 |---|---|---|---|---|

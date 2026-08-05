@@ -22,6 +22,6 @@ export default defineConfig({
     // "test bot" GitHub App would sell you, built into the runner — no app, no
     // org-wide repo permissions, nothing to keep authorised.
     reporters: process.env.CI ? ["default", "github-actions"] : ["default"],
-    include: ["test/**/*.test.mjs"],
+    include: ["tests/**/*.test.mjs"],
   },
 });
