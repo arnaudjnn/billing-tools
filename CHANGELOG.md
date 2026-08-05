@@ -1,3 +1,10 @@
+## [15.10.1](https://github.com/arnaudjnn/billing-tools/compare/v15.10.0...v15.10.1) (2026-08-05)
+
+
+### Bug Fixes
+
+* **plans:** put sellerRegime on the /plans leaf, where it is used ([c318747](https://github.com/arnaudjnn/billing-tools/commit/c3187470535154bcbe0301027c9fdd93de1e9bb2))
+
 # [15.10.0](https://github.com/arnaudjnn/billing-tools/compare/v15.9.0...v15.10.0) (2026-08-05)
 
 
