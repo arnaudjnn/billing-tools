@@ -151,3 +151,34 @@ test("a reused session is never handed to the other mode", async () => {
   assert.equal(result.url, "https://checkout.stripe.com/c/pay/cs_1");
   assert.equal(result.clientSecret, null);
 });
+
+// ── Requiring a tax id, and what Stripe will not let you do ──────────────────
+//
+// "If the address is in the UK, make the VAT number mandatory" is not expressible in one
+// hosted session: the address is typed inside Stripe's form, after the session was
+// created with this flag already fixed. Stripe's only value is `if_supported` — required
+// wherever it supports a tax id type — so it is all-or-nothing across countries, and it
+// is rejected outright under `ui_mode: "custom"`.
+test("a tax id is offered but not required, by default", async () => {
+  const { params } = await open();
+  assert.deepEqual(params.tax_id_collection, { enabled: true });
+});
+
+test("taxIdRequired applies only to the hosted page, because Stripe rejects it elsewhere", async () => {
+  const hosted = await open({ uiMode: "hosted", taxIdRequired: true });
+  assert.deepEqual(hosted.params.tax_id_collection, { enabled: true, required: "if_supported" });
+
+  // Elements mode: the parameter is dropped rather than sent, because sending it fails
+  // the whole session instead of degrading — a checkout that 400s is worse than one that
+  // collects an optional field.
+  const elements = await open({ taxIdRequired: true });
+  assert.deepEqual(elements.params.tax_id_collection, { enabled: true });
+});
+
+test("requiring a tax id is part of a reused session's identity", async () => {
+  // Or a caller that asked for "required" could be handed the permissive session opened
+  // a moment earlier, and a consumer would walk through a form that should have stopped.
+  await open({ uiMode: "hosted", reuse: true });
+  const { params } = await open({ uiMode: "hosted", taxIdRequired: true, reuse: true });
+  assert.equal(params.tax_id_collection.required, "if_supported");
+});

@@ -182,6 +182,28 @@ export async function createCheckoutSession(opts: {
   /** Collect a business tax ID (VAT number). On by default. */
   taxIdCollection?: boolean;
   /**
+   * REQUIRE a tax id, not just offer the field. Off by default.
+   *
+   * Two Stripe constraints make this blunter than it looks, and both matter before you
+   * reach for it:
+   *
+   * 1. It is **all-or-nothing across countries**. Stripe's only value is
+   *    `"if_supported"` — required wherever Stripe supports a tax id type for the
+   *    customer's country — so there is NO "require it for UK addresses only". Turning
+   *    it on also forces a French or Italian consumer to produce a VAT number, which
+   *    blocks every legitimate B2C sale.
+   * 2. It is **unavailable in elements mode** (`ui_mode: "custom"`). Stripe rejects the
+   *    parameter there, so a deployment that owns its own form has to enforce it itself.
+   *
+   * So "the address is in a country where I am not registered, therefore the VAT number
+   * becomes mandatory" is not expressible in ONE hosted session: the address is typed
+   * inside Stripe's form, after the session was created with this flag already fixed.
+   * The two shapes that work are to ask for the country in your own step first and then
+   * create the session accordingly, or to register where you owe and charge the rate —
+   * which needs no tax id from the customer at all.
+   */
+  taxIdRequired?: boolean;
+  /**
    * Which payment methods the form offers. Defaults to CARD ONLY — no Link,
    * Klarna, wallets — because that's what most subscription checkouts want, and
    * Checkout otherwise shows every method enabled on the account. Pass a list to
@@ -276,6 +298,7 @@ function reuseKeyFor(opts: {
   automaticTax?: boolean;
   taxRates?: string[];
   taxIdCollection?: boolean;
+  taxIdRequired?: boolean;
   paymentMethods?: string[] | "automatic";
   metadata?: Record<string, string>;
   uiMode?: "elements" | "hosted";
@@ -298,6 +321,7 @@ function reuseKeyFor(opts: {
     opts.automaticTax ?? null,
     opts.taxRates ?? null,
     opts.taxIdCollection ?? null,
+    opts.taxIdRequired ?? null,
     opts.paymentMethods ?? null,
     opts.metadata ?? null,
   ]);
@@ -331,6 +355,7 @@ async function openCheckoutSession(opts: {
   automaticTax?: boolean;
   taxRates?: string[];
   taxIdCollection?: boolean;
+  taxIdRequired?: boolean;
   paymentMethods?: string[] | "automatic";
   paymentMethodConfiguration?: string;
   config?: BillingConfig;
@@ -408,7 +433,12 @@ async function openCheckoutSession(opts: {
     // at all got Stripe Tax silently, which on an account with no registration
     // computes 0% and says nothing.
     automatic_tax: { enabled: tax.automaticTax === true },
-    tax_id_collection: { enabled: opts.taxIdCollection ?? true },
+    tax_id_collection: {
+      enabled: opts.taxIdCollection ?? true,
+      // Only on the hosted page: Stripe rejects `required` under `ui_mode: "custom"`,
+      // so setting it in elements mode would fail the whole session rather than degrade.
+      ...(opts.taxIdRequired && hosted ? { required: "if_supported" as const } : {}),
+    },
     // A full address, collected by the billing-address element. The alternative
     // ("auto", country + postal code inside the payment element) is enough for
     // tax in most places but not everywhere, and an invoice wants the real thing.
