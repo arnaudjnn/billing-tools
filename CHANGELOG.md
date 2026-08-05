@@ -1,3 +1,10 @@
+# [15.11.0](https://github.com/arnaudjnn/billing-tools/compare/v15.10.1...v15.11.0) (2026-08-05)
+
+
+### Features
+
+* **tax:** one file for where a non-established seller owes tax ([cd6299b](https://github.com/arnaudjnn/billing-tools/commit/cd6299b9dd980b0e521f8d0aaa7f28593dc11338))
+
 ## [15.10.1](https://github.com/arnaudjnn/billing-tools/compare/v15.10.0...v15.10.1) (2026-08-05)
 
 
