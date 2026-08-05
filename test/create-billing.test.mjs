@@ -121,3 +121,63 @@ test("topUp is accepted and reaches buy_credits", async () => {
   assert.equal(askedFor, "org_1", "the resolver is asked for this org");
   assert.deepEqual(calls[0]?.line_items?.[0]?.tax_rates, ["txr_iva22"]);
 });
+
+// ── The billing script's options, derived from the composition ────────────────
+//
+// The app's script used to restate the catalogue, the config and the ledger's
+// coverage. Two of those are merely duplication; the third is the shape of the worst
+// bug this library has had — a wallet-only ledger counting pooled usage as 0, so
+// every subscriber got unlimited requests while every check passed. A script that
+// declares its own coverage can be right while the app is wrong.
+test("billing.cli carries what the doctor needs, read off the composition", async () => {
+  const billing = createBilling({ adapter, config, plans: PLANS });
+
+  assert.equal(billing.cli.plans, PLANS, "the catalogue must be the app's own object");
+  assert.equal(billing.cli.config.currency, "eur");
+  // The DEFAULT ledger's coverage, not a `true` asserting one exists: the boolean
+  // cannot distinguish a ledger that sees org-wide included usage from one that
+  // does not, which is the only distinction that mattered.
+  assert.equal(typeof billing.cli.usageLedger, "object");
+  assert.equal(billing.cli.usageLedger.orgIncluded, true);
+
+  // A catalogue with the lifecycle tools on: `change_plan` opens a hosted Checkout
+  // Session itself, so a self-serve plan is genuinely buyable.
+  assert.equal(billing.cli.hasCheckout, true);
+  // WorkOS is audited by default — it is the substrate every adapter here assumes.
+  // `oauthProxy` is NOT claimed, because this composition mounts no proxy and
+  // REFRESH_TOKEN_SECRET is only required when one is mounted.
+  assert.equal(billing.cli.workos, true);
+
+  // The webhook URL is absent on purpose: it is a deployment fact, and a production
+  // URL sitting in this object is one a laptop run would register.
+  assert.equal("webhookUrl" in billing.cli, false);
+});
+
+test("billing.cli tracks the composition rather than describing a default", async () => {
+  // No catalogue → nothing to buy, so `hasCheckout` must not claim otherwise.
+  const bare = createBilling({ adapter, config });
+  assert.equal(bare.cli.hasCheckout, false);
+  assert.equal(bare.cli.plans, undefined);
+
+  // Lifecycle tools turned off: the app owns plan changes in its own UI, so this
+  // composition mounts no checkout of its own.
+  const uiOwned = createBilling({ adapter, config, plans: PLANS, subscriptionTools: false });
+  assert.equal(uiOwned.cli.hasCheckout, false);
+
+  // An explicit ledger is reported as ITS coverage, not the default's — the whole
+  // point of deriving this rather than restating it.
+  const { stripeUsageLedger } = await import("../dist/usage-ledger.js");
+  const { stripeScopeUsageLedger } = await import("../dist/usage-scopes.js");
+  const scoped = createBilling({
+    adapter,
+    config,
+    plans: PLANS,
+    meter: { ledger: stripeUsageLedger({ perCaller: stripeScopeUsageLedger() }) },
+  });
+  assert.equal(scoped.cli.usageLedger.callerIncluded, true);
+  assert.equal(
+    createBilling({ adapter, config, plans: PLANS }).cli.usageLedger.callerIncluded,
+    false,
+    "the default cannot count a per-member included window, and must not claim to",
+  );
+});

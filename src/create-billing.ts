@@ -20,6 +20,7 @@ import { createOAuthProxy, type OAuthProxyOptions } from "./oauth-proxy/index.js
 import { createMeter, createApiMeterGuard } from "./metering.js";
 import { defaultUsageLedger, type UsageLedger } from "./usage-ledger.js";
 import type { PlanCatalog } from "./plans.js";
+import type { RunBillingCliOptions } from "./setup.js";
 import { createBoundApi } from "./bound-api.js";
 
 // One-call composition helper. Instead of wiring the five factories by hand in
@@ -274,6 +275,37 @@ export function createBilling(opts: CreateBillingOptions) {
   return {
     adapter: opts.adapter,
     config: resolved,
+    /**
+     * What `runBillingCli` needs, taken from THIS composition — spread it into the
+     * app's billing script and add only the webhook URL:
+     *
+     *     runBillingCli({ ...billing.cli, webhookUrl: "https://myapp.example/api/stripe/webhook" })
+     *
+     * Derived rather than restated, because every value here is one the script used
+     * to name a second time: the catalogue, the config, and — the sharp one — what
+     * the wired ledger can COUNT. A script that states its own coverage can be
+     * right while the app is wrong, which is the exact shape of the worst bug this
+     * library has had (a wallet-only ledger counting pooled usage as 0, so every
+     * subscriber got unlimited requests, with every check passing).
+     *
+     * `hasCheckout` is true when a catalogue is registered with the lifecycle tools
+     * left on, because `change_plan` then opens a hosted Checkout Session itself —
+     * so a self-serve plan really is buyable without the app mounting anything.
+     *
+     * `workos` audits by default (WorkOS is the substrate every adapter here
+     * assumes) and asks for `REFRESH_TOKEN_SECRET` only when the OAuth proxy is
+     * actually mounted, which is the one thing that makes it required.
+     *
+     * The webhook URL stays the app's to give: it is a deployment fact, and putting
+     * a production URL in this object would let a laptop run register it.
+     */
+    cli: {
+      plans: opts.plans,
+      config: resolved,
+      usageLedger: ledger.covers,
+      hasCheckout: Boolean(opts.plans) && opts.subscriptionTools !== false,
+      workos: oauthProxy ? { oauthProxy: true } : true,
+    } satisfies Omit<RunBillingCliOptions, "webhookUrl">,
     /** The bound, org-scoped API: `api.invoices.list(orgId)`, `api.usage.summary(orgId)`, … */
     api,
     register,
