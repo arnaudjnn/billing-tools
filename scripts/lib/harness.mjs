@@ -98,11 +98,29 @@ export function failures() {
   return failed;
 }
 
+/**
+ * A section died — count it, because a crashed section is not a pass.
+ *
+ * `ok()` counts assertions, so a THROW incremented nothing: a run that lost a whole section
+ * to an exception printed `✗ the run threw: …` and then `ALL PASS`, and exited **0**. Both
+ * statements were on screen at once and the machine-readable one was the wrong one. Anything
+ * reading the exit code — CI, a shell `&&` — was told the run succeeded.
+ */
+export function fatal(what, e) {
+  failed++;
+  fatals.push(`${what}: ${e instanceof Error ? (e.stack ?? e.message) : e}`);
+  console.error(`\n✗ ${what} threw: ${e instanceof Error ? (e.stack ?? e.message) : e}`);
+}
+
+const fatals = [];
+
 export function finish() {
-  console.log(
-    `\n${failed === 0 ? "ALL PASS" : `${failed} FAILURE(S)`} — ${passed} passed` +
-      (skipped ? `, ${skipped} skipped` : ""),
-  );
+  const summary =
+    failed === 0
+      ? "ALL PASS"
+      : `${failed} FAILURE(S)${fatals.length ? `, ${fatals.length} of them fatal` : ""}`;
+  console.log(`\n${summary} — ${passed} passed` + (skipped ? `, ${skipped} skipped` : ""));
+  for (const f of fatals) console.log(`  ✗ ${f.split("\n")[0]}`);
   process.exit(failed === 0 ? 0 : 1);
 }
 

@@ -25,6 +25,7 @@ import { getWorkOS } from "../dist/workos.js";
 
 import {
   defer,
+  fatal,
   finish,
   ignoreMissing,
   loadEnvFile,
@@ -56,6 +57,9 @@ const SECTIONS = [
   // invoice assertions need the invoices the lifecycle raised.
   ["04", "invoices", () => import("./live/04-invoices.mjs")],
   ["06", "seats-topups-usage", () => import("./live/06-seats-topups-usage.mjs")],
+  // 07 needs a clock at a mid-cycle position and creates its own subscription, so it runs
+  // last — 05 has already advanced the shared clock past a period boundary.
+  ["07", "mid-cycle documents", () => import("./live/07-mid-cycle-documents.mjs")],
 ];
 
 async function main() {
@@ -162,19 +166,27 @@ async function main() {
     state: {},
   };
 
+  // Each section is isolated: one that throws is a counted FAILURE and the rest still run.
+  // Before this, an exception in section 05 skipped 04, 06 and 07 silently — and the summary
+  // still said ALL PASS.
   for (const [num, name, load] of SECTIONS) {
     if (ONLY && !ONLY.includes(num)) continue;
     section(`${num} — ${name}`);
-    const mod = await load();
-    await mod.run(ctx);
+    try {
+      const mod = await load();
+      await mod.run(ctx);
+    } catch (e) {
+      fatal(`section ${num} (${name})`, e);
+    }
   }
 }
 
 try {
   await main();
 } catch (e) {
-  console.error(`\n✗ the run threw: ${e instanceof Error ? (e.stack ?? e.message) : e}`);
-  process.exitCode = 1;
+  // Setup itself failed — no section ran. `fatal` is what makes the exit code agree with
+  // the transcript; `process.exitCode` alone was overwritten by `finish()`.
+  fatal("setup", e);
 } finally {
   await runDeferred();
 }
