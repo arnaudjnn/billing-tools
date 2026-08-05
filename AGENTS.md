@@ -272,6 +272,19 @@ So `TaxDecision` separates **`outOfScope`** (0% is the complete answer) from **`
 
 ### The inputs
 
+**`sellerRegime({ country, vatRegistered, oss?, alsoCollectIn? })` is the front door**, because the model was always expressive enough and never obvious. Two facts stood between a developer and a correct charge: **omitting your own country from `registrations` is how a domestic exemption is said**, and **`oss` covers the member states independently of that list**. Together they express the state that looked impossible — exempt at home, destination VAT across the EU, 20% to a UK consumer — and `test/seller-regime.test.mjs` pins the OUTCOME at each stage a European small business passes through, not the shape of the object:
+
+| regime | domestic | EU B2C | EU B2B | GB B2C |
+|---|---|---|---|---|
+| `vatRegistered: false` | 0% | 0% | 0% RC | 0% |
+| `+ oss: true` (past €10k EU B2C) | **0%** | 22% / 19% | 0% RC | 0% |
+| `+ alsoCollectIn: [{country:"GB"}]` | 0% | 22% / 19% | 0% RC | **20%** |
+| `vatRegistered: true` | 20% | 22% / 19% | 0% RC | 20% |
+
+`vatRegistered` is a **domestic** fact and changes nothing cross-border — the last two rows differ in one cell. It adds no capability: it returns a plain `config.tax`, and anything it expresses can still be written by hand.
+
+**Every form the library builds collects the address and the tax id** — including the TOP-UP, which did neither until this was noticed. That session issues an invoice, and for a wallet-funded product it is usually the first and only form a customer sees: so the invoice carried no billing address (EU B2C needs evidence of location), a business had no field for the number that reverse-charges the sale, and a rate resolved from `customer.address` fell back to the seller's own country — which is how a UK-registered seller would have charged a UK consumer 0%. `customer_update` rides along because without it the typed address stays on the session and never reaches the Customer, where the *next* charge looks for it.
+
 **`config.tax.registrations` is the second input a rate needs, and no dataset can supply it.** `origin` is where you are established; this is where you took on an obligation. `[{ country: "IT" }, { country: "GB" }]` for VAT registrations, `[{ country: "US", state: "CA" }]` for US nexus — country-wide covers every state, state-scoped only its own, and an address with no state matches no state-scoped entry. **Undefined is "the caller did not say"**, so the regime rules alone decide; declared, ONE rule covers everywhere including domestic, which is why `[]` says what omitting it cannot: a US seller with no nexus charges 0% everywhere, correctly and without a refusal. Post-Wayfair you must not collect in a state before you have nexus there — that is what makes a US destination answerable rather than a throw, and why `state` is finally read.
 
 Everything else comes from the CUSTOMER: their Stripe address decides the place of supply, their tax id decides reverse charge. **No address on file is charged the DOMESTIC rate, not nothing** — on a seat checkout the address isn't typed yet, so the domestic rate goes on at creation and the browser re-applies once it exists.

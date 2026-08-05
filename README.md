@@ -637,6 +637,46 @@ parameter is typed structurally (`CommandLike`).
 | `tax.origin` | unset | Where you're established (`"IT"`). Decides domestic vs cross-border, which is the whole question a VAT rate turns on. Unset falls back to the Stripe account's country — `mode: "none"` is how you opt out of tax entirely |
 | `tax.mode` | derived | `"local"` \| `"stripe"` \| `"none"`. Overrides what `origin` implies |
 
+### Selling worldwide: three facts, not a tax course
+
+```ts
+import { sellerRegime } from "@arnaudjnn/billing-tools";
+
+// A French micro-entreprise under the franchise: 0% to everyone, everywhere.
+config: { baseUrl, currency: "eur", tax: sellerRegime({ country: "FR", vatRegistered: false }) }
+
+// The same business past €10 000 of cross-border EU B2C, and now UK-registered.
+tax: sellerRegime({
+  country: "FR",
+  vatRegistered: false,                      // franchise en base — a DOMESTIC relief
+  oss: true,                                 // one registration covering every member state
+  alsoCollectIn: [{ country: "GB" }],        // the UK has NO threshold for a non-established seller
+})
+```
+
+What each produces, asserted in `test/seller-regime.test.mjs`:
+
+| | domestic | EU B2C | EU B2B (valid VAT id) | UK B2C |
+|---|---|---|---|---|
+| `vatRegistered: false` | 0% | 0% | 0% reverse charge | 0% |
+| `+ oss: true` | **0%** | 22% IT / 19% DE | 0% reverse charge | 0% |
+| `+ alsoCollectIn: [GB]` | 0% | 22% / 19% | 0% reverse charge | **20%** |
+| `vatRegistered: true` | 20% | 22% / 19% | 0% reverse charge | 20% |
+
+`vatRegistered` is a domestic fact and changes nothing cross-border. Reverse charge on EU
+B2B does **not** require the seller to be VAT-registered — the customer self-accounts —
+and the mandatory mention (`notes.reverseCharge`) rides on the 0% rate, which is the
+point of minting a TaxRate for it rather than omitting tax.
+
+Every form the library builds — the seat checkout, the credit top-up, the card setup —
+collects a **required billing address** and a **tax id**, and writes both back to the
+Customer, so the next charge and the invoice have them.
+
+**What no library can do:** tell you when €10 000 was crossed, or that you now owe UK
+VAT. Those are facts about your turnover. `checkBillingSetup` reports what the config
+claims and cannot audit it — declaring `vatRegistered: false` with no registrations says
+"I owe nothing anywhere", and the engine believes you.
+
 ## Roadmap
 
 - 🪙 x402 machine-payment protocol alongside [MPP](https://mpp.dev/)

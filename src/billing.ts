@@ -379,6 +379,14 @@ export async function grantCredits(
 export interface TopUpCheckoutOptions {
   /** Manual Stripe TaxRate ids, as `taxRatesFor` returns. */
   taxRates?: string[];
+  /**
+   * Collect a business tax ID (VAT number) on the form. On by default.
+   *
+   * Off, a business customer has no way to hand over the number that reverse-charges
+   * the sale, so a B2B purchase is invoiced as B2C. This session issues an invoice
+   * (`invoice_creation`), which makes it the one place that number can be captured.
+   */
+  taxIdCollection?: boolean;
   /** Use Stripe Tax instead. Ignored when `taxRates` is given — Stripe rejects both. */
   automaticTax?: boolean;
   /** Defaults to `${baseUrl}/billing/success?credits=…`. */
@@ -571,6 +579,25 @@ export async function createCreditCheckoutSession(
     // Manual rates and automatic tax are mutually exclusive in Stripe: passing
     // both fails the request outright.
     ...(!taxRates && opts.automaticTax ? { automatic_tax: { enabled: true } } : {}),
+    // WHERE the customer is, and WHETHER they are a business — collected here for the
+    // same reason the seat checkout collects them, and missing here until now.
+    //
+    // A top-up is the FIRST purchase for most wallet-funded products, so this was
+    // often the only form a customer ever saw, and it asked for neither. Three
+    // consequences, none of which raised an error: the invoice this session issues
+    // carried no billing address (EU B2C needs evidence of location, and an invoice
+    // wants the real thing); a business had no field for the VAT number that
+    // reverse-charges the sale, so B2B was invoiced as B2C; and any rate resolved
+    // from `customer.address` fell back to the domestic one, so a seller registered
+    // abroad charged its own rate to a customer it should have charged the
+    // destination rate.
+    //
+    // `customer_update` is required whenever `customer` is passed — without it the
+    // typed address stays on the session and never reaches the Customer, which is
+    // exactly where the next charge looks for it.
+    billing_address_collection: "required",
+    tax_id_collection: { enabled: opts.taxIdCollection ?? true },
+    customer_update: { address: "auto", name: "auto" },
     invoice_creation: { enabled: true },
     payment_intent_data: {
       setup_future_usage: "off_session",

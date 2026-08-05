@@ -14,7 +14,16 @@ import {
   __setStripeForTests,
   quoteCreditPurchase,
   invalidateCreditQuotes,
+  createCreditCheckoutSession,
 } from "../dist/billing.js";
+
+const CONFIG = {
+  freeCredits: 100,
+  currency: "eur",
+  baseUrl: "https://t.local",
+  internalDomains: [],
+  defaultLocale: "en",
+};
 
 function fakeStripe(rates) {
   const reads = [];
@@ -142,4 +151,39 @@ test("a real credit is still positive, and a debt still negative", async () => {
   // clamping it to 0 here would hide an unpaid invoice from every balance read.
   __setStripeForTests(at(500));
   assert.equal(await getCreditBalance("cus_1", "eur"), -500);
+});
+
+// ── The top-up form has to ask where the customer is ─────────────────────────
+//
+// A top-up is the FIRST purchase for most wallet-funded products, so it is often the
+// only form a customer ever sees — and it asked for neither an address nor a VAT
+// number, while issuing an invoice. Nothing errored: the invoice simply carried no
+// address, a business was invoiced as a consumer, and any rate resolved from
+// `customer.address` fell back to the seller's own country.
+test("a credit checkout collects the address and the tax id, and writes them back", async () => {
+  const calls = [];
+  __setStripeForTests({
+    checkout: { sessions: { async create(params) { calls.push(params); return { id: "cs_1", url: "https://pay.test/cs_1" }; } } },
+    paymentMethodConfigurations: { list() { throw new Error("permission denied"); } },
+  });
+
+  await createCreditCheckoutSession("cus_1", "org_1", 50, CONFIG);
+  const p = calls[0];
+
+  assert.equal(p.billing_address_collection, "required", "no address means no place of supply");
+  assert.deepEqual(p.tax_id_collection, { enabled: true }, "a business must be able to give its VAT number");
+  // Required whenever `customer` is passed, or the typed address stays on the session
+  // and never reaches the Customer — which is where the NEXT charge looks for it.
+  assert.deepEqual(p.customer_update, { address: "auto", name: "auto" });
+  assert.deepEqual(p.invoice_creation, { enabled: true });
+});
+
+test("tax id collection can be turned off, but is on unless it is", async () => {
+  const calls = [];
+  __setStripeForTests({
+    checkout: { sessions: { async create(params) { calls.push(params); return { id: "cs_1", url: "u" }; } } },
+    paymentMethodConfigurations: { list() { throw new Error("permission denied"); } },
+  });
+  await createCreditCheckoutSession("cus_1", "org_1", 50, CONFIG, { taxIdCollection: false });
+  assert.deepEqual(calls[0].tax_id_collection, { enabled: false });
 });
