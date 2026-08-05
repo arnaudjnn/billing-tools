@@ -1,3 +1,10 @@
+# [15.14.0](https://github.com/arnaudjnn/billing-tools/compare/v15.13.0...v15.14.0) (2026-08-05)
+
+
+### Features
+
+* **tax:** remove mode "external" ([0d41f10](https://github.com/arnaudjnn/billing-tools/commit/0d41f10dc6d96776a1e05b4e409e2171c89e9c50))
+
 # [15.13.0](https://github.com/arnaudjnn/billing-tools/compare/v15.12.0...v15.13.0) (2026-08-05)
 
 
