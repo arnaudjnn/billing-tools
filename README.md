@@ -29,6 +29,7 @@
 - [Ship tools, not billing plumbing](#ship-tools-not-billing-plumbing)
 - [Key Features](#key-features)
 - [Getting Started](#getting-started)
+- [From sandbox to production](#from-sandbox-to-production)
 - [How it works](#how-it-works)
 - [Agent auth (auth.md)](#agent-auth-authmd)
 - [Machine payments (MPP)](#machine-payments-mpp)
@@ -166,10 +167,12 @@ Worth knowing before you adopt it, rather than after.
 
 ## Getting Started
 
+Five steps to a workspace that can be billed, and the last two are one command each.
+
 ### Prerequisites
 - **Node 18+**
-- A **Stripe** secret key (`STRIPE_SECRET_KEY`)
-- A **WorkOS** API key + client id (`WORKOS_API_KEY`, `WORKOS_CLIENT_ID`)
+- A **Stripe** secret key — test mode is fine, and it decides which environment everything below reads and writes
+- A **WorkOS** API key + client id
 
 ### Install
 
@@ -180,53 +183,172 @@ npm install @arnaudjnn/billing-tools
 
 Ships compiled `dist/`, so there's no build step or `transpilePackages` needed in the consumer.
 
-### Environment
+### 1. Declare what you sell
+
+The catalogue is the input everything else is derived from: Stripe products and prices, which tools get registered, what each plan includes, and every pricing surface. Nothing here is a Dashboard click.
+
+```ts
+// plans.ts
+import { definePlans } from "@arnaudjnn/billing-tools/plans";
+
+export const PLANS = definePlans({
+  hobby: {
+    sells: { kind: "flat", price: { monthly: 1000, yearly: 10000 } },   // cents
+    grant: { kind: "none" },                    // included allowance is COUNTED, not credited
+    cap: { kind: "pool", credits: 1_000, onExhausted: "wallet" },
+    replenish: { purchase: { packs: [500, 2_000] }, autoReload: { threshold: 200, reloadTo: 2_000 } },
+    sale: "self_serve",                          // required, never inferred
+  },
+});
+```
+
+`grant` vs `cap` is the one distinction worth reading twice: a Stripe credit balance auto-applies to the next invoice, so crediting a plan's *own* included allowance discounts its own renewal. Include it as a `cap`; credit only what a customer buys. `checkPlansConfig` fails a plan that does both.
+
+### 2. Environment
+
+Four to set. The library reads no others.
 
 ```bash
 STRIPE_SECRET_KEY=sk_test_…
-STRIPE_WEBHOOK_SECRET=whsec_…        # only if you mount the webhook
 WORKOS_API_KEY=sk_…
 WORKOS_CLIENT_ID=client_…
-INTERNAL_ORG_DOMAINS=acme.com        # optional: orgs with these verified domains are unmetered
+REFRESH_TOKEN_SECRET=…                 # only if you mount the MCP OAuth proxy (`openssl rand -hex 32`)
 ```
 
-### Wire it up (one call)
+Plus two you don't type by hand, and one optional:
 
-`createBilling()` composes every surface from a single config (one module instance = one shared auth context). You supply the adapter + config; it returns the mounted handlers.
+```bash
+STRIPE_WEBHOOK_SECRET=whsec_…          # written by `npx billing-tools dev` locally; printed once by `billing setup` in a deployed env
+BILLING_WEBHOOK_URL=https://…          # where THIS environment's endpoint lives, read by the doctor
+INTERNAL_ORG_DOMAINS=acme.com          # optional: orgs with these verified domains are unmetered
+```
+
+**Both keys must name the same environment.** A live Stripe key beside a staging WorkOS key charges real cards against orgs and `sk_` keys in the wrong environment, and writes the mapping between them where nobody is looking. The doctor errors on it — when the WorkOS key states its environment (older `sk_test_`/`sk_live_` keys do; newer `sk_<key id>` ones carry no marker, so it stays silent rather than guessing).
+
+### 3. Wire it up (one call)
+
+`createBilling()` composes every surface from a single config — one module instance, so `runWithAuth` in the routes and `enforceAccess` inside the tools share one AsyncLocalStorage.
 
 ```ts
 // billing.ts
 import { createBilling } from "@arnaudjnn/billing-tools";
 import { WorkOSOrgAdapter } from "@arnaudjnn/billing-tools/adapters/workos-org";
+import { PLANS } from "./plans";
 
-export const { mcp, restList, restDispatch, webhook, agentAuth } = createBilling({
-  adapter: new WorkOSOrgAdapter(),                       // WorkOS is the source of truth
-  config: { currency: "usd", baseUrl: process.env.APP_URL! },
-  agentAuth: { branding: { productName: "Acme" } },     // enables auth.md (optional)
+const billing = createBilling({
+  adapter: new WorkOSOrgAdapter(),                        // WorkOS is the source of truth
+  config: { currency: "usd", baseUrl: process.env.APP_URL!, tax: { origin: "US", mode: "stripe" } },
+  plans: PLANS,
+  registerTools: (server) => registerMyProductTools(server),   // your own tools, alongside the billing ones
+  agentAuth: { branding: { productName: "Acme" } },      // enables auth.md (optional)
+  mcp: { requireAuth: true },                             // gate the MCP handshake, not just the tool calls
 });
+
+export const { mcp, restList, restDispatch, webhook, agentAuth, meter, api } = billing;
+export const BILLING_CLI = billing.cli;                   // for step 5
 ```
+
+Prefer fine-grained control? Every factory is exported individually (`registerBillingTools`, `createMcpTransport`, `createToolListHandler`, `createToolDispatchHandler`, `createStripeWebhookHandler`, `createAgentAuth`, …) so you can build your own composition root — but note that the composition is **where five decisions live** (webhook idempotency, subscription mirroring, the 402/401/429 mapping, handshake gating, which ledger counts), so hand-wiring means re-deciding each one.
+
+### 4. Mount the routes
+
+Every route file is a re-export.
 
 ```ts
-// app/[transport]/route.ts       →  export const { GET, POST } = mcp
-// app/api/v0/route.ts            →  export const GET = restList
-// app/api/v0/[tool]/route.ts     →  export const POST = restDispatch
-// app/api/stripe/webhook/route.ts→  export const POST = webhook
+// app/[transport]/route.ts        →  export const { GET, POST } = mcp
+// app/api/v0/route.ts             →  export const GET = restList
+// app/api/v0/[tool]/route.ts      →  export const POST = restDispatch
+// app/api/stripe/webhook/route.ts →  export const POST = webhook      // raw body: keep it out of session middleware
 ```
 
-Prefer fine-grained control? Every factory is exported individually (`registerBillingTools`, `createMcpTransport`, `createToolListHandler`, `createToolDispatchHandler`, `createStripeWebhookHandler`, `createAgentAuth`, …) so you can build your own composition root.
+Pass `onOtherEvent: createStripeEventHandler({ adapter, plans })` to `webhook` unless you run the [event poller](#-zero-webhook-sync). Without one of the two, nothing mirrors `customer.subscription.*` onto the org, so `resolvePlan` reads `null` for ever and **no subscriber is given the allowance they paid for**.
+
+### 5. One command for the environment
+
+`plans` and `config` are TypeScript values, so this is a script the app owns rather than a bin subcommand — but it holds no facts of its own.
+
+```ts
+// scripts/billing.ts
+import { runBillingCli } from "@arnaudjnn/billing-tools";
+import { BILLING_CLI } from "../billing";
+
+runBillingCli(BILLING_CLI);   // call it; it exits the process itself
+```
+
+```json
+{ "scripts": { "billing": "tsx --env-file-if-exists=.env.local scripts/billing.ts" } }
+```
+
+| | |
+|---|---|
+| `pnpm billing` | audit, read-only. The default, because the default must be the verb that cannot change anything |
+| `pnpm billing setup` | provision, then audit. Idempotent, safe on every deploy |
+| `--no-webhook` | there is no endpoint here, by design (correct on a laptop) |
+| `--url <url>` / `--prune` | check a different endpoint / delete duplicates on the same URL |
+
+`billing.cli` carries the catalogue, the config, the wired ledger's coverage, whether a checkout is mounted and whether the OAuth proxy is — read off the composition, not restated. A script that declares its own ledger coverage can be right while the app is wrong, which is how a wallet-only ledger once counted pooled usage as 0 and gave every subscriber unlimited requests with every check passing.
+
+### Local webhooks
+
+No tunnel, no `stripe login`, no registered endpoint:
+
+```bash
+npx billing-tools dev     # fetches the Stripe CLI if needed, forwards to localhost,
+                          # and writes the session's whsec_ into .env.local
+```
+
+The dotenv write is the point: `stripe listen` mints a new secret per session and your dev server is a different process, so a file is the only channel both see.
 
 ### First call
 
 ```bash
-# List available tools + costs
-curl https://your-app.com/api/v0
-
-# Use a key (Bearer sk_…)
+curl https://your-app.com/api/v0                          # tools + costs
 curl -X POST https://your-app.com/api/v0/get_credit_balance \
   -H "Authorization: Bearer sk_…"
 ```
 
-Add agent onboarding with [`createAgentAuth`](#agent-auth-authmd) and pay-per-call with [`createMachinePaymentHandler`](#machine-payments-mpp). See below.
+Add agent onboarding with [`createAgentAuth`](#agent-auth-authmd) and pay-per-call with [`createMachinePaymentHandler`](#machine-payments-mpp).
+
+## From sandbox to production
+
+**Nothing is copied between environments.** The same catalogue evaluated against a different key produces equivalent objects — which is why a key swap is *almost* the whole story, and why anything you clicked together by hand in a Dashboard is not.
+
+That is the test: **did code create it, or did you click it?**
+
+### Creates itself, from the keys alone
+
+| | On what trigger |
+|---|---|
+| Stripe products + prices | first checkout, or `billing setup` |
+| Usage meter | first metered call |
+| Payment-method configuration (card + Apple Pay + Google Pay) | first payment form |
+| Stripe TaxRate objects | first taxed charge |
+| Stripe customers | first billed request per org |
+| WorkOS orgs, memberships, `sk_` API keys | per customer, on demand |
+| WorkOS roles you declared in `workos: { roles }` | `billing setup` |
+
+### Needs you, once per environment
+
+| | Why it cannot be automatic |
+|---|---|
+| **`STRIPE_WEBHOOK_SECRET`** | Stripe returns it once, at creation. No request can put it in your env store, so you cannot set it in advance — `billing setup` creates the endpoint and prints the secret |
+| **AuthKit redirect URI** | WorkOS exposes no API for it in v10 (its only writable `redirect_uris` belong to a Connect application, a different object). `pnpm billing` prints the exact string to allowlist |
+| **AuthKit appearance/settings** | same: Dashboard only |
+| **Stripe Tax registrations** | only a human knows where the business collects. Skipped unless `config.tax.mode` is `"stripe"` |
+
+`admin` and `member` ship with a WorkOS environment, so there is nothing to do there — `ensureWorkOSRoles` has no default list and creates only roles you name.
+
+### The deploy
+
+```bash
+# 1. set the four env vars (live Stripe key + prod WorkOS key)
+pnpm billing setup          # → prints STRIPE_WEBHOOK_SECRET=… ONCE
+# 2. paste it into Vercel/Railway, redeploy
+# 3. allowlist the redirect URI the report printed
+pnpm billing                # exits non-zero: gate the pipeline on it
+```
+
+Run `setup` by hand, not from a build step — the signing secret would print into a build log nobody reads, and Stripe never shows it again. Because everything else provisions lazily, a broken config otherwise surfaces on a customer's first request; `pnpm billing` in the pipeline is what moves that into the deploy.
 
 ## How it works
 
