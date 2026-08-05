@@ -30,6 +30,7 @@
 - [Key Features](#key-features)
 - [Getting Started](#getting-started)
 - [From sandbox to production](#from-sandbox-to-production)
+- [Pricing examples](#pricing-examples)
 - [How it works](#how-it-works)
 - [Agent auth (auth.md)](#agent-auth-authmd)
 - [Machine payments (MPP)](#machine-payments-mpp)
@@ -350,6 +351,176 @@ pnpm billing                # exits non-zero: gate the pipeline on it
 
 Run `setup` by hand, not from a build step — the signing secret would print into a build log nobody reads, and Stripe never shows it again. Because everything else provisions lazily, a broken config otherwise surfaces on a customer's first request; `pnpm billing` in the pipeline is what moves that into the deploy.
 
+## Pricing examples
+
+Five independent axes, so a catalogue describes a product rather than picking from a
+menu. Only `sells` is a union — it alone decides which fields are required and what
+Stripe objects get minted.
+
+| axis | values | decides |
+|---|---|---|
+| `sells` | `nothing` \| `seats` \| `flat` | what Stripe charges for |
+| `grant` | `none` \| `purchased_seats` \| `per_member` \| `fixed` | what is CREDITED as money on `invoice.paid` |
+| `cap` | `wallet` \| `per_seat` \| `pool` | what is INCLUDED, as a counted window |
+| `replenish` | `{purchase?, autoReload?, request?}` | how to get more |
+| `sale` | `free` \| `self_serve` \| `quote` \| `legacy` | whether it can be bought. Required, never inferred |
+
+Every example below is typechecked against the published types in CI.
+
+### Flat subscription + one org-wide pool
+
+The shape for a product sold by volume rather than by seat — an API, an agent
+platform. One pool for the whole workspace; overage draws the prepaid wallet so a
+long run never stops halfway.
+
+**The arithmetic that makes a tier worth buying:** top-ups are fixed at **1 credit per
+cent** (`$1 = 100 credits`), so included credits have to cost *less* than that, and
+less at each step, or a customer who does the division has no reason to subscribe —
+let alone upgrade.
+
+```ts
+export const PLANS = definePlans({
+  starter: {
+    sells: { kind: "flat", price: { monthly: 3_000, yearly: 30_000 } },  // $30 → 0.75¢/credit, 25% off
+    grant: { kind: "none" },
+    cap: { kind: "pool", credits: 4_000, onExhausted: "wallet" },
+    replenish: { purchase: { packs: [1_000, 5_000] } },
+    sale: "self_serve",
+  },
+  pro: {
+    sells: { kind: "flat", price: { monthly: 9_000, yearly: 90_000 } },  // $90 → 0.60¢/credit, 40% off
+    grant: { kind: "none" },
+    cap: { kind: "pool", credits: 15_000, onExhausted: "wallet" },
+    replenish: {
+      purchase: { packs: [5_000, 20_000] },
+      autoReload: { threshold: 2_000, reloadTo: 15_000, enabledByDefault: true },
+    },
+    sale: "self_serve",
+    display: { name: "Pro", featured: true, badge: "Most popular" },
+  },
+});
+```
+
+No `limits.members` means unlimited — a seat was never what this product sells, and a
+ceiling on people only pushes a team onto one shared key.
+
+### Per-seat packs, with a top-up queue
+
+Each member draws their own included pack, and a member who runs out can ask the owner
+for more instead of being blocked. `cap: per_seat` is the only shape that needs a
+per-member counter, so it also needs a ledger that can count one — see
+[Scale](#-scale-stated-plainly).
+
+```ts
+export const PLANS = definePlans({
+  team: {
+    sells: {
+      kind: "seats",
+      seatTypes: {
+        standard: { price: { monthly: 2_000, yearly: 20_000 }, credits: 1_000 },
+        premium: { price: { monthly: 9_000, yearly: 90_000 }, credits: 5_000 },
+      },
+    },
+    grant: { kind: "none" },
+    cap: { kind: "per_seat", onExhausted: "block" },   // a committed pack's overage is a renegotiation
+    replenish: { request: {} },                         // request_top_up → approve_top_up
+    sale: "self_serve",
+  },
+});
+```
+
+`onExhausted: "block"` refuses even when the wallet could pay. `"wallet"` falls through
+instead, so a top-up funds the overage.
+
+### Pure pay-as-you-go, no subscription
+
+No plan to be on: a wallet, and credits bought as needed. `cap: wallet` includes
+nothing, so every call is funded by the balance.
+
+```ts
+export const PLANS = definePlans({
+  payg: {
+    sells: { kind: "nothing" },
+    grant: { kind: "none" },
+    cap: { kind: "wallet" },
+    replenish: { purchase: { packs: [1_000, 5_000, 20_000] }, autoReload: { threshold: 500, reloadTo: 5_000 } },
+    sale: "free",
+  },
+});
+```
+
+`checkPlansConfig` warns if you advertise `cap: wallet` without any `replenish` — a
+plan that promises pay-as-you-go and cannot take the money.
+
+### Free → self-serve → quote-only, with a rate limit
+
+`sale` is what makes a plan buyable, and `quote` keeps Enterprise off the self-serve
+path — an agent holding a workspace key cannot subscribe an org to it at its
+placeholder amount. `limits.rate` is a sixth axis and NOT the same as `cap`: a cap is
+the commercial ceiling over the billing cycle, a rate limit is the pace, and a month's
+allowance spent in one afternoon sits inside the cap.
+
+```ts
+export const PLANS = definePlans({
+  free: {
+    sells: { kind: "nothing" },
+    grant: { kind: "none" },
+    cap: { kind: "pool", credits: 200 },
+    limits: { rate: [{ every: "day", credits: 50 }] },
+    sale: "free",
+  },
+  growth: {
+    sells: { kind: "flat", price: { monthly: 4_900, yearly: 49_000 } },
+    grant: { kind: "none" },
+    cap: { kind: "pool", credits: 10_000, onExhausted: "wallet" },
+    replenish: { purchase: {} },
+    limits: { rate: [{ every: "hour", credits: 600, callerKind: "api" }] },
+    sale: "self_serve",
+  },
+  enterprise: {
+    sells: { kind: "flat", price: { monthly: 100_000, yearly: 1_000_000 } },
+    grant: { kind: "none" },
+    cap: { kind: "pool", credits: 250_000, onExhausted: "wallet" },
+    sale: "quote",     // listed, not buyable
+  },
+});
+```
+
+Rate limits fund nothing and never fall through to the wallet — a limit a top-up could
+lift is not a limit. The refusal is its own reason (`rate_limit_reached`) and carries
+`retryAt`, because it is the one refusal that fixes itself.
+
+### What a catalogue decides for you
+
+The catalogue is not just prices. **The tool surface and the CLI surface are derived
+from it**, so a shape that cannot happen is not advertised:
+
+| | flat + pool | seats + per_seat + `request` |
+|---|---|---|
+| tools registered | **26** | **33** (adds seats + top-ups) |
+| CLI commands | no `seats` / `topup` | all groups |
+
+That is the point of deriving rather than listing: an agent cannot tell a tool that
+always fails from one it is holding wrong, and a customer cannot tell a dead command
+from a mistake. Pass `plans` to `registerBillingCommands` to gate the CLI the same way.
+
+### Buying one
+
+`change_plan` is the single entry point for up, down and off. On a first purchase there
+is no subscription to prorate, so it opens a Checkout Session — **hosted** for the tool
+(a URL any caller can open), **elements** for your own UI (a client secret you mount).
+Same session either way: same tax, same payment-method configuration.
+
+```ts
+await changePlan(adapter, orgId, { plans: PLANS, to: { plan: "pro" }, config, uiMode: "hosted" });
+```
+
+Quote it first with `previewPlanChange(adapter, orgId, { plans, to, proration })` — it
+shares `desiredPrices` and `diffItems` with `changePlan`, so the quoted number is the
+charged number. Pass it the same `proration` you will pass to `changePlan`, or you are
+quoting a different policy from the one you apply. (It takes no `config`: it only reads,
+so it never needs to create a customer.)
+
 ## How it works
 
 **WorkOS is always the source of truth.** Your app's `orgId` is opaque: implement the adapter and everything (auth, metering, Stripe math, all surfaces) works unchanged. Two shipped patterns:
@@ -437,9 +608,21 @@ import { registerBillingCommands } from "@arnaudjnn/billing-tools";
 import { Command } from "commander";
 
 const program = new Command();
-registerBillingCommands(program, { configDir: "~/.acme", envPrefix: "ACME", defaultUrl: "https://acme.com" });
-// acme auth | keys list|revoke | balance | buy | invoices
+registerBillingCommands(program, {
+  configDir: "~/.acme",
+  envPrefix: "ACME",
+  defaultUrl: "https://acme.com",
+  // Gates the commands by the catalogue, exactly as the TOOLS are gated: a flat/pooled
+  // plan ships no `seats` or `topup` commands, which would otherwise call tools that
+  // were never registered and could only answer "Unknown tool". Omit to register all.
+  plans: PLANS,
+});
+// acme auth | keys | balance | buy | invoices | usage | plans | plan | spend | cards | …
 ```
+
+Every command hits the same REST endpoint an agent would, so the CLI can never do more
+or less than the API. `commander` is yours, not a dependency of this package — the
+parameter is typed structurally (`CommandLike`).
 
 ## Configuration
 
