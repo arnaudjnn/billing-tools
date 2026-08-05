@@ -162,7 +162,13 @@ Every call resolves to an **org**. An org API key means exactly that — the org
 
 A surface that DOES know the human (a server action, an OAuth token minted for a user) wraps the call in `runWithPrincipal({ authHeader?, orgId?, principal: { userId, isAdmin? } })`. Admin-only tools then call **`enforceAdmin(adapter, action)`** — `enforceAccess` plus `adapter.isAdmin` when a principal is present. `approve_top_up`, `deny_top_up` and `assign_seat_type` use it; `request_top_up` lets a known non-admin request only for themselves, since `member_id` arrives from the caller and unchecked would let a member queue grants against anyone's seat.
 
-Two deliberate fallbacks, both "allow": no principal (the org-key case), and an adapter with no `isAdmin` — silently disabling every management tool for adapters without a role concept is a worse failure than the one being prevented. So with only org keys in play the API is permissive and the app's own UI gate separates member from owner. **Extension point:** an OAuth path that can identify the user should resolve a principal alongside the org.
+Two deliberate fallbacks, both "allow": no principal (the org-key case), and an adapter with no `isAdmin` — silently disabling every management tool for adapters without a role concept is a worse failure than the one being prevented. So with only org keys in play the API is permissive and the app's own UI gate separates member from owner.
+
+**A route can now carry a principal, and until this it could not.** `runWithAuth` installs a *fresh* AsyncLocalStorage store, so a principal set outside the handler was discarded — `currentPrincipal()` read null, `enforceAdmin` took its org-key branch, and **no admin-only tool was enforceable through the REST or MCP route at all**. `runWithPrincipal` was exported and called nowhere in `src/`. An app whose own UI hit those endpoints was relying on gating it did itself, or on nothing. `createToolDispatchHandler({ principal })` and `createMcpTransport({ principal })` take `(request) => Principal | null`; returning null — or omitting it — keeps the org-key path byte for byte, which is what a headless agent holding an `sk_` key depends on.
+
+**And a role refusal is HTTP 403.** `enforceAdmin` writes "Forbidden (403)" and the status ladder had no 403 branch, so every one was served as a 500 — the server reporting itself broken over something that is neither a fault nor retryable. Invisible until the principal option made the path reachable.
+
+**`get_plan` is a READ and is not gated.** It called `enforceAdmin`, copied from the three tools that CHANGE a plan beside it, so a member could not answer "what is my workspace paying for" — while every other read (`list_invoices`, `get_credit_balance`, `get_usage`) is member-visible.
 
 ## Metadata is a budget, and a per-member record does not fit in it
 
