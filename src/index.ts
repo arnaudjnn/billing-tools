@@ -461,7 +461,7 @@ export {
 } from "./setup.js";
 
 // CLI factory
-export { registerBillingCommands } from "./cli/commands.js";
+export { registerBillingCommands, type CommandLike } from "./cli/commands.js";
 export { callTool, listTools, type ApiClientConfig } from "./cli/client.js";
 export {
   type CliOptions,

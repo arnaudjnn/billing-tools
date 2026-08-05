@@ -12,4 +12,4 @@ export {
   resolveBaseUrl,
   resolveApiKey,
 } from "./config.js";
-export { registerBillingCommands } from "./commands.js";
+export { registerBillingCommands, type CommandLike } from "./commands.js";

@@ -187,8 +187,9 @@ test("each entry point reaches exactly the packages it needs", () => {
   // consumers now have to import from two places.
   //
   // Two notes on what is absent. `commander` appears nowhere — `cli/commands.ts`
-  // imports `Command` as a TYPE, which tsc erases, so the customer CLI never cost
-  // a runtime dependency even from the root barrel. And `pg` appears nowhere
+  // describes the slice it needs as `CommandLike`, so the package does not depend on
+  // commander at all, not even as a peer (see the dependency test below). And `pg`
+  // appears nowhere
   // because there is no longer anything that could want it: the SQL and Redis
   // usage stores were removed once `stripeScopeUsageLedger` could answer the one
   // question they existed for — a window that is both INCLUDED and PER-MEMBER —
@@ -297,4 +298,43 @@ test("both Quantities survive the plan-model / checkout name collision", () => {
   const d = readFileSync(join(ROOT, "dist/index.d.ts"), "utf8");
   assert.match(d, /Quantities as PlanQuantities/, "the plan-model alias is gone");
   assert.match(d, /\bQuantities\b[^}]*\} from "\.\/checkout\.js"/, "checkout's Quantities is gone");
+});
+
+// ── The dependency list, which is what every consumer installs ───────────────
+//
+// `commander` sat in `dependencies` while being imported as a TYPE only, so tsc
+// erased it from the build and every consumer installed it anyway — to satisfy a
+// type both consumers already had, from their own commander, since they are the ones
+// constructing the program. It also pinned them to a major.
+//
+// It is now a `CommandLike` interface and a devDependency. This asserts it cannot
+// come back, because the way it would is one convenient `import type`.
+test("commander is not something a consumer has to install", async () => {
+  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+  for (const field of ["dependencies", "peerDependencies", "optionalDependencies"]) {
+    assert.ok(
+      !(pkg[field] ?? {})["commander"],
+      `commander is in ${field}; it is a type-only shape (CommandLike), so nothing needs it at install time`,
+    );
+  }
+  assert.ok(pkg.devDependencies?.commander, "keep it as a devDependency: the shape test typechecks against the real Command");
+
+  // And the shape is real: `registerBillingCommands` still takes something a
+  // commander program satisfies. Asserted here by USING it the way a consumer does.
+  const { registerBillingCommands } = await import("../dist/cli/commands.js");
+  const calls = [];
+  const stub = {
+    command(name) { calls.push(name); return stub; },
+    description() { return stub; },
+    option() { return stub; },
+    action() { return stub; },
+    opts() { return {}; },
+  };
+  registerBillingCommands(stub, { configDir: "~/.t", envPrefix: "T", defaultUrl: "https://t.local" });
+  // The customer-facing verbs. Matched on the leading word, because a commander name
+  // carries its argument syntax with it (`auth <email>`, `buy <amount>`).
+  const verbs = new Set(calls.map((c) => c.split(" ")[0]));
+  for (const verb of ["auth", "keys", "balance", "buy", "invoices", "plans", "spend"]) {
+    assert.ok(verbs.has(verb), `\`${verb}\` was not registered (got: ${[...verbs].join(", ")})`);
+  }
 });

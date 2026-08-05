@@ -1,5 +1,4 @@
 import { rmSync } from "node:fs";
-import type { Command } from "commander";
 import { callTool, type ApiClientConfig } from "./client.js";
 import {
   type CliOptions,
@@ -31,9 +30,46 @@ function print(data: unknown): void {
   console.log(JSON.stringify(data, null, 2));
 }
 
+/**
+ * The slice of a commander `Command` these commands actually use.
+ *
+ * Structural, so `commander` is not a dependency of this package at all — not even
+ * a peer. It never was one at RUNTIME (the import was `import type`, which tsc
+ * erases), but it sat in `dependencies`, so every consumer installed it to satisfy a
+ * type. Both consumers already declare their own — they are the ones constructing
+ * the program — so the copy here was duplication that also pinned them to a major.
+ *
+ * A real `Command` satisfies this by shape; `test/cli-shape.test.mjs` pins that,
+ * because the risk of a structural type is drifting from the thing it describes.
+ */
+export interface CommandLike {
+  command(nameAndArgs: string, opts?: { isDefault?: boolean; hidden?: boolean }): CommandLike;
+  description(text: string): CommandLike;
+  // Overloaded, like commander's own: a bare flag, a flag with a literal default, or
+  // a flag with a coercion callback (`--limit <n>` → parseInt). A single signature
+  // unioning the last two collapses to `unknown` and the callback loses its parameter
+  // types, which is how the first attempt at this failed.
+  option(flags: string, description?: string): CommandLike;
+  option(
+    flags: string,
+    description: string,
+    fn: (value: string, previous: unknown) => unknown,
+    defaultValue?: unknown,
+  ): CommandLike;
+  option(
+    flags: string,
+    description: string,
+    defaultValue: string | boolean | string[],
+  ): CommandLike;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- commander's own signature
+  action(handler: (...args: any[]) => unknown): CommandLike;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- commander's OptionValues
+  opts(): Record<string, any>;
+}
+
 // Register the shared billing commands on a commander program (or subcommand).
 // Reads global options --api-key / --url off `program`.
-export function registerBillingCommands(program: Command, opts: CliOptions) {
+export function registerBillingCommands(program: CommandLike, opts: CliOptions) {
   const requireConfig = (): ApiClientConfig => {
     const apiKey = resolveApiKey(opts, program.opts().apiKey);
     if (!apiKey) {
@@ -191,7 +227,7 @@ export function registerBillingCommands(program: Command, opts: CliOptions) {
 // the SAME tools the API and MCP expose, so a command exists here if and only if
 // a tool exists there — a capability reachable from one surface and not another
 // is the gap this whole pass was about.
-function registerPlanCommands(program: Command, requireConfig: () => ApiClientConfig) {
+function registerPlanCommands(program: CommandLike, requireConfig: () => ApiClientConfig) {
   program
     .command("plans")
     .description("List the available plans, with prices and included usage")
