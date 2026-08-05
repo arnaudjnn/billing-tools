@@ -62,12 +62,15 @@ function fakeStripe({
   currentPrice = "price_starter",
   itemId = "si_1",
   schedule = null,
+  pendingUpdate = null,
 } = {}) {
   const updates = [];
   const released = [];
+  const scheduleUpdates = [];
   return {
     updates,
     released,
+    scheduleUpdates,
     subscriptions: {
       async *list() {
         yield {
@@ -96,7 +99,19 @@ function fakeStripe({
           id,
           status: "active",
           metadata: params.metadata ?? {},
-          items: { data: [{ id: itemId, quantity: 1, price: { id: "price_pro" }, current_period_end: PERIOD_END }] },
+          // A declined `invoice_now` upgrade comes back like this: active, items UNCHANGED,
+          // `pending_update` set, and an open invoice.
+          ...(pendingUpdate ? { pending_update: pendingUpdate, latest_invoice: "in_pending" } : {}),
+          items: {
+            data: [
+              {
+                id: itemId,
+                quantity: 1,
+                price: { id: pendingUpdate ? currentPrice : "price_pro" },
+                current_period_end: PERIOD_END,
+              },
+            ],
+          },
         };
       },
     },
@@ -104,6 +119,22 @@ function fakeStripe({
       async release(id) {
         released.push(id);
         return { id, status: "released" };
+      },
+      async retrieve(id) {
+        return {
+          id,
+          phases: [{ start_date: 1, end_date: PERIOD_END, items: [{ price: currentPrice, quantity: 1 }] }],
+        };
+      },
+      async create() {
+        return {
+          id: "sub_sched_new",
+          phases: [{ start_date: 1, end_date: PERIOD_END, items: [{ price: currentPrice, quantity: 1 }] }],
+        };
+      },
+      async update(id, params) {
+        scheduleUpdates.push({ id, params });
+        return { id, ...params };
       },
     },
     prices: {
@@ -277,4 +308,149 @@ test("and nothing is released when no schedule is attached", async () => {
 
   assert.deepEqual(stripe.released, []);
   assert.equal(stripe.updates.at(-1).params.cancel_at_period_end, true);
+});
+
+// ── 5. an immediate change must release a pending schedule ───────────────────
+
+test("an immediate change releases a schedule, or the schedule wins later", async () => {
+  // The defect: a customer downgraded, changed their mind, PAID to go back up, and was
+  // dropped to the lower tier at the period end — the pending phase replaced the items they
+  // had just bought. Measured live: the renewal billed €18 Starter after an upgrade to Pro.
+  const stripe = fakeStripe({ currentPlan: "starter", schedule: "sub_sched_9" });
+  await upgrade(stripe);
+
+  assert.deepEqual(stripe.released, ["sub_sched_9"], "released before the items are updated");
+});
+
+test("but a SCHEDULED change keeps its schedule, which is what carries it", async () => {
+  // Downgrading to a lower rank with the default timing takes the period-end path, which
+  // needs the schedule. Releasing there would delete the mechanism.
+  const stripe = fakeStripe({ currentPlan: "pro", currentPrice: "price_pro", schedule: "sub_sched_9" });
+  __setStripeForTests(stripe);
+  const res = await changePlan(adapter, "org_1", {
+    plans: PLANS,
+    to: { plan: "starter", interval: "monthly" },
+    currency: "eur",
+    record: false,
+  });
+
+  assert.equal(res.kind, "scheduled");
+  assert.deepEqual(stripe.released, [], "the schedule is the mechanism here, not litter");
+});
+
+// ── 6. a held change is not an applied change ────────────────────────────────
+
+test("a pending update is reported as pending, not as updated", async () => {
+  // Stripe answers a declined `invoice_now` upgrade with `status: "active"`, the items
+  // UNCHANGED, and `pending_update` set. Reporting that as `updated` told a UI to show the new
+  // tier to a customer whose card had been declined.
+  const stripe = fakeStripe({ currentPlan: "starter", pendingUpdate: { expires_at: 1_800_000_000 } });
+  const res = await upgrade(stripe, { proration: "invoice_now" });
+
+  assert.equal(res.kind, "pending");
+  assert.equal(res.plan, "starter", "the plan in force is still the old one");
+  assert.equal(res.pendingUntil, new Date(1_800_000_000 * 1000).toISOString());
+  assert.equal(res.invoiceId, "in_pending");
+});
+
+test("and it does NOT record the unpaid plan on the org", async () => {
+  // The worst of it: the mirror granted the tier, so the meter resolved the new plan's pool
+  // and every entitlement check passed for an upgrade nobody had paid for.
+  const written = [];
+  const recording = {
+    ...adapter,
+    async setSubscription(orgId, patch) {
+      written.push(patch);
+    },
+    async setOrgMetadata(orgId, patch) {
+      written.push(patch);
+    },
+  };
+  const stripe = fakeStripe({ currentPlan: "starter", pendingUpdate: { expires_at: 1_800_000_000 } });
+  __setStripeForTests(stripe);
+  await changePlan(recording, "org_1", {
+    plans: PLANS,
+    to: { plan: "pro", interval: "monthly" },
+    currency: "eur",
+    proration: "invoice_now",
+    record: true,
+  });
+
+  assert.equal(
+    written.some((p) => p.plan === "pro"),
+    false,
+    "no setSubscription({ plan: 'pro' }) — that is the unpaid entitlement",
+  );
+  assert.deepEqual(
+    written.find((p) => "pendingPlan" in p),
+    { pendingPlan: "pro", pendingPlanAt: new Date(1_800_000_000 * 1000).toISOString() },
+    "filed as pending instead, like a scheduled downgrade",
+  );
+});
+
+test("a paid change still records normally", async () => {
+  const written = [];
+  const recording = {
+    ...adapter,
+    async setSubscription(orgId, patch) {
+      written.push(patch);
+    },
+    async setOrgMetadata() {},
+  };
+  const stripe = fakeStripe({ currentPlan: "starter" });
+  __setStripeForTests(stripe);
+  const res = await changePlan(recording, "org_1", {
+    plans: PLANS,
+    to: { plan: "pro", interval: "monthly" },
+    currency: "eur",
+    proration: "invoice_now",
+    record: true,
+  });
+
+  assert.equal(res.kind, "updated");
+  assert.equal(written[0].plan, "pro");
+});
+
+// ── 7. a double-clicked Confirm ──────────────────────────────────────────────
+
+test("a concurrent duplicate is retried, not surfaced as an idempotency error", async () => {
+  // An idempotency key dedupes a SEQUENTIAL repeat. Two requests carrying it at once make
+  // Stripe reject the second outright, and the caller saw "There is currently another
+  // in-progress request using this Idempotent Key" — which is what a double-clicked button
+  // sends. The loser waits and re-sends; the key then replays the winner's response.
+  let attempts = 0;
+  const stripe = fakeStripe({ currentPlan: "starter" });
+  const realUpdate = stripe.subscriptions.update;
+  stripe.subscriptions.update = async (id, params, options) => {
+    if (++attempts === 1) {
+      throw Object.assign(
+        new Error(
+          "There is currently another in-progress request using this Idempotent Key (that probably means you submitted twice, and the other request is still going through): plan:sub_1",
+        ),
+        { type: "idempotency_error" },
+      );
+    }
+    return realUpdate.call(stripe.subscriptions, id, params, options);
+  };
+
+  const res = await upgrade(stripe);
+  assert.equal(attempts, 2, "retried once");
+  assert.equal(res.kind, "updated");
+});
+
+test("an idempotency key reused with DIFFERENT params is not retried away", async () => {
+  // Retrying that one would burn the attempts and hide a real bug: the key must name the
+  // mutation, and if it does not, the caller has to hear about it.
+  let attempts = 0;
+  const stripe = fakeStripe({ currentPlan: "starter" });
+  stripe.subscriptions.update = async () => {
+    attempts++;
+    throw Object.assign(
+      new Error("Keys for idempotent requests can only be used with the same parameters they were first used with."),
+      { type: "idempotency_error" },
+    );
+  };
+
+  await assert.rejects(() => upgrade(stripe), /same parameters/);
+  assert.equal(attempts, 1, "surfaced on the first try");
 });

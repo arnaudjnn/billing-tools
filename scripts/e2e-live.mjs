@@ -60,6 +60,7 @@ const SECTIONS = [
   // 07 needs a clock at a mid-cycle position and creates its own subscription, so it runs
   // last — 05 has already advanced the shared clock past a period boundary.
   ["07", "mid-cycle documents", () => import("./live/07-mid-cycle-documents.mjs")],
+  ["08", "plan moves", () => import("./live/08-plan-moves.mjs")],
 ];
 
 async function main() {

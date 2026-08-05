@@ -169,10 +169,18 @@ export async function createClockCustomer(stripe, { orgId, country = "IT", name 
   return { clockId: clock.id, customerId: customer.id };
 }
 
-/** A payable card, set as the invoice default so off-session charges (auto-reload, a
- *  prorated upgrade) can actually settle. */
-export async function attachTestCard(stripe, customerId) {
-  const pm = await stripe.paymentMethods.create({ type: "card", card: { token: "tok_visa" } });
+/**
+ * A card, set as the invoice default so off-session charges (auto-reload, a prorated
+ * upgrade) can actually settle.
+ *
+ * `card: "fail"` attaches a card that ACCEPTS attachment and then declines every charge —
+ * the only way to reach the `pending_update` path, which is the entire reason `changePlan`
+ * sends `pending_if_incomplete`. A card that failed to attach would test nothing.
+ */
+const CARD_TOKENS = { ok: "tok_visa", fail: "tok_chargeCustomerFail" };
+
+export async function attachTestCard(stripe, customerId, { card = "ok" } = {}) {
+  const pm = await stripe.paymentMethods.create({ type: "card", card: { token: CARD_TOKENS[card] } });
   await stripe.paymentMethods.attach(pm.id, { customer: customerId });
   await stripe.customers.update(customerId, {
     invoice_settings: { default_payment_method: pm.id },

@@ -41,6 +41,12 @@ export type PlanChangeKind =
   | "checkout"
   /** Applied immediately. */
   | "updated"
+  /**
+   * Sent, but NOT in force: the invoice it raised has not been paid, so Stripe is holding
+   * the change as a pending update (~23h, then it is dropped). The customer is still on
+   * `plan`. Only `proration: "invoice_now"` can produce this.
+   */
+  | "pending"
   /** Takes effect at the end of the paid period. */
   | "scheduled"
   /** Ends at the end of the paid period (a downgrade to a free plan is this). */
@@ -65,6 +71,10 @@ export interface PlanChangeResult {
   /** `checkout` under `uiMode: "hosted"` — the page to send a customer to, and the
    *  only usable answer for a caller that has no browser. */
   checkoutUrl?: string | null;
+  /** `pending` only: when Stripe drops the held change if the invoice is still unpaid. */
+  pendingUntil?: string | null;
+  /** `pending` only: the unpaid invoice. Settling it is what applies the change. */
+  invoiceId?: string | null;
 }
 
 export type PlanChangeErrorCode =
@@ -217,6 +227,48 @@ async function desiredPrices(
     }
   }
   return desired;
+}
+
+/**
+ * Send the change, and survive the customer clicking Confirm twice.
+ *
+ * An idempotency key deduplicates a repeat, but only a SEQUENTIAL one: two requests carrying
+ * the same key at the same moment make Stripe reject the second outright — "There is
+ * currently another in-progress request using this Idempotent Key". Measured, from two
+ * concurrent `changePlan` calls, which is precisely what a double-clicked button sends.
+ *
+ * Rejecting it would be defensible if the caller saw something actionable, but they saw that
+ * sentence. So the loser waits and re-sends: by then the winner has finished and the same key
+ * REPLAYS its stored response, so both callers get the one real outcome. Bounded, because an
+ * in-progress request that never finishes must surface rather than hang.
+ */
+async function sendChange(
+  subscriptionId: string,
+  params: Stripe.SubscriptionUpdateParams,
+  idempotencyKey: string,
+  // Generous, because the twin is creating and PAYING an invoice: a stingy budget turns a
+  // recoverable double-click back into the raw error it exists to hide.
+  { tries = 6, delayMs = 900 } = {},
+): Promise<Stripe.Subscription> {
+  const stripe = getStripe();
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await stripe.subscriptions.update(subscriptionId, params, { idempotencyKey });
+    } catch (e) {
+      // Matched on the MESSAGE, which is the exception to this package's prefer-typed-errors
+      // rule and is measured rather than assumed: an `instanceof
+      // Stripe.errors.StripeIdempotencyError` guard here did NOT fire on the real rejection,
+      // so the SDK does not classify this one the way its name suggests. The message is also
+      // the only thing that separates "the twin is still running" (retryable) from "this key
+      // was used with different params" (a caller bug, where retrying would just burn the
+      // attempts and hide it).
+      const inFlight = /another in-progress request using this Idempotent Key/i.test(
+        e instanceof Error ? e.message : String(e),
+      );
+      if (!inFlight || attempt >= tries - 1) throw e;
+      await new Promise((r) => setTimeout(r, delayMs * (attempt + 1)));
+    }
+  }
 }
 
 /**
@@ -516,6 +568,26 @@ export async function changePlan(
     return { kind: "scheduled", customerId, subscriptionId: sub.id, plan: currentPlanKey, status: sub.status, effectiveAt };
   }
 
+  // An IMMEDIATE change has to release any schedule first, or the schedule wins later.
+  //
+  // A pending phase replaces the subscription's items when it starts, so a customer who
+  // downgraded, changed their mind and PAID to go back up was silently dropped to the lower
+  // tier at the period end — the upgrade they bought lasted until the boundary and then
+  // evaporated, with no invoice or event naming the cause. (Stripe also cancels a pending
+  // update on a phase transition, so the same schedule could void an unpaid upgrade.)
+  //
+  // Releasing is right rather than rewriting the phase: they have just told us where they
+  // want to be, so the plan they abandoned is no longer a plan. The scheduled-downgrade path
+  // above keeps its schedule; only this branch, which applies now, drops it.
+  if (sub.schedule) {
+    await stripe.subscriptionSchedules.release(
+      typeof sub.schedule === "string" ? sub.schedule : sub.schedule.id,
+    );
+    if (record) {
+      await adapter.setOrgMetadata?.(orgId, { pendingPlan: null, pendingPlanAt: null });
+    }
+  }
+
   // `pending_if_incomplete` supports ONLY the params that control proration or generate an
   // invoice — no tax parameter of any kind, neither `items[].tax_rates` nor
   // `default_tax_rates` — and Stripe hard-400s rather than ignoring one. So an account
@@ -537,7 +609,7 @@ export async function changePlan(
     }
   }
 
-  const updated = await stripe.subscriptions.update(
+  const updated = await sendChange(
     sub.id,
     {
       // Stripped for the same reason, on the same path.
@@ -554,12 +626,37 @@ export async function changePlan(
     //
     // The MUTATION is in the key, not just the target — see `itemFingerprint`. A genuine
     // double-click sends the identical diff, so it still dedupes.
-    {
-      idempotencyKey: ["plan", sub.id, target.key, interval, itemFingerprint(items, carried), timing, proration].join(
-        ":",
-      ),
-    },
+    ["plan", sub.id, target.key, interval, itemFingerprint(items, carried), timing, proration].join(":"),
   );
+
+  // The payment FAILED and Stripe is holding the change — measured: `status: "active"`,
+  // `pending_update` set, items untouched, an open invoice. It returned `kind: "updated"` and
+  // recorded the NEW plan on the org, so the app's own mirror granted a tier the customer had
+  // not paid for: the meter resolved it, its pool applied, and if the invoice was never paid
+  // the pending update expired in ~23h and the entitlement silently vanished with no event
+  // naming why. Reporting an unapplied change as applied is the failure mode, not the decline.
+  if (updated.pending_update) {
+    const expiresAt = updated.pending_update.expires_at;
+    if (record) {
+      // The plan in force does NOT change. Filed as pending, exactly like a scheduled
+      // downgrade, so a UI can say "waiting for payment" instead of showing the wrong tier.
+      await adapter.setOrgMetadata?.(orgId, {
+        pendingPlan: target.key,
+        pendingPlanAt: expiresAt ? new Date(expiresAt * 1000).toISOString() : null,
+      });
+    }
+    return {
+      kind: "pending",
+      customerId,
+      subscriptionId: updated.id,
+      plan: currentPlanKey,
+      status: updated.status,
+      effectiveAt: null,
+      pendingUntil: expiresAt ? new Date(expiresAt * 1000).toISOString() : null,
+      // The caller needs this to let the customer pay: settling it applies the change.
+      invoiceId: typeof updated.latest_invoice === "string" ? updated.latest_invoice : (updated.latest_invoice?.id ?? null),
+    };
+  }
 
   if (record) {
     await adapter.setSubscription?.(orgId, {
