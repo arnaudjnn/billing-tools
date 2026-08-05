@@ -1,4 +1,4 @@
-import { runWithAuth } from "../auth.js";
+import { runWithAuth, runWithPrincipal, type Principal } from "../auth.js";
 import { ToolValidationError } from "../dispatch.js";
 
 // Framework-light REST factories (standard Request/Response; works in Next app
@@ -49,6 +49,21 @@ export function createToolDispatchHandler(opts: {
   /** Advertise the auth.md PRM discovery doc in the 401 WWW-Authenticate header
    *  (`resource_metadata="…"`) so agents can bootstrap. String or per-request. */
   resourceMetadata?: string | ((request: Request) => string);
+  /**
+   * WHO is calling, when this surface knows — a session cookie, an OAuth token carrying
+   * a user id. Return null for a request that carries only an org API key.
+   *
+   * Without it the admin-only tools cannot be enforced through this route AT ALL, which
+   * was true until now: `runWithAuth` installs a fresh AsyncLocalStorage store, so an
+   * outer `runWithPrincipal` was discarded, `currentPrincipal()` read null, and
+   * `enforceAdmin` took its org-key branch and allowed everything. An app whose own UI
+   * calls these endpoints was relying on gating it did itself, or on nothing.
+   *
+   * Only pass `isAdmin` if you have already resolved the role and want to skip the
+   * adapter lookup — otherwise leave it off and let `adapter.isAdmin` answer, which is
+   * the path that reads the real role.
+   */
+  principal?: (request: Request) => Principal | null | Promise<Principal | null>;
 }) {
   const realm = opts.realm ?? "billing-tools";
   return async (
@@ -59,7 +74,12 @@ export function createToolDispatchHandler(opts: {
     const authHeader = request.headers.get("authorization");
     const rm =
       typeof opts.resourceMetadata === "function" ? opts.resourceMetadata(request) : opts.resourceMetadata;
-    return runWithAuth(authHeader, async () => {
+    const principal = opts.principal ? await opts.principal(request) : null;
+    // One store either way: `runWithPrincipal` sets the same `authHeader` plus the
+    // caller, so `enforceAccess` behaves identically and only `enforceAdmin` sees more.
+    const withContext = <T>(fn: () => T): T =>
+      principal ? runWithPrincipal({ authHeader, principal }, fn) : runWithAuth(authHeader, fn);
+    return withContext(async () => {
       try {
         const body = await request.json().catch(() => ({}));
         const result = await opts.dispatcher.dispatchTool(tool, body as Record<string, unknown>);
@@ -85,14 +105,20 @@ export function createToolDispatchHandler(opts: {
         // refusal an agent can act on without a human. A consumer had already
         // hand-rolled this mapping over the same string; it belongs here, next to
         // the 401 and 429 that were already mapped for the same reason.
+        // 403 for a role refusal, for the same reason as the 402 above: `enforceAdmin`
+        // writes "Forbidden (403)" and every one of those was being served as a 500 —
+        // telling the caller the server is broken when the truthful answer is "you are
+        // not an admin of this workspace", which is not a fault and not retryable.
         const status =
           err instanceof ToolValidationError
             ? 400
             : /\bInsufficient credits\b/i.test(message)
               ? 402
-              : message.includes("Unknown tool")
-                ? 404
-                : 500;
+              : /\bForbidden\b|\b403\b/i.test(message)
+                ? 403
+                : message.includes("Unknown tool")
+                  ? 404
+                  : 500;
         return Response.json({ error: message }, { status });
       }
     });

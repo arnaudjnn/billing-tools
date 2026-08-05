@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import { enforceAdmin } from "../auth.js";
+import { enforceAccess, enforceAdmin } from "../auth.js";
 import { stripeConfigured } from "../billing.js";
 import {
   cancelPlan,
@@ -217,7 +217,10 @@ scheduled, and which moves are available (the plan above, the plan below, whethe
 can be cancelled) — the same set the billing screen offers.`,
     {},
     async () => {
-      const auth = await enforceAdmin(adapter, "get_plan");
+        // A READ, so `enforceAccess` — any member may see which plan their workspace is
+        // on. It was `enforceAdmin`, copied from the three tools that CHANGE a plan
+        // beside it, which meant a member could not answer "what am I paying for".
+        const auth = await enforceAccess(adapter);
       if ("isError" in auth) return auth;
       const sub = (await adapter.getSubscription?.(auth.orgId)) ?? null;
       const md = (await adapter.getOrgMetadata?.(auth.orgId)) ?? {};

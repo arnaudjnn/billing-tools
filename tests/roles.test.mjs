@@ -93,3 +93,63 @@ test("a bad key is still a 401, not a 403", async () => {
   assert.equal(r.isError, true);
   assert.match(r.content[0].text, /Unauthorized \(401\)/);
 });
+
+// ── get_plan is a READ ───────────────────────────────────────────────────────
+//
+// It called `enforceAdmin`, copied from the three tools that CHANGE a plan beside it, so
+// a plain member could not answer "what is my workspace paying for". Every other read in
+// the library — list_invoices, get_credit_balance, get_usage — is member-visible; this
+// one was the outlier, and nothing about a read needs an owner.
+test("a member can read which plan the workspace is on", async () => {
+  const { createDispatcher } = await import("../dist/dispatch.js");
+  const { registerBillingTools } = await import("../dist/tools/register.js");
+  const { runWithPrincipal } = await import("../dist/auth.js");
+  const { __setStripeForTests } = await import("../dist/billing.js");
+
+  __setStripeForTests({
+    subscriptions: { list: async () => ({ data: [] }) },
+    customers: { async retrieve() { return { id: "cus_1", metadata: {} }; } },
+  });
+
+  const adapter = {
+    async validateApiKey() { return { orgId: "org_1" }; },
+    async getOrgDomains() { return []; },
+    async getBillingCustomerId() { return "cus_1"; },
+    async setBillingCustomerId() {},
+    async getOrgMetadata() { return {}; },
+    async setOrgMetadata() {},
+    async getSubscription() { return { plan: "pro", status: "active", subscriptionId: null, periodEnd: null }; },
+    // The member is NOT an admin — the whole point.
+    async isAdmin() { return false; },
+  };
+
+  const PLANS = {
+    pro: {
+      sells: { kind: "flat", price: { monthly: 1000, yearly: 10000 } },
+      cap: { kind: "pool", credits: 1000 },
+      replenish: { purchase: {} },
+      sale: "self_serve",
+    },
+  };
+
+  const { dispatchTool } = createDispatcher((server) =>
+    registerBillingTools(server, {
+      adapter,
+      config: { currency: "eur", baseUrl: "https://t.local", internalDomains: [] },
+      plans: PLANS,
+    }),
+  );
+
+  const asMember = (tool) =>
+    runWithPrincipal({ authHeader: "Bearer sk_x", principal: { userId: "usr_member" } }, () =>
+      dispatchTool(tool, {}),
+    );
+
+  // The read goes through.
+  const plan = await asMember("get_plan");
+  assert.ok(plan, "a member must be able to read get_plan");
+
+  // And the WRITES beside it still refuse, which is what makes the change a narrowing of
+  // one tool rather than a hole in the gate.
+  await assert.rejects(() => asMember("cancel_plan"), /Forbidden \(403\)/);
+});

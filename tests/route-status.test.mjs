@@ -128,3 +128,63 @@ test("requireAuth defaults off, so no existing deployment's posture changes", as
   // transport did not refuse it itself.
   assert.notEqual(anon.status, 401);
 });
+
+// ── 403, and the principal that makes it reachable ───────────────────────────
+//
+// `enforceAdmin` writes "Forbidden (403)", and every one of those was served as HTTP
+// 500 — telling the caller the server is broken when the truthful answer is "you are not
+// an admin here", which is neither a fault nor retryable.
+//
+// It had never been noticed because it was also UNREACHABLE: `runWithAuth` installs a
+// fresh AsyncLocalStorage store, so a principal set outside the handler was discarded,
+// `currentPrincipal()` read null, and `enforceAdmin` took its org-key branch and allowed
+// everything. A route could not enforce an admin-only tool at all.
+test("a role refusal is 403, not 500", async () => {
+  const handler = createToolDispatchHandler({
+    dispatcher: throwing(new Error("Forbidden (403): change_plan requires an owner or admin of this workspace.")),
+  });
+  const res = await handler(post(), ctx);
+  assert.equal(res.status, 403);
+  assert.match((await res.json()).error, /requires an owner or admin/);
+});
+
+test("the principal resolver reaches enforceAdmin through the route", async () => {
+  // The adapter is the authority: a principal alone is not enough, `adapter.isAdmin`
+  // decides. Both directions asserted, because a resolver that reached nothing would
+  // look identical to today's behaviour from outside.
+  const seen = [];
+  const adapter = {
+    async validateApiKey() {
+      return { orgId: "org_1" };
+    },
+    async getOrgDomains() {
+      return [];
+    },
+    async isAdmin(orgId, userId) {
+      seen.push(userId);
+      return userId === "usr_admin";
+    },
+  };
+
+  const { enforceAdmin } = await import("../dist/auth.js");
+  const dispatcher = {
+    async dispatchTool() {
+      const r = await enforceAdmin(adapter, "change_plan");
+      if ("isError" in r) throw new Error(r.content[0].text);
+      return { ok: true };
+    },
+    getToolNames: () => ["change_plan"],
+  };
+
+  const handlerFor = (userId) =>
+    createToolDispatchHandler({ dispatcher, principal: () => (userId ? { userId } : null) });
+
+  assert.equal((await handlerFor("usr_admin")(post(), ctx)).status, 200, "an admin must get through");
+  assert.equal((await handlerFor("usr_member")(post(), ctx)).status, 403, "a member must be refused");
+  assert.deepEqual(seen, ["usr_admin", "usr_member"], "the adapter must be the one asked");
+
+  // No resolver, or one returning null: the org-key path, still owner-level. That is the
+  // documented behaviour for a headless agent holding an `sk_` key, and it must not change.
+  assert.equal((await handlerFor(null)(post(), ctx)).status, 200);
+  assert.equal((await createToolDispatchHandler({ dispatcher })(post(), ctx)).status, 200);
+});

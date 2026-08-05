@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { BillingAdapter } from "../types.js";
-import { runWithAuth, runWithResolvedOrg } from "../auth.js";
+import { runWithAuth, runWithPrincipal, runWithResolvedOrg, type Principal } from "../auth.js";
 
 // MCP transport factory (uses mcp-handler, an optional peer dep — imported
 // lazily so apps that don't mount MCP don't need it). Handles both the
@@ -33,6 +33,13 @@ export interface McpTransportOptions {
    * handler is reached, which is also what starts OAuth discovery.
    */
   requireAuth?: boolean;
+  /**
+   * WHO is calling, when this surface knows — see `createToolDispatchHandler`. An MCP
+   * client authenticating with an org API key has no user behind it, so this stays null
+   * for the common case; an OAuth path that resolved a user should return one, or the
+   * admin-only tools cannot be enforced here either.
+   */
+  principal?: (request: Request) => Principal | null | Promise<Principal | null>;
 }
 
 function wwwAuth(realm: string, resourceMetadata?: string): string {
@@ -68,9 +75,15 @@ export function createMcpTransport(opts: McpTransportOptions) {
     const rm =
       typeof opts.resourceMetadata === "function" ? opts.resourceMetadata(request) : opts.resourceMetadata;
 
+    const principal = opts.principal ? await opts.principal(request) : null;
+
     if (token && !token.startsWith(apiKeyPrefix) && opts.adapter.resolveOauthOrg) {
       const orgId = await opts.adapter.resolveOauthOrg(token);
-      if (orgId) return runWithResolvedOrg(authHeader, orgId, () => mcp(request));
+      if (orgId) {
+        return principal
+          ? runWithPrincipal({ authHeader, orgId, principal }, () => mcp(request))
+          : runWithResolvedOrg(authHeader, orgId, () => mcp(request));
+      }
     }
 
     // Gated: resolve the org HERE, so a caller with no usable credential never
@@ -95,10 +108,14 @@ export function createMcpTransport(opts: McpTransportOptions) {
       }
       // Pre-resolved, so `enforceAccess` reads it from the store rather than
       // validating the same key a second time on every tool call.
-      return runWithResolvedOrg(authHeader, orgId, () => mcp(request));
+      return principal
+        ? runWithPrincipal({ authHeader, orgId, principal }, () => mcp(request))
+        : runWithResolvedOrg(authHeader, orgId, () => mcp(request));
     }
 
-    const res = await runWithAuth(authHeader, () => mcp(request));
+    const res = await (principal
+      ? runWithPrincipal({ authHeader, principal }, () => mcp(request))
+      : runWithAuth(authHeader, () => mcp(request)));
     return withAuthHeader(res, rm);
   }
 
