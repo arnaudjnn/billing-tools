@@ -1,3 +1,10 @@
+# [15.10.0](https://github.com/arnaudjnn/billing-tools/compare/v15.9.0...v15.10.0) (2026-08-05)
+
+
+### Features
+
+* **tax:** collect the address on a top-up, and one front door for the regime ([e7bcaf1](https://github.com/arnaudjnn/billing-tools/commit/e7bcaf1cc740e143b05fb4bf9576b0efdfb336de))
+
 # [15.9.0](https://github.com/arnaudjnn/billing-tools/compare/v15.8.0...v15.9.0) (2026-08-05)
 
 
