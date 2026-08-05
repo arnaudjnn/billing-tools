@@ -1,3 +1,10 @@
+# [15.8.0](https://github.com/arnaudjnn/billing-tools/compare/v15.7.0...v15.8.0) (2026-08-05)
+
+
+### Features
+
+* **doctor:** warn when the declared tax origin contradicts the account ([739b92b](https://github.com/arnaudjnn/billing-tools/commit/739b92b481c344f1875cff475e6c8b143d05ab5b))
+
 # [15.7.0](https://github.com/arnaudjnn/billing-tools/compare/v15.6.1...v15.7.0) (2026-08-05)
 
 
