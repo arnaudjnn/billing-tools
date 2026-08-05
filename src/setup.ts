@@ -14,6 +14,11 @@ import { ensureMeters } from "./usage-ledger.js";
 import { ensureTaxSetup, type TaxRegistrationSpec } from "./tax-setup.js";
 import { ensureWebhookEndpoint } from "./webhook-setup.js";
 import { taxModeOf } from "./tax.js";
+import {
+  ADMIN_ROLE_SLUG,
+  ensureWorkOSRoles,
+  type WorkOSRoleSpec,
+} from "./workos-setup.js";
 import type { BillingConfig } from "./types.js";
 import type { PlanCatalog } from "./plans.js";
 
@@ -40,7 +45,7 @@ import type { PlanCatalog } from "./plans.js";
 
 export type SetupStep = Check & {
   /** What ran. Stable, so a caller can filter or key off it. */
-  step: "plans" | "meter" | "tax" | "webhook";
+  step: "plans" | "meter" | "tax" | "webhook" | "workos";
   /** True when this step was skipped because the caller didn't ask for it. */
   skipped?: boolean;
 };
@@ -83,18 +88,26 @@ export interface SetupOptions {
   /** Create the usage meter eagerly. Default true. */
   meter?: boolean;
   /**
-   * Also audit WorkOS in the closing report.
+   * Provision and audit the WorkOS half.
    *
-   * Nothing here PROVISIONS WorkOS — an environment's redirect URIs, AuthKit
-   * settings and role slugs are Dashboard configuration this library never
-   * touches, and orgs and keys are created lazily on demand. But a setup run that
-   * says "healthy" while WorkOS has no usable key is telling half the truth, and
-   * WorkOS is where the orgs, memberships and `sk_` keys live.
+   * PROVISIONED: the environment **roles**, because `isAdmin` matches a member's role
+   * slug against `ADMIN_ROLE_SLUG` and an environment without it answers 403 from
+   * every admin-gated tool for every human — while org API keys keep working, which
+   * is why it survives a headless pass and fails on the first real person. Idempotent;
+   * pass `roles` to add your own.
+   *
+   * NOT provisioned, because v10 exposes no API for either: AuthKit's **redirect
+   * URIs** and its appearance/settings. The SDK's only writable `redirect_uris`
+   * belong to a Connect application, which is a different object. The closing report
+   * prints the exact redirect URI to paste rather than implying it was handled.
+   *
+   * Orgs, memberships and `sk_` keys are not provisioned either — they are created
+   * lazily per customer, which is the behaviour you want.
    *
    * Pass `{ oauthProxy: true }` when the app mounts the MCP OAuth proxy, which is
    * what makes `REFRESH_TOKEN_SECRET` required.
    */
-  workos?: boolean | { oauthProxy?: boolean };
+  workos?: boolean | { oauthProxy?: boolean; roles?: WorkOSRoleSpec[] };
 }
 
 /**
@@ -245,6 +258,41 @@ export async function setupBilling(opts: SetupOptions): Promise<SetupResult> {
       healthy: false,
     };
   }
+  // ── WorkOS ────────────────────────────────────────────────────────────────
+  //
+  // Only the roles. They are the one part of a WorkOS environment this library's own
+  // behaviour depends on and the API can write: `isAdmin` matches a member's role
+  // slug against ADMIN_ROLE_SLUG, so an environment without that role answers 403
+  // from every admin-gated tool for every human — while org API keys keep working,
+  // which is why it survives a headless test pass.
+  //
+  // AuthKit's redirect URIs and appearance are NOT provisioned, because v10 exposes
+  // no API for them (the SDK's `redirect_uris` belong to Connect applications). The
+  // closing report prints the exact redirect URI to paste instead of implying it was
+  // handled.
+  if (opts.workos) {
+    const w = typeof opts.workos === "object" ? opts.workos : {};
+    try {
+      const roles = await ensureWorkOSRoles({ roles: w.roles });
+      ok(
+        "workos",
+        "WorkOS roles",
+        roles.created.length
+          ? `created ${roles.created.join(", ")}${roles.existing.length ? `; ${roles.existing.join(", ")} already existed` : ""}`
+          : `already present: ${roles.existing.join(", ")}`,
+      );
+    } catch (e) {
+      fail(
+        "workos",
+        "WorkOS roles",
+        e,
+        `Needs a WORKOS_API_KEY that can write /authorization/roles. Without the "${ADMIN_ROLE_SLUG}" role every admin-gated tool answers 403 to every member`,
+      );
+    }
+  } else {
+    skip("workos", "WorkOS roles", "not requested (pass `workos: true`)");
+  }
+
   const plans = opts.plans
     ? checkPlansConfig(opts.plans, { hasCheckout: true })
     : { livemode: account.livemode, checks: [], healthy: true };
@@ -257,7 +305,11 @@ export async function setupBilling(opts: SetupOptions): Promise<SetupResult> {
       // The mismatch matters most HERE: this is the run that writes prices and a
       // webhook endpoint, so a live Stripe key beside a staging WorkOS key
       // provisions the real account and points it at the wrong identity store.
-      workos = await checkWorkOSSetup({ ...w, expectLivemode: account.livemode });
+      workos = await checkWorkOSSetup({
+        ...w,
+        expectLivemode: account.livemode,
+        baseUrl: opts.config.baseUrl,
+      });
     } catch (e) {
       workos = {
         livemode: account.livemode,

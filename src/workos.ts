@@ -24,3 +24,17 @@ export function getWorkOS(opts?: { apiKey?: string; clientId?: string }): WorkOS
     clientId: process.env.WORKOS_CLIENT_ID ?? "",
   }));
 }
+
+/**
+ * Swap the shared client, for tests.
+ *
+ * The suite is offline by design, and this is the WorkOS twin of
+ * `__setStripeForTests`. Without it the only way to cover `ensureWorkOSRoles` was to
+ * reach the real API — so the provisioning step whose absence 403s every member
+ * would have shipped with no test at all.
+ *
+ * Pass `null` to restore the real, lazily-constructed client.
+ */
+export function __setWorkOSForTests(client: unknown): void {
+  _default = client as WorkOS | null;
+}

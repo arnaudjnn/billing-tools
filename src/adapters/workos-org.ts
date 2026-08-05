@@ -1,6 +1,7 @@
 import { DomainDataState, OrganizationDomainState, type WorkOS } from "@workos-inc/node";
 import type { BillingAdapter, BillingUser, ApiKeyInfo } from "../types.js";
 import { getWorkOS } from "../workos.js";
+import { ADMIN_ROLE_SLUG } from "../workos-setup.js";
 
 // Built-in adapter: WorkOS is the source of truth. Workspace = WorkOS
 // Organization, API keys = WorkOS Organization API Keys, Stripe customer id =
@@ -391,14 +392,22 @@ export class WorkOSOrgAdapter implements BillingAdapter {
     await this.workos.userManagement.updateUser({ userId, metadata });
   }
 
-  /** Admin/owner check via the user's role in the org (WorkOS "admin" slug). */
+  /**
+   * Admin/owner check via the user's role in the org.
+   *
+   * The slug comes from `ADMIN_ROLE_SLUG` rather than being spelled here, because
+   * `ensureWorkOSRoles` provisions that role and the doctor checks it — three copies
+   * of the string is how a check comes to disagree with what it checks. If the role
+   * does not exist in the environment, no membership can carry it, so this returns
+   * false and `enforceAdmin` 403s every human.
+   */
   async isAdmin(orgId: string, userId: string): Promise<boolean> {
     const r = await this.workos.userManagement.listOrganizationMemberships({
       organizationId: await this.wid(orgId),
       userId,
       statuses: ["active"],
     });
-    return r.data.some((m) => m.role?.slug === "admin");
+    return r.data.some((m) => m.role?.slug === ADMIN_ROLE_SLUG);
   }
 }
 

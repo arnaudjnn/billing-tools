@@ -383,6 +383,10 @@ The deploy-time twin of the lazy provisioning, and its honest scope is small: pr
 - **Tax registrations**, because only a human knows where the business collects — skipped unless `config.tax` mode is `"stripe"`, since running it on a `local` account would create registrations it does not need and is billed against.
 - Everything else runs only because a deploy log is a better place to find a broken config than a customer's first request.
 
+**The WorkOS half provisions too, but only the ROLES.** `isAdmin` matches a member's role slug against `ADMIN_ROLE_SLUG`, so an environment without that role answers **403 from every admin-gated tool to every human** — while org API keys keep working, which is why it survives a headless pass and fails on the first real person. `ensureWorkOSRoles` creates what is missing, idempotently, and the adapter, the provisioner and the doctor all read the one `ADMIN_ROLE_SLUG` constant so the check cannot disagree with what it checks. (Most environments ship `admin`/`member` already, so it is usually a no-op — it is a guard, not a repair.)
+
+**What stays manual, and why it cannot be otherwise:** AuthKit's **redirect URIs** and its appearance settings. `@workos-inc/node` v10 exposes no API for either — the only writable `redirect_uris` belong to a *Connect application*, a different object entirely. So `checkWorkOSSetup({ baseUrl })` prints the exact URI to paste rather than a check that can never fail. That is the honest shape: a value, not a tick.
+
 No step throws: each failure is reported and the rest continue, because a missing tax registration must not stop the webhook being registered. A skipped step renders `–`, never `✓`. The doctor runs last, so it sees what was just provisioned — `setupBilling` provisions, `checkBillingSetup` decides whether it worked, and they are separate claims.
 
 It needs the app's `plans`, so it stays a function the app calls from a script (`tsx scripts/billing-setup.ts`) rather than a bin subcommand.

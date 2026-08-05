@@ -26,7 +26,7 @@ export {
 // and they are the only constructors anywhere — including in consuming apps.
 // A second `new WorkOS(...)` in a route handler is a second client (and, per
 // request, a second connection pool) reading the same key to do the same thing.
-export { getWorkOS } from "./workos.js";
+export { getWorkOS, __setWorkOSForTests } from "./workos.js";
 
 // Pattern B: the app's own row 1:1 with a WorkOS org. Supplies the adapter's
 // `map` and the membership helpers every mirror app would otherwise rewrite.
@@ -437,6 +437,17 @@ export {
 // Provision + verify one Stripe environment in one call — the deploy-time twin of
 // the lazy provisioning the request path does. `billing-tools dev` / `doctor` (the
 // bin) cover the parts that need no app config.
+// The WorkOS half of provisioning: the roles this library's own gate depends on.
+// AuthKit redirect URIs stay manual — v10 has no API for them.
+export {
+  ensureWorkOSRoles,
+  listWorkOSRoleSlugs,
+  oauthCallbackUri,
+  ADMIN_ROLE_SLUG,
+  DEFAULT_WORKOS_ROLES,
+  type WorkOSRoleSpec,
+  type EnsureRolesResult,
+} from "./workos-setup.js";
 export {
   setupBilling,
   formatSetupReport,

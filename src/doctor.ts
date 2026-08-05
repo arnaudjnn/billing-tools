@@ -10,6 +10,11 @@ import {
 import { USAGE_SCOPE_KIND } from "./usage-scopes.js";
 import { BILLING_WEBHOOK_EVENTS } from "./webhook-setup.js";
 import { taxModeOf, type TaxMode } from "./tax.js";
+import {
+  ADMIN_ROLE_SLUG,
+  listWorkOSRoleSlugs,
+  oauthCallbackUri,
+} from "./workos-setup.js";
 import type { BillingConfig } from "./types.js";
 
 // Preflight for a billing environment: the checks that catch the failures which
@@ -967,6 +972,9 @@ export function environmentMismatch(apiKey: string, expectLivemode: boolean): Ch
 }
 
 export async function checkWorkOSSetup(opts: {
+  /** The app's `config.baseUrl`, so the report can print the exact AuthKit redirect
+   *  URI to allowlist. Omitted, that line is skipped rather than guessed. */
+  baseUrl?: string;
   /** True when the app mounts the MCP OAuth proxy (`createBilling({ oauthProxy })`).
    *  Only then is `REFRESH_TOKEN_SECRET` required. */
   oauthProxy?: boolean;
@@ -1040,6 +1048,51 @@ export async function checkWorkOSSetup(opts: {
         fix: "The key is set but WorkOS rejected it — revoked, or from a different environment",
       });
     }
+  }
+
+  // The roles this library's own gate depends on. `isAdmin` asks whether a member's
+  // role slug is ADMIN_ROLE_SLUG, so an environment without that role refuses every
+  // admin-gated tool for every human — and org API keys are unaffected, which is why
+  // it survives a headless pass and fails on the first real person.
+  if (apiKey) {
+    try {
+      const slugs = await listWorkOSRoleSlugs();
+      checks.push(
+        slugs.includes(ADMIN_ROLE_SLUG)
+          ? {
+              level: "ok",
+              title: "WorkOS roles",
+              detail: `${slugs.length} role(s), including "${ADMIN_ROLE_SLUG}"`,
+            }
+          : {
+              level: "error",
+              title: "WorkOS roles",
+              detail: `no "${ADMIN_ROLE_SLUG}" role in this environment (found: ${slugs.join(", ") || "none"})`,
+              fix: `Run \`ensureWorkOSRoles()\` (or \`billing setup\`). Without it adapter.isAdmin is false for everyone, so every admin-gated tool answers 403 to every member — while org API keys keep working, which is why this is invisible until a person tries`,
+            },
+      );
+    } catch (e) {
+      // A key that cannot read roles is a restricted key, not a missing role. Say
+      // which, rather than reporting an absence we did not establish.
+      checks.push({
+        level: "warn",
+        title: "WorkOS roles",
+        detail: `could not be read: ${e instanceof Error ? e.message : String(e)}`,
+        fix: `Needs a key that can read /authorization/roles. Unchecked, the "${ADMIN_ROLE_SLUG}" role may be missing, which 403s every admin-gated tool for every member`,
+      });
+    }
+  }
+
+  // Not a check — a value. v10 exposes no API for AuthKit's redirect URIs (the SDK's
+  // `redirect_uris` belong to Connect applications), so this prints the exact string
+  // to paste rather than a check that can never fail. It is the one WorkOS step that
+  // stays manual per environment.
+  if (opts.oauthProxy && opts.baseUrl) {
+    checks.push({
+      level: "ok",
+      title: "AuthKit redirect URI (manual)",
+      detail: `allowlist ${oauthCallbackUri(opts.baseUrl)} in WorkOS → Redirect URIs`,
+    });
   }
 
   if (opts.oauthProxy) {
