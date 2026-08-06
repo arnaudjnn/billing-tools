@@ -379,6 +379,23 @@ export interface RateLimit {
    * caller, where the tighter one made the other unreachable.
    */
   callerKind?: "user" | "api";
+  /**
+   * WHAT the window governs. Default `all` — today's behaviour, unchanged.
+   *
+   * `all` is a pace cap on the PRODUCT: nothing lifts it, not a wallet and not a top-up,
+   * and the caller waits. Right for "600 an hour" against an agent, where the thing being
+   * protected is the infrastructure.
+   *
+   * `included` is a pace cap on the ALLOWANCE: it governs what the plan gives away, and
+   * paid usage carries on past it. Right for "500 a week each" on a plan whose card says
+   * pay-as-you-go — because under `all` a workspace with credits already bought sits
+   * refused for three days, which is not what pay-as-you-go means. It is the shape Claude's
+   * own weekly limit has: included usage stops, usage credits continue.
+   *
+   * The distinction is not cosmetic to the reads either: an `included` window counts only
+   * included usage, so wallet-funded calls neither fill it nor are refused by it.
+   */
+  covers?: "all" | "included";
   /** Label for a usage screen. Defaults to the window name. */
   label?: string;
 }

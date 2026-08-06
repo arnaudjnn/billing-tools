@@ -41,6 +41,8 @@ export interface LimitState {
   /** Extra granted to THIS caller on THIS window, already included in `size`. Always 0 for
    *  an org-scoped window, which is nobody's to raise. */
   extra?: number;
+  /** `all` refuses outright; `included` only stops the allowance, and paid usage continues. */
+  covers?: "all" | "included";
   /** From the config; null when the plan didn't label it. */
   label: string | null;
   size: number;
@@ -195,7 +197,14 @@ export async function resolveAllowance(
               // whole workspace, but only that kind's usage — "600 an hour across
               // every agent" is not the same window as one agent's.
               (limit.callerKind ? { callerKind: limit.callerKind } : undefined),
-        ...(scope === "caller" || limit.callerKind ? { sources } : {}),
+        // An `included` window governs only what the plan gives away, so wallet-funded
+        // calls must not fill it — otherwise paying to continue would consume the very
+        // window that was supposed to stop governing you once you paid.
+        ...(limit.covers === "included"
+          ? { sources: { included: sources.included, wallet: false } }
+          : scope === "caller" || limit.callerKind
+            ? { sources }
+            : {}),
       })
       .then(async (used) => {
         // A per-member EXCEPTION on this window, if an owner granted one.
@@ -213,6 +222,7 @@ export async function resolveAllowance(
         return {
           every: limit.every,
           scope,
+          covers: limit.covers ?? "all",
           label: limit.label ?? null,
           size,
           used,
@@ -489,14 +499,30 @@ export function fundingFor(
 ): FundingDecision {
   if (cost <= 0) return { ok: true, source: null };
 
-  // Rate limits come FIRST and are absolute. They are not a funding source and
-  // nothing overrides them: no wallet fallthrough (a limit a top-up could lift is
-  // not a limit) and no exemption for a shared seat, because the thing being
-  // protected is the product, not the customer's money. The tightest window that
-  // refuses is the one reported, so the message names a week rather than a month
-  // when the week is what ran out.
+  // Rate limits come FIRST, and a `covers: "all"` one is absolute. It is not a funding
+  // source and nothing overrides it: no wallet fallthrough (a limit a top-up could lift is
+  // not a limit) and no exemption for a shared seat, because the thing being protected is
+  // the product, not the customer's money. The tightest window that refuses is the one
+  // reported, so the message names a week rather than a month when the week is what ran out.
+  //
+  // A `covers: "included"` window is a different statement: it paces what the plan GIVES
+  // AWAY, not what the customer may buy. Exhausted, it stops the allowance and falls
+  // through to the wallet like any other included window — a workspace that has already
+  // bought credits sitting refused for three days is not what a pay-as-you-go card promises.
+  // It is only skipped when something can actually pay; with no wallet behind it, it still
+  // refuses, and says so as a rate limit rather than as an empty wallet.
+  const payable = exhaustedPolicy(model, caller) === "wallet" && state.wallet >= cost;
+  // Set when an `included` window is spent and the wallet can carry the call. It does NOT
+  // mean "ignore the window": the window's whole job is to pace the giveaway, so the
+  // included sources below are barred and only the wallet may pay. Letting the pack fund it
+  // instead would make a weekly cap on included usage do precisely nothing.
+  let includedBarred = false;
   for (const limit of state.limits ?? []) {
     if (limit.remaining < cost) {
+      if (limit.covers === "included" && payable) {
+        includedBarred = true;
+        continue;
+      }
       return {
         ok: false,
         source: null,
@@ -514,14 +540,14 @@ export function fundingFor(
   // refuse a machine caller over an allowance that was never included for it.
   const covered = capCovers(model, caller);
 
-  if (covered && state.pool) {
+  if (covered && !includedBarred && state.pool) {
     if (state.pool.remaining >= cost) return { ok: true, source: "pool" };
     if (exhaustedPolicy(model, caller) === "block") {
       return { ok: false, source: null, reason: "pool_exhausted" };
     }
   }
 
-  if (covered && state.pack) {
+  if (covered && !includedBarred && state.pack) {
     if (state.pack.remaining >= cost) return { ok: true, source: "pack" };
     if (exhaustedPolicy(model, caller) === "block") {
       return { ok: false, source: null, reason: "seat_allowance_reached" };
