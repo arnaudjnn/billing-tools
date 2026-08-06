@@ -324,13 +324,35 @@ export function createBoundApi(deps: BoundApiDeps) {
         planOf(orgId).then((plan) =>
           memberUsage(adapter, config, { ...opts, orgId, plans, plan, members, ledger }),
         ),
-      /** The raw allowance state the meter gates on. */
+      /**
+       * The raw allowance state the meter gates on.
+       *
+       * The caller's SEAT is resolved here, exactly as `summary` and
+       * `subscription.requests.next` resolve it — a caller carrying only an id matches no
+       * seat-typed window, so `state.limits` came back without the very window that was
+       * refusing them and `topUpTargetOf` read "nothing is blocked". Measured on a Premium
+       * member sitting at 100% of their week: the ladder (which resolves the seat) offered
+       * extra usage while this read (which did not) reported no window to raise, so the
+       * screen fell through to a plan upgrade nobody needed. Whoever asks the question, the
+       * answer has to be about the same person.
+       */
       allowance: (
         orgId: string,
         opts: Omit<Parameters<typeof resolveAllowance>[2], "orgId" | "plans" | "plan" | "ledger"> = {},
       ) =>
-        planOf(orgId).then((plan) =>
-          resolveAllowance(adapter, config, { ...opts, orgId, plans, plan, ledger }),
+        planOf(orgId).then(async (plan) =>
+          resolveAllowance(adapter, config, {
+            ...opts,
+            caller: await callerWithSeat(adapter, {
+              orgId,
+              model: planModel(plans, plan),
+              caller: opts.caller,
+            }),
+            orgId,
+            plans,
+            plan,
+            ledger,
+          }),
         ),
       /**
        * The cycle key anything filed against a cycle must use.

@@ -125,6 +125,46 @@ test("usage reads carry the bound ledger and plan", async () => {
   assert.equal(state.pack?.remaining, 600);
 });
 
+test("allowance resolves the caller's SEAT, like every other read of the same fact", async () => {
+  // The failure this pins is a DISAGREEMENT, not an exception. A caller carrying only an id
+  // matches no seat-typed window, so the window that was refusing them was filtered out of
+  // `state.limits` and `topUpTargetOf` answered "nothing is blocked" — while the ladder,
+  // which resolves the seat, said the same member was capped. Measured on a Premium member
+  // at 100% of their week: the screen offered a plan upgrade nobody needed, because the two
+  // reads were about different people.
+  const { adapter, api: a } = api({
+    plans: {
+      pro: {
+        ...PLANS.pro,
+        limits: { rate: [{ every: "week", credits: 500, scope: "caller", seatType: "premium" }] },
+        sells: {
+          kind: "seats",
+          seatTypes: {
+            standard: { price: { monthly: 1800 }, includedCredits: 1000, min: 1 },
+            premium: { price: { monthly: 9000 }, includedCredits: 5000 },
+          },
+        },
+      },
+    },
+    ledger: { async record() {}, async total() { return 600 } },
+  });
+  await a.seats.assign("org_1", "u1", "premium");
+
+  // No `seatType` — exactly what a server action holding a user id can pass.
+  const state = await a.usage.allowance("org_1", {
+    caller: { kind: "user", id: "u1" },
+    skipWallet: true,
+    skipSpendLimit: true,
+  });
+
+  const weekly = state.limits.find((l) => l.every === "week");
+  assert.ok(weekly, "the seat-typed window was filtered out — the seat did not resolve");
+  assert.equal(weekly.remaining, 0);
+  const { topUpTargetOf } = await import("../dist/allowance.js");
+  assert.equal(topUpTargetOf(state)?.every, "week", "and so nothing could be granted");
+  void adapter;
+});
+
 test("subscription.change binds plans, config and currency", async () => {
   // Not asserting Stripe behaviour — asserting the caller does not have to restate
   // what createBilling already knows. A missing `currency` here silently priced a
