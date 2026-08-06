@@ -1,3 +1,10 @@
+## [15.16.3](https://github.com/arnaudjnn/billing-tools/compare/v15.16.2...v15.16.3) (2026-08-06)
+
+
+### Bug Fixes
+
+* **top-ups:** membership-check the bound grant and request too ([512005f](https://github.com/arnaudjnn/billing-tools/commit/512005f799e1baad060a27f6937d0096c3f66902))
+
 ## [15.16.2](https://github.com/arnaudjnn/billing-tools/compare/v15.16.1...v15.16.2) (2026-08-05)
 
 
