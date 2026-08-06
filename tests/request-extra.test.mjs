@@ -189,6 +189,41 @@ test("a queued ask counts toward the ceiling before anyone approves it", async (
 
 // ── plans that cannot take one ───────────────────────────────────────────────
 
+// ── you can only ask when something is actually refusing you ─────────────────
+//
+// The rule lived in the SCREENS that draw the button ("show it at 100%"), which is not where
+// a rule lives: a tool call, a server action or an agent could file an ask for somebody at
+// 0%, and one did — a member sitting on an untouched pack with a pending request against it,
+// which then blocked the real ask they would make when they ran out.
+
+test("an ask from somebody nothing is refusing is refused", async () => {
+  const adapter = fakeAdapter({ subscription: CYCLE, members: ["u1"] });
+  const res = await ask(adapter, { blocked: false });
+
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, "not_blocked");
+  // And nothing was queued: a refusal that still writes the record is not a refusal.
+  assert.deepEqual(await listTopUpRequests(adapter, "org_1"), []);
+});
+
+test("blocked asks through, and is filed against the window that is blocking", async () => {
+  const adapter = fakeAdapter({ subscription: CYCLE, members: ["u1"] });
+  const res = await ask(adapter, { blocked: true, windowKey: "w:2026-08-03", basis: 500 });
+
+  assert.equal(res.ok, true);
+  assert.equal(res.cycle, "w:2026-08-03");
+  assert.equal(res.amount, 125, "25% of the WEEK, not of the 1 000 pack");
+});
+
+test("unknown ALLOWS, so a caller that cannot read usage cannot silence a member", async () => {
+  // Same trade-off `enforceMember` and `seatAssignable` make: refusing on a fact that could
+  // not be established leaves a real customer stuck, which is worse than the thing prevented.
+  const adapter = fakeAdapter({ subscription: CYCLE, members: ["u1"] });
+  assert.equal((await ask(adapter, { blocked: null })).ok, true);
+  const other = fakeAdapter({ subscription: CYCLE, members: ["u1"] });
+  assert.equal((await ask(other)).ok, true, "absent behaves as it always did");
+});
+
 test("a pooled plan refuses, because extra allowance sits on a seat pack", async () => {
   const adapter = fakeAdapter({ subscription: { ...CYCLE, plan: "pooled" }, members: ["u1"] });
   const res = await requestExtraAllowance(adapter, {

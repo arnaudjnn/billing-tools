@@ -185,6 +185,10 @@ export function createBilling(opts: CreateBillingOptions) {
       topUp: opts.topUp,
       subscriptionTools: opts.subscriptionTools,
       resolvePlan: opts.resolvePlan ?? opts.meter?.resolvePlan,
+      // The SAME ledger the meter gates with, so a tool cannot report allowance a call
+      // would be refused for. It is resolved below as `ledger`; hoisting is not possible
+      // (this closure runs per request, long after), which is why it reads it there.
+      usageLedger: ledger,
     });
     opts.registerTools?.(server);
   };

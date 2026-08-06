@@ -113,7 +113,13 @@ export function createBoundApi(deps: BoundApiDeps) {
   const topUpTarget = async (
     orgId: string,
     memberId: string,
-  ): Promise<{ windowKey?: string; basis?: number }> => {
+    /**
+     * `blocked` distinguishes "nothing is refusing them" from "the read failed", which the
+     * bare `{}` could not. The ASK needs that difference — a request from somebody at 40% is
+     * a question with no answer — while the GRANT deliberately still allows on a failed
+     * read, since a stuck customer is worse than a grant on the wrong window.
+     */
+  ): Promise<{ windowKey?: string; basis?: number; blocked: boolean | null }> => {
     try {
       const plan = await planOf(orgId);
       const state = await resolveAllowance(adapter, config, {
@@ -131,12 +137,15 @@ export function createBoundApi(deps: BoundApiDeps) {
         }),
       });
       const target = topUpTargetOf(state);
-      return target?.kind === "rate" ? { windowKey: target.windowKey, basis: target.basis } : {};
+      return {
+        blocked: target != null,
+        ...(target?.kind === "rate" ? { windowKey: target.windowKey, basis: target.basis } : {}),
+      };
     } catch {
       // Unreadable usage must not stop an owner granting: falling back to the seat pack is
       // the old behaviour, and a grant on the wrong window is recoverable where a refusal
       // to grant at all is just a stuck customer.
-      return {};
+      return { blocked: null };
     }
   };
 
@@ -401,10 +410,11 @@ export function createBoundApi(deps: BoundApiDeps) {
         memberId: string,
         opts: { percent?: number; amount?: number; id?: string } = {},
       ) => {
-        const target = await topUpTarget(orgId, memberId);
+        const { blocked, ...target } = await topUpTarget(orgId, memberId);
         return requestExtraAllowance(adapter, {
           ...opts,
           ...target,
+          blocked,
           orgId,
           plans,
           plan: await planOf(orgId),
@@ -435,7 +445,10 @@ export function createBoundApi(deps: BoundApiDeps) {
         const stranger = await enforceMember(adapter, orgId, memberId, "grant extra allowance");
         if (stranger) throw new Error(stranger.content[0].text);
         const plan = await planOf(orgId);
-        const target = await topUpTarget(orgId, memberId);
+        const { blocked: _blocked, ...target } = await topUpTarget(orgId, memberId);
+        // No `blocked` gate on the GRANT: an owner may top somebody up before they hit the
+        // wall — going away on Friday, a demo on Monday — and refusing that would be the
+        // library second-guessing a decision that is theirs and costs nothing.
         return grantExtraAllowance(adapter, { ...opts, ...target, orgId, plans, plan, memberId });
       },
       /** Extra already granted to a member for a cycle. */

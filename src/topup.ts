@@ -458,6 +458,20 @@ export async function requestExtraAllowance(
     windowKey?: string;
     /** What `percent` is a percentage of, when the window is not the seat pack. */
     basis?: number;
+    /**
+     * Is anything actually refusing this member right now?
+     *
+     * `false` REFUSES the ask, because a request from somebody at 40% is a question with no
+     * answer: nothing is stopping them, so there is nothing for an owner to decide, and the
+     * pending record blocks the real ask they will make when they do run out. The rule
+     * existed only in the screens that draw the button — so any tool call, server action or
+     * agent could file one, and one did.
+     *
+     * `null` or absent ALLOWS: a caller that cannot read usage must not be able to leave a
+     * member unable to ask for anything, which is the same trade-off `enforceMember` and
+     * `seatAssignable` make where the fact cannot be established.
+     */
+    blocked?: boolean | null;
   },
 ): Promise<{
   ok: boolean;
@@ -469,10 +483,11 @@ export async function requestExtraAllowance(
   cycle?: string;
   /** The ask already open, when that is why this was refused. */
   pending?: TopUpRequest;
-  reason?: "invalid_amount" | "not_capped" | "already_pending" | "limit_reached";
+  reason?: "invalid_amount" | "not_capped" | "already_pending" | "limit_reached" | "not_blocked";
 }> {
   const model = planModel(input.plans, input.plan ?? null);
   if (!model || model.cap.kind !== "per_seat") return { ok: false, reason: "not_capped" };
+  if (input.blocked === false) return { ok: false, reason: "not_blocked" };
 
   const seatType = (await getSeatType(adapter, input.orgId, input.memberId)) || "standard";
   const packSize = packSizeOf(model, seatType);

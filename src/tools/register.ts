@@ -7,6 +7,7 @@ import { registerManagementTools } from "./management.js";
 import { registerProfileTools } from "./profile.js";
 import { registerSubscriptionTools, type SubscriptionToolOptions } from "./subscription.js";
 import { ensurePlans, normalizePlans, poolSizeOf, type PlanCatalog } from "../plans.js";
+import type { UsageLedger } from "../usage-ledger.js";
 import {
   ALL_TOOL_CAPABILITIES,
   toolCapabilities,
@@ -93,6 +94,13 @@ export interface RegisterBillingToolsOptions {
    * because its own UI owns the flow. An explicit value always wins.
    */
   capabilities?: Partial<ToolCapabilities>;
+  /**
+   * The ledger the meter reads, so the tools' numbers and the gate's agree.
+   *
+   * `createBilling` passes the one it resolved. Hand-wired, absent means the default
+   * composite — self-consistent, but not necessarily what the app's own meter counts with.
+   */
+  usageLedger?: UsageLedger;
 }
 
 // Register the billing-tools surface (auth/key management + credit billing) on
@@ -116,7 +124,7 @@ export function registerBillingTools(server: McpServer, opts: RegisterBillingToo
     server,
     opts.adapter,
     config,
-    { plans: opts.plans, resolvePlan: opts.resolvePlan },
+    { plans: opts.plans, resolvePlan: opts.resolvePlan, usageLedger: opts.usageLedger },
     caps,
   );
   if (opts.profileTools !== false) registerProfileTools(server, opts.adapter);

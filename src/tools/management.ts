@@ -11,11 +11,12 @@ import {
   denyTopUp,
   grantExtraAllowance,
 } from "../topup.js";
-import { currentCycle } from "../allowance.js";
+import { currentCycle, resolveAllowance, topUpTargetOf } from "../allowance.js";
 import { assignSeatType, listSeatAssignments, seatAssignable } from "../seats.js";
 import { normalizePlans, planModel, type PlanCatalog } from "../plans.js";
 import { ALL_TOOL_CAPABILITIES, type ToolCapabilities } from "../plan-model.js";
-import { usageSummary } from "../usage.js";
+import { callerWithSeat, usageSummary } from "../usage.js";
+import type { UsageLedger } from "../usage-ledger.js";
 
 function json(obj: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(obj, null, 2) }] };
@@ -40,7 +41,19 @@ export function registerManagementTools(
   server: McpServer,
   adapter: BillingAdapter,
   config: ResolvedConfig,
-  opts: { plans?: PlanCatalog; resolvePlan?: (orgId: string) => Promise<string | null> } = {},
+  opts: {
+    plans?: PlanCatalog;
+    resolvePlan?: (orgId: string) => Promise<string | null>;
+    /**
+     * The ledger the METER reads. Absent falls back to the default composite.
+     *
+     * It has to be the app's own or these tools answer a different question from the gate:
+     * the default routes per-caller reads to balance transactions alone, so on a deployment
+     * whose per-seat usage is INCLUDED (nothing moves money) every caller-scoped window
+     * reads 0 — `get_usage_limits` reporting allowance a call would be refused for.
+     */
+    usageLedger?: UsageLedger;
+  } = {},
   caps: ToolCapabilities = ALL_TOOL_CAPABILITIES,
 ) {
   // Every tool here that names a cycle resolves it the same way the meter does,
@@ -116,6 +129,7 @@ per billing cycle), how much of each is used, and when each resets.`,
           orgId: auth.orgId,
           plans: opts.plans,
           plan,
+          ledger: opts.usageLedger,
           caller: { kind: caller_kind ?? "api", id: caller_id ?? auth.orgId },
         });
 
@@ -290,12 +304,39 @@ not what a reasonable top-up is.`,
         const plan = opts.resolvePlan
           ? await opts.resolvePlan(auth.orgId)
           : ((await adapter.getSubscription?.(auth.orgId))?.plan ?? null);
+        // WHICH window is refusing them, and whether one is — resolved here rather than
+        // assumed, for two reasons that are really one. An ask filed against the cycle when
+        // a WEEK is the wall grants credits that change nothing; and an ask from somebody
+        // nothing is refusing is a question with no answer, which used to be prevented only
+        // by the screens that draw the button. A tool is not one of those.
+        const caller = await callerWithSeat(adapter, {
+          orgId: auth.orgId,
+          model: planModel(opts.plans, plan),
+          caller: { kind: "user" as const, id: member_id },
+        });
+        const target = await resolveAllowance(adapter, config, {
+          orgId: auth.orgId,
+          plans: opts.plans,
+          plan,
+          ledger: opts.usageLedger,
+          caller,
+        })
+          .then(topUpTargetOf)
+          .catch(() => undefined); // unreadable usage must not stop a member asking
         const res = await requestExtraAllowance(adapter, {
           orgId: auth.orgId,
           plans: opts.plans,
           plan,
           memberId: member_id,
           ...(amount != null ? { amount } : {}),
+          ...(target === undefined
+            ? {}
+            : {
+                blocked: target !== null,
+                ...(target?.kind === "rate"
+                  ? { windowKey: target.windowKey, basis: target.basis }
+                  : {}),
+              }),
         });
         if (!res.ok) {
           // Each refusal names what to do instead — an agent that is told "already pending"
@@ -315,7 +356,10 @@ not what a reasonable top-up is.`,
                   "Its limits are workspace-wide (see get_usage_limits)."
               : res.reason === "limit_reached"
                 ? "This member has reached the plan's top-up ceiling for this cycle."
-                : "Invalid amount.",
+                : res.reason === "not_blocked"
+                  ? "This member still has allowance left, so there is nothing to top up. " +
+                    "Ask again when a window is exhausted (see get_usage_limits)."
+                  : "Invalid amount.",
           );
         }
         return json({
