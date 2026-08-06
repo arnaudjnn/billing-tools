@@ -259,7 +259,18 @@ export async function grantTopUp(
   const total = await addGrant(adapter, orgId, input.memberId, input.cycle, input.amount);
 
   list.push({
-    id: input.id ?? `grant_${input.memberId}_${input.cycle}_${input.amount}`,
+    // A RANDOM id, not `grant_<member>_<cycle>_<amount>`.
+    //
+    // That default was deterministic, so two identical grants — the same member, cycle and
+    // amount, which is exactly what "+25% again" produces — wrote two records sharing one id.
+    // It bought no idempotency either, because the dedupe above only fires when the CALLER
+    // supplies `id`: the grant applied twice and left two records nothing could tell apart.
+    // Every per-record operation then resolves the first match, so denying the second of two
+    // identical grants acted on the first, and a UI listing them had duplicate React keys.
+    //
+    // `id` is how a caller opts INTO idempotency (a double-clicked button passes a stable
+    // one). Absent, each grant is its own record, which is what it is.
+    id: input.id ?? crypto.randomUUID(),
     memberId: input.memberId,
     amount: input.amount,
     cycle: input.cycle,

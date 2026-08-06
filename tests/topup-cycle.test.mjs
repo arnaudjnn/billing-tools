@@ -10,7 +10,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 
 import { currentCycle } from "../dist/allowance.js";
-import { approveTopUp, extraAllowance, requestTopUp } from "../dist/topup.js";
+import { approveTopUp, extraAllowance, grantTopUp, listTopUpRequests, requestTopUp } from "../dist/topup.js";
 import { fakeAdapter } from "./helpers.mjs";
 
 const PLANS = {
@@ -81,4 +81,31 @@ test("with no subscription the cycle falls back to the calendar month", async ()
   const cycle = await currentCycle(adapter, { orgId: "org_1", plans: PLANS, plan: "hobby", now: NOW });
 
   assert.equal(cycle.key, "2026-08");
+});
+
+test("two identical grants are two records, each with its own id", async () => {
+  // The default id was `grant_<member>_<cycle>_<amount>` — deterministic, so granting the
+  // same member the same amount twice in a cycle (what "+25% again" produces) wrote two
+  // records sharing one id. It bought no idempotency either: the dedupe only fires when the
+  // CALLER passes `id`, so the grant applied twice and left two records nothing could tell
+  // apart. `approveTopUp`/`denyTopUp` resolve by id and would act on the first match, and a
+  // UI listing them had duplicate React keys — which is how this was found.
+  const adapter = fakeAdapter({ members: ["u1"] });
+  await grantTopUp(adapter, "org_1", { memberId: "u1", amount: 250, cycle: "2026-08" });
+  await grantTopUp(adapter, "org_1", { memberId: "u1", amount: 250, cycle: "2026-08" });
+
+  const list = await listTopUpRequests(adapter, "org_1");
+  assert.equal(list.length, 2, "both grants are recorded");
+  assert.notEqual(list[0].id, list[1].id, "and are individually addressable");
+  assert.equal(await extraAllowance(adapter, "org_1", "u1", "2026-08"), 500, "both applied");
+});
+
+test("but a caller-supplied id still dedupes — that is what it is for", async () => {
+  const adapter = fakeAdapter({ members: ["u1"] });
+  await grantTopUp(adapter, "org_1", { memberId: "u1", amount: 250, cycle: "2026-08", id: "click-1" });
+  const second = await grantTopUp(adapter, "org_1", { memberId: "u1", amount: 250, cycle: "2026-08", id: "click-1" });
+
+  assert.equal(second.reason, "duplicate");
+  assert.equal((await listTopUpRequests(adapter, "org_1")).length, 1);
+  assert.equal(await extraAllowance(adapter, "org_1", "u1", "2026-08"), 250, "granted once");
 });
