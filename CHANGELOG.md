@@ -1,3 +1,11 @@
+## [15.21.3](https://github.com/arnaudjnn/billing-tools/compare/v15.21.2...v15.21.3) (2026-08-06)
+
+
+### Bug Fixes
+
+* **seats:** a seat is a price, and assigning one was free ([1679790](https://github.com/arnaudjnn/billing-tools/commit/16797904a382cd7be981cdf3335bec19dd41e277))
+* **usage:** api.usage.allowance resolves the caller's seat, like every other read ([303b8be](https://github.com/arnaudjnn/billing-tools/commit/303b8bee7a5ed5f5c503e8bff15c99cfb18a5ccd))
+
 ## [15.21.2](https://github.com/arnaudjnn/billing-tools/compare/v15.21.1...v15.21.2) (2026-08-06)
 
 
