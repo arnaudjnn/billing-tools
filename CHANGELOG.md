@@ -1,3 +1,10 @@
+## [15.21.2](https://github.com/arnaudjnn/billing-tools/compare/v15.21.1...v15.21.2) (2026-08-06)
+
+
+### Bug Fixes
+
+* **usage:** one resolver for a caller's seat, because two disagreed ([d0f74db](https://github.com/arnaudjnn/billing-tools/commit/d0f74db2b911fbc0b011d526d693c1a0d7b9062f))
+
 ## [15.21.1](https://github.com/arnaudjnn/billing-tools/compare/v15.21.0...v15.21.1) (2026-08-06)
 
 
