@@ -143,14 +143,30 @@ export function isSatisfied(
   return planRank(have) >= planRank(want);
 }
 
-/** What a seat costs per month — the ordering "a better seat" means. Unknown seats rank 0,
- *  so a member on no seat at all is below every real one. */
-export function seatRank(model: PlanModel, seatType: string | null): number {
-  if (!seatType) return 0;
-  return model.seatTypes.find((s) => s.key === seatType)?.price.monthly ?? 0;
+/**
+ * The seat a member holds when nobody has assigned them one: the cheapest non-shared type.
+ *
+ * An UNASSIGNED member is not on "no seat" — they draw the plan's entry-level pack, which is
+ * what the meter measures them against and what their badge says. Treating absent as zero
+ * made the ladder offer a Standard member the Standard seat they were already effectively on,
+ * which is how this was caught: the button read "Assegna Posto Standard".
+ */
+export function defaultSeatOf(model: PlanModel): string | null {
+  const ladder = [...model.seatTypes]
+    .filter((s) => !s.shared)
+    .sort((a, b) => a.price.monthly - b.price.monthly);
+  return ladder[0]?.key ?? null;
 }
 
-/** The next seat type up from `seatType`, or null when they are already on the best one. */
+/** What a seat costs per month — the ordering "a better seat" means. An absent assignment
+ *  resolves to the default seat, not to nothing. */
+export function seatRank(model: PlanModel, seatType: string | null): number {
+  const key = seatType ?? defaultSeatOf(model);
+  if (!key) return 0;
+  return model.seatTypes.find((s) => s.key === key)?.price.monthly ?? 0;
+}
+
+/** The next seat type up, or null when they are already on the best one. */
 export function nextSeatUp(model: PlanModel, seatType: string | null): string | null {
   const ladder = [...model.seatTypes]
     .filter((s) => !s.shared)

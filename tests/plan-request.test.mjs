@@ -346,3 +346,30 @@ test("a seat request is satisfied once they hold that seat, or better", async ()
     "the owner assigned the seat; nothing left to answer",
   );
 });
+
+test("an UNASSIGNED member is on the default seat, not on none", async () => {
+  // They draw the plan's entry-level pack whether or not anybody assigned it, so the ladder
+  // must offer the seat ABOVE that. Treating absent as zero offered them the Standard seat
+  // they were already effectively on — the button read "Assegna Posto Standard".
+  const { nextSeatUp, seatRank, defaultSeatOf } = await import("../dist/plan-request.js");
+  const { planModel } = await import("../dist/plan-model.js");
+  const PAID = {
+    pro: {
+      sells: {
+        kind: "seats",
+        seatTypes: {
+          standard: { price: { monthly: 2104 }, includedCredits: 1000, min: 1 },
+          premium: { price: { monthly: 10523 }, includedCredits: 5000 },
+        },
+      },
+      cap: { kind: "per_seat" },
+      sale: "self_serve",
+    },
+  };
+  const model = planModel(PAID, "pro");
+
+  assert.equal(defaultSeatOf(model), "standard", "the cheapest non-shared type");
+  assert.equal(seatRank(model, null), 2104, "absent means the default, not zero");
+  assert.equal(nextSeatUp(model, null), "premium", "so the ask is the seat ABOVE it");
+  assert.equal(nextSeatUp(model, "premium"), null, "and the best seat has nothing above");
+});
