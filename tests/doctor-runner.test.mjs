@@ -9,6 +9,7 @@
 // be tested by ending the process is a runner nobody tests.
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "vitest";
 
 import {
@@ -223,4 +224,14 @@ test("setup with no STRIPE_SECRET_KEY exits 2, before writing anything", async (
   } finally {
     if (key !== undefined) process.env.STRIPE_SECRET_KEY = key;
   }
+});
+
+test("runBillingCli forwards accountTaxId, so the supplier VAT number is reachable", async () => {
+  // It was not forwarded, and `runBillingCli` is the only entry point either consuming app
+  // calls — so the option existed on `setupBilling` and could not be reached from the
+  // documented path. Every invoice the account issued carried no supplier VAT number, which
+  // Art. 226(3) requires, and the doctor could only report the gap it had no way to close.
+  const source = readFileSync(new URL("../src/setup.ts", import.meta.url), "utf8");
+  const runner = source.slice(source.indexOf("export async function runBillingCli"));
+  assert.match(runner, /accountTaxId: opts\.accountTaxId/, "setup must pass it through");
 });

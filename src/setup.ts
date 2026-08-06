@@ -435,6 +435,16 @@ export interface RunBillingCliOptions extends Omit<RunDoctorOptions, "config"> {
   /** Stripe Tax head office + registrations. Ignored unless `config.tax` mode is
    *  `"stripe"` — see `setupBilling`. */
   stripeTax?: SetupOptions["stripeTax"];
+  /**
+   * The SUPPLIER's own VAT number, printed on every invoice (Art. 226(3)).
+   *
+   * Forwarded to `setupBilling`, and it was not: the option existed there and this is the
+   * only entry point either consuming app calls, so the number could not be provisioned at
+   * all through the documented path — every invoice the account issued was defective and the
+   * doctor could only report it. An unreachable capability is the same false statement a dead
+   * tool makes.
+   */
+  accountTaxId?: SetupOptions["accountTaxId"];
 }
 
 /**
@@ -479,6 +489,7 @@ export async function runBillingCli(opts: RunBillingCliOptions): Promise<void> {
       webhookUrl: webhookUrlFromArgv(argv, opts.webhookUrl),
       pruneDuplicateWebhooks: argv.includes("--prune"),
       stripeTax: opts.stripeTax,
+      accountTaxId: opts.accountTaxId,
       workos: opts.workos,
     });
     log(formatSetupReport(result));
