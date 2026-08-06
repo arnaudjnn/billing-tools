@@ -1,3 +1,10 @@
+## [15.16.5](https://github.com/arnaudjnn/billing-tools/compare/v15.16.4...v15.16.5) (2026-08-06)
+
+
+### Bug Fixes
+
+* **top-ups:** give every grant its own id ([afb6a71](https://github.com/arnaudjnn/billing-tools/commit/afb6a714e97a113e1066865958add325cb1f4f7a))
+
 ## [15.16.4](https://github.com/arnaudjnn/billing-tools/compare/v15.16.3...v15.16.4) (2026-08-06)
 
 
