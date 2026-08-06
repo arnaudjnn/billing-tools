@@ -1,3 +1,10 @@
+# [15.20.0](https://github.com/arnaudjnn/billing-tools/compare/v15.19.0...v15.20.0) (2026-08-06)
+
+
+### Features
+
+* **limits:** a rate limit says whether it paces the PRODUCT or the giveaway ([2ed788a](https://github.com/arnaudjnn/billing-tools/commit/2ed788a81bee01d1db241d894da0a658634e0436))
+
 # [15.19.0](https://github.com/arnaudjnn/billing-tools/compare/v15.18.1...v15.19.0) (2026-08-06)
 
 
