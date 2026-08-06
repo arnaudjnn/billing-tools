@@ -1,3 +1,10 @@
+## [15.16.4](https://github.com/arnaudjnn/billing-tools/compare/v15.16.3...v15.16.4) (2026-08-06)
+
+
+### Bug Fixes
+
+* **setup:** forward accountTaxId, so the supplier VAT number is reachable ([0ebfdcb](https://github.com/arnaudjnn/billing-tools/commit/0ebfdcb67a2f147e6b464d7655008bb86b95450c))
+
 ## [15.16.3](https://github.com/arnaudjnn/billing-tools/compare/v15.16.2...v15.16.3) (2026-08-06)
 
 
