@@ -1,3 +1,10 @@
+## [15.21.1](https://github.com/arnaudjnn/billing-tools/compare/v15.21.0...v15.21.1) (2026-08-06)
+
+
+### Bug Fixes
+
+* **seats:** an unassigned member is on the DEFAULT seat, not on none ([d91f9f4](https://github.com/arnaudjnn/billing-tools/commit/d91f9f49c6ad0b3bac4366168cec40187089f76a))
+
 # [15.21.0](https://github.com/arnaudjnn/billing-tools/compare/v15.20.0...v15.21.0) (2026-08-06)
 
 
