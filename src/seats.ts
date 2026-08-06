@@ -1,4 +1,5 @@
 import type { BillingAdapter } from "./types.js";
+import type { PlanModel } from "./plan-model.js";
 
 // Per-member seat-type assignments: a member's seat type decides which per-cycle
 // credit pack their usage draws (see createMeter). Absent an assignment, the meter
@@ -171,3 +172,65 @@ export async function clearMemberRecords(
 
 /** Kept beside `MEMBER_KEY` so one cleanup knows both stores. Mirrors topup.ts. */
 const MEMBER_GRANTS_KEY_FOR_CLEANUP = "btTopUpGrants";
+
+/**
+ * Whether this member can be put on `seatType` — the guardrail that stops a seat being
+ * given away.
+ *
+ * `assignSeatType` is a metadata write: it changes which pack a person draws and touches the
+ * subscription not at all. So an owner could move everybody onto the most expensive seat and
+ * the invoice would never notice — and since a member can now ASK for a bigger seat and an
+ * owner can grant it in one click, that is one click from handing out a €105/month seat for
+ * nothing. Two ceilings answer it:
+ *
+ *   PURCHASED — `getSubscription().seatCounts[seatType]`, what the workspace is paying for.
+ *     Assigning more of a type than were bought is selling at zero.
+ *   MAX — the plan's own `seatTypes[t].max`, a product rule ("one shared agent seat").
+ *
+ * The DEFAULT seat counts unassigned members too, because they draw it whether or not
+ * anybody said so — counting only explicit assignments would let a workspace with one
+ * purchased Standard seat quietly seat ten people on it.
+ *
+ * Unknown means ALLOW, deliberately, and there is a lot of unknown: no subscription record,
+ * no `seatCounts` (a plan that sells no seats, a free plan, a record written before seat
+ * counts existed), no `listMemberIds`. Refusing on a number the library cannot read would
+ * break every deployment whose adapter does not report one, and the failure would be an
+ * owner unable to seat their own team — worse than the giveaway being prevented.
+ */
+export async function seatAssignable(
+  adapter: BillingAdapter,
+  orgId: string,
+  model: PlanModel | null,
+  memberId: string,
+  seatType: string | null,
+): Promise<{ ok: true } | { ok: false; reason: "not_purchased" | "at_max"; purchased?: number; assigned: number }> {
+  // Clearing a seat frees capacity; it can never exceed anything.
+  if (!seatType || !model || model.sells.kind !== "seats") return { ok: true };
+
+  const spec = model.seatTypes.find((s) => s.key === seatType);
+  if (!spec) return { ok: true }; // unknown type — the caller validates that separately
+
+  const assignments = await listSeatAssignments(adapter, orgId);
+  const already = Object.entries(assignments).filter(([id, t]) => t === seatType && id !== memberId).length;
+
+  // Unassigned members draw the default seat, so they occupy it.
+  const isDefault = [...model.seatTypes]
+    .filter((s) => !s.shared)
+    .sort((a, b) => a.price.monthly - b.price.monthly)[0]?.key === seatType;
+  let implicit = 0;
+  if (isDefault && adapter.listMemberIds) {
+    const members = await adapter.listMemberIds(orgId).catch((): string[] => []);
+    implicit = members.filter((id) => id !== memberId && !assignments[id]).length;
+  }
+  const assigned = already + implicit;
+
+  if (spec.max != null && assigned + 1 > spec.max) {
+    return { ok: false, reason: "at_max", assigned };
+  }
+
+  const purchased = (await adapter.getSubscription?.(orgId).catch(() => null))?.seatCounts?.[seatType];
+  if (purchased != null && assigned + 1 > purchased) {
+    return { ok: false, reason: "not_purchased", purchased, assigned };
+  }
+  return { ok: true };
+}

@@ -12,8 +12,8 @@ import {
   grantExtraAllowance,
 } from "../topup.js";
 import { currentCycle } from "../allowance.js";
-import { assignSeatType, listSeatAssignments } from "../seats.js";
-import { normalizePlans, type PlanCatalog } from "../plans.js";
+import { assignSeatType, listSeatAssignments, seatAssignable } from "../seats.js";
+import { normalizePlans, planModel, type PlanCatalog } from "../plans.js";
 import { ALL_TOOL_CAPABILITIES, type ToolCapabilities } from "../plan-model.js";
 import { usageSummary } from "../usage.js";
 
@@ -199,6 +199,20 @@ the assignment (back to the default seat).`,
         const st = seat_type && seat_type.length ? seat_type : null;
         if (st && knownSeatTypes.size && !knownSeatTypes.has(st)) {
           return err(`Unknown seat type "${st}". Known: ${[...knownSeatTypes].join(", ") || "(none configured)"}.`);
+        }
+        // A seat is a PRICE, and this write does not touch the subscription — so without this
+        // an owner (or an approved request) hands out the most expensive seat for nothing.
+        const plan = opts.resolvePlan
+          ? await opts.resolvePlan(auth.orgId)
+          : ((await adapter.getSubscription?.(auth.orgId))?.plan ?? null);
+        const room = await seatAssignable(adapter, auth.orgId, planModel(opts.plans ?? {}, plan), member_id, st);
+        if (!room.ok) {
+          return err(
+            room.reason === "not_purchased"
+              ? `This workspace has ${room.purchased} ${st} seat(s) and ${room.assigned} already taken. ` +
+                  `Buy another with change_plan before assigning it.`
+              : `The plan allows no more ${st} seats (${room.assigned} in use).`,
+          );
         }
         await assignSeatType(adapter, auth.orgId, member_id, st);
         return json({ status: "ok", member_id, seat_type: st });

@@ -48,7 +48,7 @@ import {
   listPaymentMethods,
   setDefaultPaymentMethod,
 } from "./payment-methods.js";
-import { assignSeatType, clearMemberRecords, getSeatType, listSeatAssignments } from "./seats.js";
+import { assignSeatType, clearMemberRecords, getSeatType, listSeatAssignments, seatAssignable } from "./seats.js";
 import { cancelPlan, changePlan, previewPlanChange } from "./subscription.js";
 import {
   approveTopUp,
@@ -283,6 +283,22 @@ export function createBoundApi(deps: BoundApiDeps) {
       assign: async (orgId: string, memberId: string, seatType: string | null) => {
         const stranger = await enforceMember(adapter, orgId, memberId, "assign seat");
         if (stranger) throw new Error(stranger.content[0].text);
+        // A seat is a PRICE and this write does not touch the subscription, so an unchecked
+        // assign gives the most expensive seat away. Same guard the tool applies.
+        const room = await seatAssignable(
+          adapter,
+          orgId,
+          planModel(plans, await planOf(orgId)),
+          memberId,
+          seatType,
+        );
+        if (!room.ok) {
+          throw new Error(
+            room.reason === "not_purchased"
+              ? `Not enough ${seatType} seats purchased (${room.purchased} bought, ${room.assigned} in use).`
+              : `The plan allows no more ${seatType} seats (${room.assigned} in use).`,
+          );
+        }
         return assignSeatType(adapter, orgId, memberId, seatType);
       },
       /** The raw write, no membership check — for seating an invitee who has not accepted. */
