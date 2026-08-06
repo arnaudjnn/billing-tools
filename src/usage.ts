@@ -139,6 +139,34 @@ export function resolveSeat(
  * computed its own would eventually disagree with the gate — and the disagreement
  * would be invisible until a customer was refused at 60%.
  */
+/**
+ * Fill in a caller's seat type when nobody passed one.
+ *
+ * A member's seat decides which pack applies AND which seat-scoped rate limits do, so a
+ * caller without one is not "any seat" — `rateLimitsOf` drops every seat-typed window, and
+ * `packSizeOf` returns null. Resolved here rather than in every page.
+ *
+ * It lives in ONE place because it did not: `usageSummary` resolved the seat and
+ * `resolveAllowance` did not, so a screen reading the summary saw a member's weekly window
+ * while the bound helpers asking "what is blocking them" saw no windows at all — and the
+ * control that should have offered an upgrade silently disappeared. Anything that resolves
+ * allowance for a NAMED member goes through this.
+ */
+export async function callerWithSeat<C extends { kind: "user" | "api"; id?: string; seatType?: string }>(
+  adapter: BillingAdapter,
+  input: { orgId: string; model: PlanModel | null; caller?: C },
+): Promise<C | undefined> {
+  const caller = input.caller;
+  if (!caller || caller.seatType) return caller;
+  // Nobody assigned them one: the plan's own implicit seat if it named one, else the
+  // historical default. A plan that SELLS seats has no implicit seat (`model.seat` is null
+  // there), so the default is what an unassigned member actually draws.
+  const assigned = caller.id ? await getSeatType(adapter, input.orgId, caller.id) : null;
+  const seatType =
+    caller.kind === "api" ? "api" : assigned || input.model?.seat?.key || DEFAULT_SEAT_TYPE;
+  return { ...caller, seatType };
+}
+
 export async function usageSummary(
   adapter: BillingAdapter,
   config: ResolvedConfig,
@@ -146,20 +174,12 @@ export async function usageSummary(
 ): Promise<UsageSummary> {
   const at = input.now ?? Date.now();
 
-  // A member's seat decides which pack and which seat-scoped limits apply, so
-  // resolve it here rather than making every page do it.
   const model = planModel(input.plans, input.plan ?? null);
-  let caller = input.caller;
-  if (caller && !caller.seatType) {
-    // Nobody assigned them one: the plan's own implicit seat if it named one,
-    // else the historical default. A plan that SELLS seats has no implicit seat
-    // (`model.seat` is null there), because an unassigned member is a data gap
-    // and guessing at a sold seat type would hand out an allowance.
-    const assigned = caller.id ? await getSeatType(adapter, input.orgId, caller.id) : null;
-    const seatType =
-      caller.kind === "api" ? "api" : assigned || model?.seat?.key || DEFAULT_SEAT_TYPE;
-    caller = { ...caller, seatType };
-  }
+  const caller = await callerWithSeat(adapter, {
+    orgId: input.orgId,
+    model,
+    caller: input.caller,
+  });
 
   const state = await resolveAllowance(adapter, config, {
     orgId: input.orgId,

@@ -24,6 +24,7 @@ import {
   requestPlanChange,
   resolvePlanRequest,
 } from "../dist/plan-request.js";
+import { assignSeatType } from "../dist/seats.js";
 import { fakeAdapter } from "./helpers.mjs";
 
 const PLANS = {
@@ -372,4 +373,50 @@ test("an UNASSIGNED member is on the default seat, not on none", async () => {
   assert.equal(seatRank(model, null), 2104, "absent means the default, not zero");
   assert.equal(nextSeatUp(model, null), "premium", "so the ask is the seat ABOVE it");
   assert.equal(nextSeatUp(model, "premium"), null, "and the best seat has nothing above");
+});
+
+test("a seat-typed window is invisible without the seat, which is why one resolver owns it", async () => {
+  // The bug this pins. `usageSummary` filled in an unassigned member's seat and
+  // `resolveAllowance` did not, so a plan whose weekly limits are per-seat showed the member a
+  // full red weekly bar while the code asking "what is blocking them" saw NO windows — and the
+  // upgrade control silently disappeared from the page.
+  const { callerWithSeat } = await import("../dist/usage.js");
+  const { rateLimitsOf, planModel } = await import("../dist/plan-model.js");
+  const PER_SEAT = {
+    pro: {
+      sells: {
+        kind: "seats",
+        seatTypes: {
+          standard: { price: { monthly: 2104 }, includedCredits: 1000, min: 1 },
+          premium: { price: { monthly: 10523 }, includedCredits: 5000 },
+        },
+      },
+      cap: { kind: "per_seat" },
+      limits: {
+        rate: [
+          { every: "week", credits: 500, scope: "caller", callerKind: "user", seatType: "standard" },
+          { every: "week", credits: 2500, scope: "caller", callerKind: "user", seatType: "premium" },
+        ],
+      },
+      sale: "self_serve",
+    },
+  };
+  const model = planModel(PER_SEAT, "pro");
+  const adapter = fakeAdapter({ members: ["u1"] });
+
+  // Raw, as the bound helpers used to pass it: every seat-typed window is filtered away.
+  assert.equal(rateLimitsOf(model, { kind: "user", id: "u1" }).length, 0);
+
+  // Resolved: an unassigned member draws the default seat and gets that seat's window.
+  const caller = await callerWithSeat(adapter, { orgId: "org_1", model, caller: { kind: "user", id: "u1" } });
+  assert.equal(caller.seatType, "standard");
+  const applies = rateLimitsOf(model, caller);
+  assert.equal(applies.length, 1);
+  assert.equal(applies[0].credits, 500);
+
+  // And a Premium member gets the bigger one, which is the whole point of the upgrade: the
+  // pack said 5× while a single shared weekly limit still said 1×.
+  await assignSeatType(adapter, "org_1", "u1", "premium");
+  const premium = await callerWithSeat(adapter, { orgId: "org_1", model, caller: { kind: "user", id: "u1" } });
+  assert.equal(rateLimitsOf(model, premium)[0].credits, 2500);
 });

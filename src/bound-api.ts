@@ -73,7 +73,7 @@ import {
   resolvePlanRequest,
 } from "./plan-request.js";
 import { currentCycle, resolveAllowance } from "./allowance.js";
-import { memberUsage, usageSummary } from "./usage.js";
+import { callerWithSeat, memberUsage, usageSummary } from "./usage.js";
 import { planModel, type PlanCatalog } from "./plans.js";
 import type { UsageLedger } from "./usage-ledger.js";
 import type { BillingAdapter, ResolvedConfig } from "./types.js";
@@ -115,12 +115,20 @@ export function createBoundApi(deps: BoundApiDeps) {
     memberId: string,
   ): Promise<{ windowKey?: string; basis?: number }> => {
     try {
+      const plan = await planOf(orgId);
       const state = await resolveAllowance(adapter, config, {
         orgId,
         plans,
-        plan: await planOf(orgId),
+        plan,
         ledger,
-        caller: { kind: "user", id: memberId },
+        // WITH the seat resolved. Without it every seat-typed rate window is filtered out,
+        // so a member capped by their weekly seat limit looked entirely unblocked and the
+        // control that should have offered an upgrade vanished.
+        caller: await callerWithSeat(adapter, {
+          orgId,
+          model: planModel(plans, plan),
+          caller: { kind: "user", id: memberId },
+        }),
       });
       const target = topUpTargetOf(state);
       return target?.kind === "rate" ? { windowKey: target.windowKey, basis: target.basis } : {};
@@ -223,17 +231,20 @@ export function createBoundApi(deps: BoundApiDeps) {
          */
         next: async (orgId: string, memberId: string) => {
           const plan = await planOf(orgId);
-          const seatType = await getSeatType(adapter, orgId, memberId);
-          const state = await resolveAllowance(adapter, config, {
+          const model = planModel(plans, plan);
+          // The same resolved caller the usage SCREEN uses, so the ladder and the bars cannot
+          // disagree about which windows apply to this person.
+          const caller = await callerWithSeat(adapter, {
             orgId,
-            plans,
-            plan,
-            ledger,
-            caller: { kind: "user", id: memberId, ...(seatType ? { seatType } : {}) },
+            model,
+            caller: { kind: "user" as const, id: memberId, seatType: undefined as string | undefined },
           });
-          return nextUsageAsk(planModel(plans, plan), {
+          const state = await resolveAllowance(adapter, config, { orgId, plans, plan, ledger, caller });
+          return nextUsageAsk(model, {
             blocked: topUpTargetOf(state),
-            seatType,
+            // The RESOLVED seat, not the raw assignment: an unassigned member draws the
+            // default seat, so the rung above is measured from there.
+            seatType: caller?.seatType ?? null,
             plans,
             currentPlan: plan,
           });
