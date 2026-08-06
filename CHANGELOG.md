@@ -1,3 +1,10 @@
+# [15.21.0](https://github.com/arnaudjnn/billing-tools/compare/v15.20.0...v15.21.0) (2026-08-06)
+
+
+### Features
+
+* **seats:** ask for a bigger SEAT, which is the right ask before a top-up ([eda6a21](https://github.com/arnaudjnn/billing-tools/commit/eda6a216d3a241600f028efdd8dd445662dca2d5))
+
 # [15.20.0](https://github.com/arnaudjnn/billing-tools/compare/v15.19.0...v15.20.0) (2026-08-06)
 
 
