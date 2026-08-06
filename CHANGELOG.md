@@ -1,3 +1,10 @@
+## [15.21.4](https://github.com/arnaudjnn/billing-tools/compare/v15.21.3...v15.21.4) (2026-08-06)
+
+
+### Bug Fixes
+
+* **topup:** report the window's granted extra beside the basis it excludes ([c975ca7](https://github.com/arnaudjnn/billing-tools/commit/c975ca7ac648b2ff89270014e80df03221e0f853))
+
 ## [15.21.3](https://github.com/arnaudjnn/billing-tools/compare/v15.21.2...v15.21.3) (2026-08-06)
 
 
