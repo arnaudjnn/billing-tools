@@ -276,6 +276,158 @@ test("on the BEST seat there is nothing above, so it becomes a usage top-up", as
   );
 });
 
+// ── credits, where money is the honest answer ────────────────────────────────
+//
+// The rung that was missing. "Ask an owner for a free exception" and "buy credits" are not
+// interchangeable, and which applies is a fact about the WALL, not a taste: a
+// `covers: "included"` window paces only what the plan gives away and paid usage carries on
+// past it, while a `covers: "all"` one is the product's pace and no purchase touches it.
+// Offering the wrong one either sends a customer to beg for something they could buy, or
+// takes their money for a wall that is still there.
+
+const SELLS_CREDITS = {
+  pro: {
+    sells: {
+      kind: "seats",
+      seatTypes: {
+        standard: { price: { monthly: 2104 }, includedCredits: 1000, min: 1 },
+        premium: { price: { monthly: 10523 }, includedCredits: 5000 },
+      },
+    },
+    cap: { kind: "per_seat", onExhausted: "wallet" },
+    replenish: { purchase: {} },
+    sale: "self_serve",
+  },
+};
+
+test("an INCLUDED window on the best seat offers credits, not somebody's permission", async () => {
+  const { nextUsageAsk } = await import("../dist/plan-request.js");
+  const { planModel } = await import("../dist/plan-model.js");
+  assert.deepEqual(
+    nextUsageAsk(planModel(SELLS_CREDITS, "pro"), {
+      blocked: { kind: "rate", covers: "included" },
+      seatType: "premium",
+      plans: SELLS_CREDITS,
+      currentPlan: "pro",
+    }),
+    { ask: "credits" },
+  );
+});
+
+test("an ALL window still offers the exception, because no purchase lifts it", async () => {
+  const { nextUsageAsk } = await import("../dist/plan-request.js");
+  const { planModel } = await import("../dist/plan-model.js");
+  assert.deepEqual(
+    nextUsageAsk(planModel(SELLS_CREDITS, "pro"), {
+      blocked: { kind: "rate", covers: "all" },
+      seatType: "premium",
+      plans: SELLS_CREDITS,
+      currentPlan: "pro",
+    }),
+    { ask: "usage" },
+  );
+});
+
+test("an undeclared `covers` is `all`, so nothing changed under a plan that never said", async () => {
+  const { nextUsageAsk } = await import("../dist/plan-request.js");
+  const { planModel } = await import("../dist/plan-model.js");
+  assert.deepEqual(
+    nextUsageAsk(planModel(SELLS_CREDITS, "pro"), {
+      blocked: { kind: "rate" },
+      seatType: "premium",
+      plans: SELLS_CREDITS,
+      currentPlan: "pro",
+    }),
+    { ask: "usage" },
+  );
+});
+
+test("a plan that does NOT sell credits never offers them, however payable the wall", async () => {
+  // The other half of the condition. Pointing a customer at a purchase the deployment does
+  // not offer is the same dead end as a tool that always fails.
+  const { nextUsageAsk } = await import("../dist/plan-request.js");
+  const { planModel } = await import("../dist/plan-model.js");
+  const NO_PURCHASE = { pro: { ...SELLS_CREDITS.pro, replenish: {} } };
+  assert.deepEqual(
+    nextUsageAsk(planModel(NO_PURCHASE, "pro"), {
+      blocked: { kind: "rate", covers: "included" },
+      seatType: "premium",
+      plans: NO_PURCHASE,
+      currentPlan: "pro",
+    }),
+    { ask: "usage" },
+  );
+});
+
+test("the SEAT still outranks credits — it raises the pace every cycle, not just this week", async () => {
+  const { nextUsageAsk } = await import("../dist/plan-request.js");
+  const { planModel } = await import("../dist/plan-model.js");
+  assert.deepEqual(
+    nextUsageAsk(planModel(SELLS_CREDITS, "pro"), {
+      blocked: { kind: "rate", covers: "included" },
+      seatType: "standard",
+      plans: SELLS_CREDITS,
+      currentPlan: "pro",
+    }),
+    { ask: "seat", to: "premium" },
+  );
+});
+
+test("an exhausted PACK is payable when the plan overflows to the wallet", async () => {
+  const { nextUsageAsk } = await import("../dist/plan-request.js");
+  const { planModel } = await import("../dist/plan-model.js");
+  assert.deepEqual(
+    nextUsageAsk(planModel(SELLS_CREDITS, "pro"), {
+      blocked: { kind: "pack" },
+      seatType: "premium",
+      plans: SELLS_CREDITS,
+      currentPlan: "pro",
+    }),
+    { ask: "credits" },
+  );
+
+  // …and NOT when it blocks: a committed package's overage is a renegotiation.
+  const BLOCKS = {
+    pro: { ...SELLS_CREDITS.pro, cap: { kind: "per_seat", onExhausted: "block" } },
+  };
+  assert.deepEqual(
+    nextUsageAsk(planModel(BLOCKS, "pro"), {
+      blocked: { kind: "pack" },
+      seatType: "premium",
+      plans: BLOCKS,
+      currentPlan: "pro",
+    }),
+    { ask: "usage" },
+  );
+});
+
+test("a POOLED plan that sells credits offers them before asking for a plan change", async () => {
+  // The pool is the workspace's, so there is nothing personal to raise — but paying is a
+  // real answer, and a cheaper one than moving everybody up a tier. A caller-scoped window
+  // rather than the pack, because that is the shape this branch is actually reached with:
+  // a pooled plan has no per-seat pack for `topUpTargetOf` to report.
+  const { nextUsageAsk } = await import("../dist/plan-request.js");
+  const { planModel } = await import("../dist/plan-model.js");
+  const POOLED = {
+    hobby: {
+      sells: { kind: "nothing" },
+      cap: { kind: "pool", credits: 1000, onExhausted: "wallet" },
+      replenish: { purchase: {} },
+      limits: { rate: [{ every: "week", credits: 400, scope: "caller", covers: "included" }] },
+      sale: "free",
+    },
+    pro: { ...SELLS_CREDITS.pro },
+  };
+  assert.deepEqual(
+    nextUsageAsk(planModel(POOLED, "hobby"), {
+      blocked: { kind: "rate", covers: "included" },
+      plans: POOLED,
+      currentPlan: "hobby",
+    }),
+    { ask: "credits" },
+  );
+});
+
 test("a plan with no seats offers the PLAN, because nothing personal can be raised", async () => {
   const { nextUsageAsk } = await import("../dist/plan-request.js");
   const { planModel } = await import("../dist/plan-model.js");

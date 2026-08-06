@@ -1,5 +1,5 @@
 import { planActions, planRank } from "./subscription.js";
-import { normalizePlans, planModel, type PlanCatalog, type PlanModel } from "./plan-model.js";
+import { exhaustedPolicy, normalizePlans, planModel, type PlanCatalog, type PlanModel } from "./plan-model.js";
 import type { BillingAdapter } from "./types.js";
 
 // "Can we move up a plan?" — the ask a member makes when extra allowance is not the answer.
@@ -334,11 +334,22 @@ export async function resolvePlanRequest(
  *   1. a better SEAT — their pack is what their seat includes, so the way to have more of it
  *      is a bigger seat. A Standard member should be offered this, never a top-up: topping
  *      up buys them a few days and leaves them in the same place next week.
- *   2. extra USAGE on the blocked window — the answer once they are on the best seat there
- *      is, where nothing else remains but more of what they already have.
- *   3. a PLAN change — for a plan with no per-member allowance at all. A pooled plan's
+ *   2. CREDITS, where money can actually lift the wall: a `covers: "included"` window paces
+ *      only what the plan gives away, and a pack whose plan overflows to the wallet is the
+ *      same statement. Paying works, permanently and without anybody's permission, so
+ *      asking an owner for a free exception would be the worse of two available answers.
+ *   3. extra USAGE on the blocked window — the answer where money CANNOT help: a
+ *      `covers: "all"` window is the product's own pace and no purchase touches it, so an
+ *      exception somebody grants is the only door.
+ *   4. a PLAN change — for a plan with no per-member allowance at all. A pooled plan's
  *      windows belong to the workspace, so there is nothing personal to raise and
  *      `grant_top_up` refuses it outright.
+ *
+ * Rungs 2 and 3 were ONE rung, and it was wrong in whichever direction the deployment went.
+ * A plan whose card says pay-as-you-go sent a blocked member to ask an owner for something
+ * they could have bought in a click; a plan pacing the product offered credits that lift
+ * nothing, taking money for a wall that would still be there. Which of the two applies is
+ * not a preference — it is what `covers` says, so it is read rather than configured again.
  *
  * Returns null when nothing is blocked, which is when nothing should be offered — a control
  * permanently on screen asks a question nobody at 40% can answer.
@@ -346,21 +357,42 @@ export async function resolvePlanRequest(
 export function nextUsageAsk(
   model: PlanModel | null,
   input: {
-    /** From `topUpTargetOf` — what, if anything, is refusing them. */
-    blocked: { kind: "rate" | "pack" } | null;
+    /** From `topUpTargetOf` — what, if anything, is refusing them, and whether paying lifts it. */
+    blocked: { kind: "rate" | "pack"; covers?: "all" | "included" } | null;
     seatType?: string | null;
     plans: PlanCatalog;
     currentPlan?: string | null;
   },
-): { ask: "seat"; to: string } | { ask: "usage" } | { ask: "plan"; to: string } | null {
+): { ask: "seat"; to: string } | { ask: "credits" } | { ask: "usage" } | { ask: "plan"; to: string } | null {
   if (!input.blocked) return null;
+
+  // Can the customer pay their own way past this? Two conditions, and both are necessary:
+  // the plan has to SELL credits, and the wall has to be one credits reach. A pack is
+  // reachable when the plan overflows to the wallet; a rate window only when it covers the
+  // included allowance alone.
+  const sellsCredits = Boolean(model?.replenish?.purchase || model?.replenish?.autoReload);
+  const payable =
+    sellsCredits &&
+    (input.blocked.kind === "pack"
+      // Through `exhaustedPolicy`, not `cap.onExhausted`: an agent and a shared seat always
+      // overflow to the wallet whatever the cap declares, and a `cap: wallet` plan has no
+      // `onExhausted` field at all.
+      ? exhaustedPolicy(model, { seatType: input.seatType ?? undefined }) === "wallet"
+      : input.blocked.covers === "included");
 
   if (model?.sells.kind === "seats") {
     const better = nextSeatUp(model, input.seatType ?? null);
+    // The seat still comes first, even when credits would work: it raises the pack AND the
+    // pace every cycle, where credits are this week's answer bought again next week.
     if (better) return { ask: "seat", to: better };
-    // On the best seat: more of the same is all that is left.
-    return { ask: "usage" };
+    // On the best seat: buy more if that is possible, otherwise ask for an exception.
+    return payable ? { ask: "credits" } : { ask: "usage" };
   }
+
+  // A pooled plan has nothing personal to raise — but if it sells credits and the pool
+  // overflows to the wallet, paying is still a real answer and a better one than asking
+  // the workspace to change plan.
+  if (payable) return { ask: "credits" };
 
   // No seats, so nothing per-member to raise. The only route is the workspace buying more
   // product — and if there is nothing above them, there is nothing to offer at all.

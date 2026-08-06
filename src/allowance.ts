@@ -467,7 +467,15 @@ export interface FundingDecision {
 export function topUpTargetOf(
   state: AllowanceState,
 ):
-  | { kind: "rate"; windowKey: string; basis: number; extra: number; every: Every; resetsAt: number | null }
+  | {
+      kind: "rate";
+      windowKey: string;
+      basis: number;
+      extra: number;
+      every: Every;
+      resetsAt: number | null;
+      covers: "all" | "included";
+    }
   | { kind: "pack"; basis: number; extra: number }
   | null {
   const ORDER: Every[] = ["hour", "day", "week", "month", "cycle"];
@@ -493,6 +501,12 @@ export function topUpTargetOf(
       extra: tightest.extra ?? 0,
       every: tightest.every,
       resetsAt: tightest.window.end,
+      // WHETHER MONEY CAN LIFT THIS ONE, which decides what the caller should be offered.
+      // An `included` window paces the giveaway and paid usage carries on past it, so the
+      // honest offer is credits; an `all` window is the product's pace and no purchase
+      // touches it, so the only offer is an exception somebody grants. `nextUsageAsk` reads
+      // this — without it the ladder cannot tell those two apart and picks one for both.
+      covers: tightest.covers ?? "all",
     };
   }
   if (state.pack && state.pack.remaining <= 0) {

@@ -245,11 +245,16 @@ They are constantly confused, so the distinction is worth stating once:
 
 **WHICH ask to offer is one decision, and `nextUsageAsk` owns it.** A ladder, cheapest and most targeted rung first, each existing because the one below cannot help:
 
-1. **a better SEAT** — their pack is what their seat includes, so a Standard member out of usage should be offered a bigger seat, never a top-up. A top-up buys them a few days and leaves them in the same place next week.
-2. **extra USAGE on the blocked window** — the answer once they are on the best seat there is, where nothing remains but more of what they have.
-3. **a PLAN change** — for a plan with no per-member allowance at all.
+1. **a better SEAT** — their pack is what their seat includes, so a Standard member out of usage should be offered a bigger seat, never a top-up. A top-up buys them a few days and leaves them in the same place next week. It outranks even a payable wall: the seat raises the pack AND the pace every cycle, where credits are this week's answer bought again next week.
+2. **CREDITS, where money can actually lift the wall** — a `covers: "included"` window paces only what the plan gives away, and an exhausted pack whose plan overflows to the wallet says the same thing. Paying works, permanently and without anybody's permission.
+3. **extra USAGE on the blocked window** — the answer where money CANNOT help: a `covers: "all"` window is the product's own pace, no purchase touches it, and an exception somebody grants is the only door.
+4. **a PLAN change** — for a plan with no per-member allowance at all.
+
+**Rungs 2 and 3 were ONE rung, and it was wrong in whichever direction a deployment went.** A plan whose card says pay-as-you-go sent a blocked member to ask an owner for something they could have bought in a click; a plan pacing the product would have offered credits that lift nothing, taking money for a wall still there. Which applies is not a preference — it is what `covers` says, so `topUpTargetOf` reports it and the ladder reads it rather than the config being stated twice. Both halves are necessary: the plan must SELL credits (`replenish.purchase`/`autoReload`) *and* the wall must be one credits reach.
 
 Null when nothing is blocked, because a control permanently on screen asks a question nobody at 40% can answer. A screen inventing its own ladder is how a Standard member ends up being sold a weekly top-up forever.
+
+**WHO may pay is the consumer's split, not the ladder's.** `credits` says money is the answer; it does not say the person looking at the screen may spend the workspace's. An app whose buy control is admin-only renders that rung as a purchase for an owner and as a request for a member — the same shape it already uses for `seat` and `plan`.
 
 **Where extra allowance cannot apply, the other ask is a PLAN change** (`src/plan-request.ts`). A pooled plan has nothing per-member to raise, so `grant_top_up` refuses it (`not_capped`) and a screen offering one offers a door that does not open. `request_plan_change` queues "please move us up" for whoever can, defaulting to the next tier — the member is saying they need more, not choosing a SKU. **Resolving it moves no plan and charges nobody**: `change_plan` takes a payment, and nothing a member asks for may charge an owner as a side effect of being answered. A request is satisfied the moment the workspace is on that plan or better, however it got there, so a want somebody already granted stops appearing without anyone clicking.
 
