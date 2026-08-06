@@ -1,3 +1,10 @@
+# [15.22.0](https://github.com/arnaudjnn/billing-tools/compare/v15.21.4...v15.22.0) (2026-08-06)
+
+
+### Features
+
+* **usage:** offer CREDITS where money can lift the wall, not somebody's permission ([66ec730](https://github.com/arnaudjnn/billing-tools/commit/66ec730cc909cd32257d6a1454c53ab56ccb723f))
+
 ## [15.21.4](https://github.com/arnaudjnn/billing-tools/compare/v15.21.3...v15.21.4) (2026-08-06)
 
 
