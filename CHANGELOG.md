@@ -1,3 +1,10 @@
+## [15.18.1](https://github.com/arnaudjnn/billing-tools/compare/v15.18.0...v15.18.1) (2026-08-06)
+
+
+### Bug Fixes
+
+* **exports:** export topUpTargetOf, which a consumer cannot decide without ([b870a4c](https://github.com/arnaudjnn/billing-tools/commit/b870a4c22211136e88079809bc8a764d8598e709))
+
 # [15.18.0](https://github.com/arnaudjnn/billing-tools/compare/v15.17.0...v15.18.0) (2026-08-06)
 
 
