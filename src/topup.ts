@@ -146,7 +146,16 @@ async function readGrant(
   return blob[memberId]?.[cycle] ?? 0;
 }
 
-/** Add to a member's grant for one cycle, and return the new total. */
+/**
+ * How many windows one member may hold a grant on, per org.
+ *
+ * Three is a cycle plus the two tightest windows a plan realistically declares, and the
+ * value has to stay inside WorkOS's 600 characters — the ceiling this whole file is written
+ * against.
+ */
+const KEYS_PER_ORG = 3;
+
+/** Add to a member's grant for one window key, and return the new total. */
 async function addGrant(
   adapter: BillingAdapter,
   orgId: string,
@@ -160,11 +169,20 @@ async function addGrant(
   if (adapter.getUserMetadata && adapter.setUserMetadata) {
     const md = await adapter.getUserMetadata(memberId).catch((): Record<string, string> => ({}));
     const mine = parse<MemberGrants>(md[MEMBER_GRANTS_KEY], {});
-    // Only the cycle being written is kept for this org: `extraAllowance` reads
-    // exactly one cycle, so every other one is unreadable weight that only grows.
-    // Other orgs keep their single entry — they are bounded by org count, and
-    // this call has no way to know what cycle they are in.
-    mine[orgId] = { [cycle]: total };
+    // Bounded, but no longer to ONE key. A member can hold a grant on the billing
+    // cycle (their seat pack) and another on the window that is actually refusing them
+    // right now — a week, say — and keeping only the key being written silently deleted
+    // whichever they were not topping up at that moment.
+    //
+    // `KEYS_PER_ORG` is what bounds the value instead. Insertion order is preserved by
+    // JSON objects, so dropping from the front drops the oldest, and a window key stops
+    // being readable the moment its window rolls anyway (the key contains the window).
+    const existing = mine[orgId] ?? {};
+    const merged: Record<string, number> = { ...existing, [cycle]: total };
+    const keys = Object.keys(merged);
+    mine[orgId] = Object.fromEntries(
+      keys.slice(Math.max(0, keys.length - KEYS_PER_ORG)).map((k) => [k, merged[k]]),
+    );
     await adapter.setUserMetadata(memberId, { [MEMBER_GRANTS_KEY]: JSON.stringify(mine) });
     return total;
   }
@@ -177,7 +195,13 @@ async function addGrant(
   for (const [m, byCycle] of Object.entries(blob)) {
     if (byCycle?.[cycle] != null) pruned[m] = { [cycle]: byCycle[cycle] };
   }
-  pruned[memberId] = { [cycle]: total };
+  // Bounded like the per-member store, and more strictly needed here: this value is shared
+  // by every member of the org, so one member's history is everyone's budget.
+  const mineNow: Record<string, number> = { ...(blob[memberId] ?? {}), [cycle]: total };
+  const mineKeys = Object.keys(mineNow);
+  pruned[memberId] = Object.fromEntries(
+    mineKeys.slice(Math.max(0, mineKeys.length - KEYS_PER_ORG)).map((k) => [k, mineNow[k]]),
+  );
   await writeJson(adapter, orgId, GRANTS_KEY, pruned);
   return total;
 }
@@ -320,6 +344,16 @@ export async function grantExtraAllowance(
     grantedBy?: string;
     id?: string;
     now?: number;
+    /**
+     * Raise THIS window instead of the billing cycle — `topUpTargetOf` names it.
+     *
+     * The grant is filed under the window's own key, so it lasts exactly as long as the
+     * window does: when the week rolls the key no longer matches and the member is back on
+     * the plan's pace, with nothing to expire or clean up.
+     */
+    windowKey?: string;
+    /** What `percent` is a percentage OF, when raising a window rather than a seat pack. */
+    basis?: number;
   },
 ): Promise<{
   ok: boolean;
@@ -342,9 +376,12 @@ export async function grantExtraAllowance(
   const packSize = packSizeOf(model, seatType);
   if (packSize == null) return { ok: false, reason: "not_capped" };
 
+  // The basis is the window being raised, not always the seat pack: "25% more this week" is
+  // a quarter of the week's allowance, and taking a quarter of a monthly pack instead would
+  // hand out several weeks' worth under a weekly heading.
+  const basis = input.basis ?? packSize;
   const amount =
-    input.amount ??
-    (input.percent != null ? Math.round((packSize * input.percent) / 100) : NaN);
+    input.amount ?? (input.percent != null ? Math.round((basis * input.percent) / 100) : NaN);
   if (!Number.isFinite(amount) || amount <= 0) {
     return { ok: false, reason: "invalid_amount", packSize };
   }
@@ -356,16 +393,17 @@ export async function grantExtraAllowance(
   } catch {
     period = null;
   }
-  const cycle = cycleWindowFor(model, period, input.now ?? Date.now());
+  // The window key IS the cycle key unless a tighter window was named.
+  const key = input.windowKey ?? cycleWindowFor(model, period, input.now ?? Date.now()).key;
 
   const res = await grantTopUp(adapter, input.orgId, {
     memberId: input.memberId,
     amount,
-    cycle: cycle.key,
+    cycle: key,
     grantedBy: input.grantedBy,
     id: input.id,
   });
-  return { ...res, granted: amount, packSize, cycle: cycle.key };
+  return { ...res, granted: amount, packSize, cycle: key };
 }
 
 /** What one ask is worth when the plan does not say — the same default `grantExtraAllowance`
@@ -416,6 +454,10 @@ export async function requestExtraAllowance(
     amount?: number;
     id?: string;
     now?: number;
+    /** Ask against THIS window rather than the billing cycle — see `grantExtraAllowance`. */
+    windowKey?: string;
+    /** What `percent` is a percentage of, when the window is not the seat pack. */
+    basis?: number;
   },
 ): Promise<{
   ok: boolean;
@@ -437,7 +479,8 @@ export async function requestExtraAllowance(
   if (packSize == null) return { ok: false, reason: "not_capped" };
 
   const percent = input.percent ?? model.replenish.request?.percent ?? DEFAULT_REQUEST_PERCENT;
-  const amount = input.amount ?? Math.round((packSize * percent) / 100);
+  const basis = input.basis ?? packSize;
+  const amount = input.amount ?? Math.round((basis * percent) / 100);
   if (!Number.isFinite(amount) || amount <= 0) return { ok: false, reason: "invalid_amount", packSize };
 
   let period: { start?: string | null; end?: string | null } | null = null;
@@ -447,7 +490,10 @@ export async function requestExtraAllowance(
   } catch {
     period = null;
   }
-  const cycle = cycleWindowFor(model, period, input.now ?? Date.now());
+  const cycleWindow = cycleWindowFor(model, period, input.now ?? Date.now());
+  // Asking against the window that is actually refusing them, so an approval lands where it
+  // unblocks — and lapses when that window rolls.
+  const cycle = { key: input.windowKey ?? cycleWindow.key };
 
   const open = await pendingTopUpFor(adapter, input.orgId, input.memberId, cycle.key);
   if (open) return { ok: false, reason: "already_pending", pending: open, amount, packSize, cycle: cycle.key };

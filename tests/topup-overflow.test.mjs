@@ -87,18 +87,36 @@ test("grants accumulate for the same member and cycle", async () => {
   assert.equal(await extraAllowance(adapter, "org_1", member(1), CYCLE), 350);
 });
 
-test("an old cycle is pruned rather than kept forever", async () => {
-  // extraAllowance only ever asks for the current cycle, so every other one is
-  // unreadable weight — and it was never removed, so a long-lived member's
-  // grants grew without bound until the value overflowed on its own.
+test("old keys are dropped rather than kept forever", async () => {
+  // The store grew without bound until the value overflowed on its own, so it is pruned —
+  // but no longer to ONE key. A member can hold a grant on their billing cycle AND on the
+  // tighter window that is actually refusing them (a week), and keeping only the key last
+  // written silently deleted whichever they were not topping up at that moment. The bound
+  // is now a small number of keys, which is what the 600-char budget actually needs.
   const adapter = fakeAdapter();
-  await grantTopUp(adapter, "org_1", { memberId: member(1), amount: 250, cycle: "2026-06-14", id: "a" });
-  await grantTopUp(adapter, "org_1", { memberId: member(1), amount: 250, cycle: "2026-07-14", id: "b" });
-  await grantTopUp(adapter, "org_1", { memberId: member(1), amount: 250, cycle: CYCLE, id: "c" });
+  for (const [i, cycle] of ["2026-03-14", "2026-04-14", "2026-05-14", "2026-06-14", "2026-07-14", CYCLE].entries()) {
+    await grantTopUp(adapter, "org_1", { memberId: member(1), amount: 250, cycle, id: `g${i}` });
+  }
 
   const stored = JSON.parse(adapter.userStore[member(1)].btTopUpGrants);
-  assert.deepEqual(Object.keys(stored.org_1), [CYCLE]);
+  const keys = Object.keys(stored.org_1);
+  assert.ok(keys.length <= 3, `bounded, got ${keys.length}`);
+  assert.ok(keys.includes(CYCLE), "the one being written survives");
+  assert.equal(keys.includes("2026-03-14"), false, "the oldest is gone");
   assert.equal(await extraAllowance(adapter, "org_1", member(1), CYCLE), 250);
+});
+
+test("a cycle grant and a tighter WINDOW grant coexist", async () => {
+  // The point of keeping more than one key. A weekly exception must not delete the pack
+  // top-up the same member is holding, and vice versa — they raise different windows.
+  const adapter = fakeAdapter();
+  await grantTopUp(adapter, "org_1", { memberId: member(1), amount: 250, cycle: CYCLE, id: "pack" });
+  await grantTopUp(adapter, "org_1", { memberId: member(1), amount: 125, cycle: "w:2026-08-03", id: "week" });
+
+  assert.equal(await extraAllowance(adapter, "org_1", member(1), CYCLE), 250);
+  assert.equal(await extraAllowance(adapter, "org_1", member(1), "w:2026-08-03"), 125);
+  // And the week's expires by being unreadable: next week is a different key.
+  assert.equal(await extraAllowance(adapter, "org_1", member(1), "w:2026-08-10"), 0);
 });
 
 test("a grant is scoped to the org that gave it", async () => {
@@ -131,16 +149,21 @@ test("a grant written by an earlier version is still honoured", async () => {
   assert.equal(await extraAllowance(adapter, "org_1", member(1), CYCLE), 500);
 });
 
-test("an adapter with no per-member store still works, pruned", async () => {
+test("an adapter with no per-member store still works, and stays bounded", async () => {
   // The fallback for a custom adapter. The member ceiling remains — that is what
-  // implementing getUserMetadata buys — but growth over cycles does not.
+  // implementing getUserMetadata buys — but growth over windows does not. Bounded more
+  // strictly here than on the per-member store, because this value is shared by every
+  // member of the org: one member's history is everyone's budget.
   const adapter = fakeAdapter({ userMetadata: false });
-  await grantTopUp(adapter, "org_1", { memberId: member(1), amount: 250, cycle: "2026-07-14", id: "a" });
-  await grantTopUp(adapter, "org_1", { memberId: member(1), amount: 250, cycle: CYCLE, id: "b" });
+  for (const [i, cycle] of ["2026-05-14", "2026-06-14", "2026-07-14", CYCLE].entries()) {
+    await grantTopUp(adapter, "org_1", { memberId: member(1), amount: 250, cycle, id: `g${i}` });
+  }
 
   assert.equal(await extraAllowance(adapter, "org_1", member(1), CYCLE), 250);
-  const stored = JSON.parse(adapter.store.topUpGrants);
-  assert.deepEqual(Object.keys(stored[member(1)]), [CYCLE]);
+  const keys = Object.keys(JSON.parse(adapter.store.topUpGrants)[member(1)]);
+  assert.ok(keys.length <= 3, `bounded, got ${keys.length}`);
+  assert.ok(keys.includes(CYCLE));
+  assert.equal(keys.includes("2026-05-14"), false, "the oldest is gone");
 });
 
 test("many requests never overflow the value", async () => {

@@ -62,6 +62,7 @@ import {
   requestTopUp,
 } from "./topup.js";
 import { closeWorkspace, findOrphanedSubscriptions } from "./close-workspace.js";
+import { topUpTargetOf } from "./allowance.js";
 import { currentCycle, resolveAllowance } from "./allowance.js";
 import { memberUsage, usageSummary } from "./usage.js";
 import type { PlanCatalog } from "./plans.js";
@@ -92,6 +93,35 @@ export function createBoundApi(deps: BoundApiDeps) {
     deps.resolvePlan
       ? await deps.resolvePlan(orgId)
       : ((await adapter.getSubscription?.(orgId))?.plan ?? null);
+
+  /**
+   * WHICH window to raise for this member, resolved rather than assumed.
+   *
+   * Both the ask and the grant go through it, so they cannot disagree about what is being
+   * topped up — and neither can raise the seat pack while a tighter window is the thing
+   * actually refusing the member, which would grant credits that change nothing.
+   */
+  const topUpTarget = async (
+    orgId: string,
+    memberId: string,
+  ): Promise<{ windowKey?: string; basis?: number }> => {
+    try {
+      const state = await resolveAllowance(adapter, config, {
+        orgId,
+        plans,
+        plan: await planOf(orgId),
+        ledger,
+        caller: { kind: "user", id: memberId },
+      });
+      const target = topUpTargetOf(state);
+      return target?.kind === "rate" ? { windowKey: target.windowKey, basis: target.basis } : {};
+    } catch {
+      // Unreadable usage must not stop an owner granting: falling back to the seat pack is
+      // the old behaviour, and a grant on the wrong window is recoverable where a refusal
+      // to grant at all is just a stuck customer.
+      return {};
+    }
+  };
 
   return {
     /** The org's Stripe customer, created on first use. */
@@ -255,14 +285,21 @@ export function createBoundApi(deps: BoundApiDeps) {
        * returns the one already waiting, so the button can render as pending rather than
        * queueing the same question again.
        */
-      requestExtra: (
+      requestExtra: async (
         orgId: string,
         memberId: string,
         opts: { percent?: number; amount?: number; id?: string } = {},
-      ) =>
-        planOf(orgId).then((plan) =>
-          requestExtraAllowance(adapter, { ...opts, orgId, plans, plan, memberId }),
-        ),
+      ) => {
+        const target = await topUpTarget(orgId, memberId);
+        return requestExtraAllowance(adapter, {
+          ...opts,
+          ...target,
+          orgId,
+          plans,
+          plan: await planOf(orgId),
+          memberId,
+        });
+      },
       /** That member's own ask still waiting on an answer, or null. */
       pending: (orgId: string, memberId: string, cycle: string) =>
         pendingTopUpFor(adapter, orgId, memberId, cycle),
@@ -287,7 +324,8 @@ export function createBoundApi(deps: BoundApiDeps) {
         const stranger = await enforceMember(adapter, orgId, memberId, "grant extra allowance");
         if (stranger) throw new Error(stranger.content[0].text);
         const plan = await planOf(orgId);
-        return grantExtraAllowance(adapter, { ...opts, orgId, plans, plan, memberId });
+        const target = await topUpTarget(orgId, memberId);
+        return grantExtraAllowance(adapter, { ...opts, ...target, orgId, plans, plan, memberId });
       },
       /** Extra already granted to a member for a cycle. */
       granted: (orgId: string, memberId: string, cycle: string) =>

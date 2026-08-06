@@ -38,6 +38,9 @@ import { stripeBalanceUsageLedger, type FundingSource, type UsageLedger } from "
 export interface LimitState {
   every: Every;
   scope: "org" | "caller";
+  /** Extra granted to THIS caller on THIS window, already included in `size`. Always 0 for
+   *  an org-scoped window, which is nobody's to raise. */
+  extra?: number;
   /** From the config; null when the plan didn't label it. */
   label: string | null;
   size: number;
@@ -194,15 +197,30 @@ export async function resolveAllowance(
               (limit.callerKind ? { callerKind: limit.callerKind } : undefined),
         ...(scope === "caller" || limit.callerKind ? { sources } : {}),
       })
-      .then((used) => ({
-        every: limit.every,
-        scope,
-        label: limit.label ?? null,
-        size: limit.credits,
-        used,
-        remaining: Math.max(0, limit.credits - used),
-        window,
-      }));
+      .then(async (used) => {
+        // A per-member EXCEPTION on this window, if an owner granted one.
+        //
+        // Filed under the window's own key, which is what makes it expire correctly: come
+        // Monday the key is a different string, the read returns 0, and the member is back
+        // to the plan's pace with nothing to clean up. Only a CALLER-scoped window can
+        // carry one — an org-wide limit is the product's pace, not a person's, and raising
+        // it for one member would raise it for everyone.
+        const extra =
+          scope === "caller" && input.caller?.kind === "user" && input.caller.id
+            ? await extraAllowance(adapter, input.orgId, input.caller.id, window.key).catch(() => 0)
+            : 0;
+        const size = limit.credits + extra;
+        return {
+          every: limit.every,
+          scope,
+          label: limit.label ?? null,
+          size,
+          used,
+          remaining: Math.max(0, size - used),
+          window,
+          extra,
+        };
+      });
   });
 
   // The customer's own monthly ceiling, if they set one. Read from the customer
@@ -420,6 +438,49 @@ export interface FundingDecision {
  * product. Checking the wallet LAST is also what stops a pooled org being told
  * "insufficient balance" when the truth is "your package is used up".
  */
+/**
+ * WHICH window a top-up should raise for this caller: the tightest one refusing them now.
+ *
+ * "More usage" is not one thing. A member can be inside their monthly seat pack and still
+ * blocked by a weekly window, which is what pacing is for — and raising the pack there buys
+ * them nothing, because `fundingFor` checks the rate windows FIRST and absolutely. Asking
+ * this question before granting is what keeps the answer honest.
+ *
+ * A rate window wins over the pack when both are exhausted, and the SMALLEST window wins
+ * among rate windows: it is the one that will refuse the next call. And because a rate
+ * grant is filed under the window's own key, it lasts exactly as long as that window — come
+ * the reset the key no longer matches and the member is back to the plan's pace.
+ *
+ * Only caller-scoped windows are offered. An org-wide limit protects the product from the
+ * whole workspace; lifting it for one person is not an exception, it is a different plan.
+ */
+export function topUpTargetOf(
+  state: AllowanceState,
+): { kind: "rate"; windowKey: string; basis: number; every: Every; resetsAt: number | null } | { kind: "pack"; basis: number } | null {
+  const ORDER: Every[] = ["hour", "day", "week", "month", "cycle"];
+  const blocked = state.limits
+    .filter((l) => l.scope === "caller" && l.remaining <= 0)
+    .sort((a, b) => ORDER.indexOf(a.every) - ORDER.indexOf(b.every));
+
+  const tightest = blocked[0];
+  if (tightest) {
+    return {
+      kind: "rate",
+      windowKey: tightest.window.key,
+      // The percentage applies to THIS window, not to the seat pack: "25% more this week"
+      // means a quarter of the week's allowance, and a pack-sized share of a weekly window
+      // would be a different — usually much larger — number.
+      basis: tightest.size - (tightest.extra ?? 0),
+      every: tightest.every,
+      resetsAt: tightest.window.end,
+    };
+  }
+  if (state.pack && state.pack.remaining <= 0) {
+    return { kind: "pack", basis: state.pack.size };
+  }
+  return null;
+}
+
 export function fundingFor(
   state: AllowanceState,
   model: PlanModel | null,
