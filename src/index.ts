@@ -167,6 +167,7 @@ export {
 export {
   resolveAllowance,
   fundingFor,
+  topUpTargetOf,
   describeDenial,
   // The one definition of "this cycle". Anything that files something against a
   // cycle must use it, or the meter will look the grant up under another key.
