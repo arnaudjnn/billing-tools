@@ -232,6 +232,8 @@ export function createBoundApi(deps: BoundApiDeps) {
         orgId: string,
         req: { memberId: string; amount: number; id?: string; cycle?: string },
       ) => {
+        const stranger = await enforceMember(adapter, orgId, req.memberId, "request a top-up");
+        if (stranger) throw new Error(stranger.content[0].text);
         const cycle = req.cycle ?? (await currentCycle(adapter, { orgId, plans, plan: await planOf(orgId) })).key;
         const id = req.id ?? crypto.randomUUID();
         await requestTopUp(adapter, orgId, {
@@ -248,15 +250,24 @@ export function createBoundApi(deps: BoundApiDeps) {
       /** Grant outright, in credits, against a cycle you name. */
       grant: (orgId: string, input: Parameters<typeof grantTopUp>[2]) =>
         grantTopUp(adapter, orgId, input),
-      /** Grant as a percentage of that member's own seat pack (default 25%). */
-      grantExtra: (
+      /**
+       * Grant as a percentage of that member's own seat pack (default 25%).
+       *
+       * Membership-checked for the same reason `seats.assign` is: an admin screen passes a
+       * `memberId` straight from its own UI, and being an admin of YOUR workspace says nothing
+       * about whether that user is in it. scartoffie's grant control reaches the library
+       * through exactly this function.
+       */
+      grantExtra: async (
         orgId: string,
         memberId: string,
         opts: { percent?: number; grantedBy?: string; id?: string } = {},
-      ) =>
-        planOf(orgId).then((plan) =>
-          grantExtraAllowance(adapter, { ...opts, orgId, plans, plan, memberId }),
-        ),
+      ) => {
+        const stranger = await enforceMember(adapter, orgId, memberId, "grant extra allowance");
+        if (stranger) throw new Error(stranger.content[0].text);
+        const plan = await planOf(orgId);
+        return grantExtraAllowance(adapter, { ...opts, orgId, plans, plan, memberId });
+      },
       /** Extra already granted to a member for a cycle. */
       granted: (orgId: string, memberId: string, cycle: string) =>
         extraAllowance(adapter, orgId, memberId, cycle),

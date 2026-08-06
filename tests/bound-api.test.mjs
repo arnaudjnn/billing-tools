@@ -54,7 +54,10 @@ const config = {
 const ledger = { async record() {}, async total() { return 0 } };
 
 function api(overrides = {}) {
-  const adapter = fakeAdapter({ subscription: MID_MONTH });
+  // `members` is declared, not defaulted: the bound top-up and seat calls refuse a member id
+  // that is not in the workspace, so a fixture with an empty roster refuses its own member —
+  // which is the check working, and a test that papered over it would be asserting nothing.
+  const adapter = fakeAdapter({ subscription: MID_MONTH, members: ["u1", "u2"] });
   return {
     adapter,
     api: createBoundApi({ adapter, config, plans: PLANS, ledger, ...overrides }),
