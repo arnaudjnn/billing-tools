@@ -5,6 +5,7 @@ import { currentPrincipal, enforceAccess, enforceAdmin, enforceMember } from "..
 import { getBillingCustomerId, usageSince, stripeConfigured } from "../billing.js";
 import {
   requestTopUp,
+  requestExtraAllowance,
   listTopUpRequests,
   approveTopUp,
   denyTopUp,
@@ -224,11 +225,18 @@ allowance members have asked the owner to grant this cycle.`,
 
     server.tool(
       "request_top_up",
-      `Request extra credits for a member's seat this cycle (the owner approves with
-approve_top_up). Use when a user seat has hit its per-cycle pack.`,
+      `Ask for extra credits on a member's seat for this cycle (an owner approves with
+approve_top_up). Use when a user seat has hit its per-cycle pack. The amount is optional —
+omit it and the plan decides, which is usually what you want: the caller knows they are out,
+not what a reasonable top-up is.`,
       {
         member_id: z.string().describe("The member the extra allowance is for"),
-        amount: z.number().int().min(1).describe("Extra credits requested (e.g. 25% of the seat pack)"),
+        amount: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe("Credits to ask for. Omit to use the plan's share of that member's seat pack (default 25%)"),
         cycle: z
           .string()
           .optional()
@@ -248,16 +256,62 @@ approve_top_up). Use when a user seat has hit its per-cycle pack.`,
         }
         const stranger = await enforceMember(adapter, auth.orgId, member_id, "request_top_up");
         if (stranger) return stranger;
-        const id = crypto.randomUUID();
-        const c = cycle ?? (await cycleFor(auth.orgId)).key;
-        await requestTopUp(adapter, auth.orgId, {
-          id,
+
+        // `cycle` is a backfill escape hatch, so it keeps the raw path. Everything else goes
+        // through `requestExtraAllowance`, which is where the amount is derived and where the
+        // two refusals live — one open ask per member per cycle, and the plan's `maxPerCycle`.
+        if (cycle) {
+          const id = crypto.randomUUID();
+          await requestTopUp(adapter, auth.orgId, {
+            id,
+            memberId: member_id,
+            amount: amount ?? 0,
+            cycle,
+            createdAt: new Date().toISOString(),
+          });
+          return json({ status: "requested", id, member_id, amount: amount ?? 0, cycle });
+        }
+
+        if (!opts.plans) return err("No plans configured.");
+        const plan = opts.resolvePlan
+          ? await opts.resolvePlan(auth.orgId)
+          : ((await adapter.getSubscription?.(auth.orgId))?.plan ?? null);
+        const res = await requestExtraAllowance(adapter, {
+          orgId: auth.orgId,
+          plans: opts.plans,
+          plan,
           memberId: member_id,
-          amount,
-          cycle: c,
-          createdAt: new Date().toISOString(),
+          ...(amount != null ? { amount } : {}),
         });
-        return json({ status: "requested", id, member_id, amount, cycle: c });
+        if (!res.ok) {
+          // Each refusal names what to do instead — an agent that is told "already pending"
+          // waits, one told "not capped" stops asking.
+          if (res.reason === "already_pending") {
+            return json({
+              status: "already_pending",
+              member_id,
+              cycle: res.cycle,
+              pending: res.pending,
+              message: "This member already has a top-up waiting for an answer this cycle.",
+            });
+          }
+          return err(
+            res.reason === "not_capped"
+              ? "This plan has no per-seat packs, so extra allowance cannot be requested. " +
+                  "Its limits are workspace-wide (see get_usage_limits)."
+              : res.reason === "limit_reached"
+                ? "This member has reached the plan's top-up ceiling for this cycle."
+                : "Invalid amount.",
+          );
+        }
+        return json({
+          status: "requested",
+          id: res.id,
+          member_id,
+          amount: res.amount,
+          seat_pack: res.packSize,
+          cycle: res.cycle,
+        });
       },
     );
 

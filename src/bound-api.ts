@@ -57,6 +57,8 @@ import {
   grantExtraAllowance,
   grantTopUp,
   listTopUpRequests,
+  pendingTopUpFor,
+  requestExtraAllowance,
   requestTopUp,
 } from "./topup.js";
 import { closeWorkspace, findOrphanedSubscriptions } from "./close-workspace.js";
@@ -245,6 +247,25 @@ export function createBoundApi(deps: BoundApiDeps) {
         });
         return { id, cycle };
       },
+      /**
+       * Ask WITHOUT naming an amount — the plan's share of that member's seat pack.
+       *
+       * What a "request more usage" button calls: the person pressing it knows they are out,
+       * not what a reasonable top-up is. Refuses a second open ask for the same cycle and
+       * returns the one already waiting, so the button can render as pending rather than
+       * queueing the same question again.
+       */
+      requestExtra: (
+        orgId: string,
+        memberId: string,
+        opts: { percent?: number; amount?: number; id?: string } = {},
+      ) =>
+        planOf(orgId).then((plan) =>
+          requestExtraAllowance(adapter, { ...opts, orgId, plans, plan, memberId }),
+        ),
+      /** That member's own ask still waiting on an answer, or null. */
+      pending: (orgId: string, memberId: string, cycle: string) =>
+        pendingTopUpFor(adapter, orgId, memberId, cycle),
       approve: (orgId: string, requestId: string) => approveTopUp(adapter, orgId, requestId),
       deny: (orgId: string, requestId: string) => denyTopUp(adapter, orgId, requestId),
       /** Grant outright, in credits, against a cycle you name. */

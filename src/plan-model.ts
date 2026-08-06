@@ -306,9 +306,20 @@ export interface Replenish {
    * customer's threshold and card are theirs, not the plan's.
    */
   autoReload?: { threshold: Money; reloadTo: Money; enabledByDefault?: boolean };
-  /** Member asks, owner approves (see topup.ts). Raises that member's pack for
-   *  the cycle; never credits the wallet. */
-  request?: { maxPerCycle?: Money };
+  /**
+   * Member asks, owner approves (see topup.ts). Raises that member's pack for the cycle;
+   * never credits the wallet.
+   *
+   * `percent` is what ONE ask is worth, as a share of that member's own seat pack — the
+   * same unit `grantExtraAllowance` uses, and for the same reason: "a quarter more" means
+   * the same thing on a 1 000-credit seat and a 5 000-credit one. It exists because the
+   * person asking should not have to name a number: they know they are out, not what a
+   * reasonable top-up is. Default 25.
+   *
+   * `maxPerCycle` caps what one member may accumulate in a cycle, counting what is already
+   * granted AND what is already queued.
+   */
+  request?: { percent?: number; maxPerCycle?: Money };
 }
 
 // ── Axis 5: whether it can be bought ────────────────────────────────────────

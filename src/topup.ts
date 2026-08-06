@@ -368,6 +368,112 @@ export async function grantExtraAllowance(
   return { ...res, granted: amount, packSize, cycle: cycle.key };
 }
 
+/** What one ask is worth when the plan does not say — the same default `grantExtraAllowance`
+ *  applies, so asking for a top-up and being granted one unasked are the same size. */
+export const DEFAULT_REQUEST_PERCENT = 25;
+
+/** The member's own request still waiting on an answer, for `cycle`. */
+export async function pendingTopUpFor(
+  adapter: BillingAdapter,
+  orgId: string,
+  memberId: string,
+  cycle: string,
+): Promise<TopUpRequest | null> {
+  const list = await readJson<TopUpRequest[]>(adapter, orgId, REQUESTS_KEY, []);
+  return list.find((r) => r.memberId === memberId && r.cycle === cycle && r.status === "pending") ?? null;
+}
+
+/**
+ * File a request WITHOUT naming an amount — the mirror of `grantExtraAllowance`.
+ *
+ * The person asking knows they are out of allowance; they do not know what a reasonable
+ * top-up is, and making them type a number invites both the 10-credit ask that solves
+ * nothing and the 100 000 one an owner has to talk them down from. So the size comes from
+ * the plan (`replenish.request.percent`, default 25%) applied to that member's own seat
+ * pack, resolved here the way the meter resolves it.
+ *
+ * Two refusals matter and neither existed before:
+ *
+ *   `already_pending`  — one open ask per member per cycle. Without it a button that cannot
+ *                        choose an amount is a button that queues an identical request every
+ *                        time it is pressed, and the owner answers the same question N times.
+ *                        The pending request comes back with the refusal, so a UI can say
+ *                        "waiting" instead of failing.
+ *   `limit_reached`    — `maxPerCycle` was declared and enforced NOWHERE, so the ceiling a
+ *                        plan advertised admitted any number of asks. Counted against what is
+ *                        already GRANTED plus what is already QUEUED, because approving the
+ *                        queue is what makes it real.
+ */
+export async function requestExtraAllowance(
+  adapter: BillingAdapter,
+  input: {
+    orgId: string;
+    plans: PlanCatalog;
+    plan?: string | null;
+    memberId: string;
+    /** Override the plan's share. Absolute credits win over it, as in `grantExtraAllowance`. */
+    percent?: number;
+    amount?: number;
+    id?: string;
+    now?: number;
+  },
+): Promise<{
+  ok: boolean;
+  id?: string;
+  /** What was asked for, in credits. */
+  amount?: number;
+  /** The pack the percentage was taken from. */
+  packSize?: number;
+  cycle?: string;
+  /** The ask already open, when that is why this was refused. */
+  pending?: TopUpRequest;
+  reason?: "invalid_amount" | "not_capped" | "already_pending" | "limit_reached";
+}> {
+  const model = planModel(input.plans, input.plan ?? null);
+  if (!model || model.cap.kind !== "per_seat") return { ok: false, reason: "not_capped" };
+
+  const seatType = (await getSeatType(adapter, input.orgId, input.memberId)) || "standard";
+  const packSize = packSizeOf(model, seatType);
+  if (packSize == null) return { ok: false, reason: "not_capped" };
+
+  const percent = input.percent ?? model.replenish.request?.percent ?? DEFAULT_REQUEST_PERCENT;
+  const amount = input.amount ?? Math.round((packSize * percent) / 100);
+  if (!Number.isFinite(amount) || amount <= 0) return { ok: false, reason: "invalid_amount", packSize };
+
+  let period: { start?: string | null; end?: string | null } | null = null;
+  try {
+    const sub = await adapter.getSubscription?.(input.orgId);
+    period = sub ? { start: sub.periodStart ?? null, end: sub.periodEnd ?? null } : null;
+  } catch {
+    period = null;
+  }
+  const cycle = cycleWindowFor(model, period, input.now ?? Date.now());
+
+  const open = await pendingTopUpFor(adapter, input.orgId, input.memberId, cycle.key);
+  if (open) return { ok: false, reason: "already_pending", pending: open, amount, packSize, cycle: cycle.key };
+
+  const max = model.replenish.request?.maxPerCycle;
+  if (max != null) {
+    const granted = await readGrant(adapter, input.orgId, input.memberId, cycle.key);
+    const queued = (await listTopUpRequests(adapter, input.orgId))
+      .filter((r) => r.memberId === input.memberId && r.cycle === cycle.key && r.status === "pending")
+      .reduce((sum, r) => sum + r.amount, 0);
+    if (granted + queued + amount > max) {
+      return { ok: false, reason: "limit_reached", amount, packSize, cycle: cycle.key };
+    }
+  }
+
+  const id = input.id ?? crypto.randomUUID();
+  await requestTopUp(adapter, input.orgId, {
+    id,
+    memberId: input.memberId,
+    amount,
+    cycle: cycle.key,
+    createdAt: new Date(input.now ?? Date.now()).toISOString(),
+  });
+  return { ok: true, id, amount, packSize, cycle: cycle.key };
+}
+
 export async function denyTopUp(
   adapter: BillingAdapter,
   orgId: string,

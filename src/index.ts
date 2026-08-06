@@ -271,6 +271,9 @@ export {
   trimRequestsToBudget,
   METADATA_VALUE_LIMIT,
   type TopUpRequest,
+  pendingTopUpFor,
+  requestExtraAllowance,
+  DEFAULT_REQUEST_PERCENT,
 } from "./topup.js";
 
 // Seat-type assignments (per-member seat, stored in org metadata)
