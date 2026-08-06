@@ -1,3 +1,10 @@
+# [15.18.0](https://github.com/arnaudjnn/billing-tools/compare/v15.17.0...v15.18.0) (2026-08-06)
+
+
+### Features
+
+* **top-ups:** raise the window that is actually refusing you, until it resets ([dfc339e](https://github.com/arnaudjnn/billing-tools/commit/dfc339ea5c07f03a8ce6a1bdf25319bb9c574fc7))
+
 # [15.17.0](https://github.com/arnaudjnn/billing-tools/compare/v15.16.5...v15.17.0) (2026-08-06)
 
 
