@@ -66,13 +66,15 @@ import { topUpTargetOf } from "./allowance.js";
 import {
   isSatisfied,
   listPlanRequests,
+  nextUsageAsk,
   pendingPlanRequest,
   requestPlanChange,
+  requestSeatChange,
   resolvePlanRequest,
 } from "./plan-request.js";
 import { currentCycle, resolveAllowance } from "./allowance.js";
 import { memberUsage, usageSummary } from "./usage.js";
-import type { PlanCatalog } from "./plans.js";
+import { planModel, type PlanCatalog } from "./plans.js";
 import type { UsageLedger } from "./usage-ledger.js";
 import type { BillingAdapter, ResolvedConfig } from "./types.js";
 
@@ -203,6 +205,39 @@ export function createBoundApi(deps: BoundApiDeps) {
           pendingPlanRequest(adapter, orgId, memberId, { plans, currentPlan: await planOf(orgId) }),
         ask: async (orgId: string, memberId: string, opts: { plan?: string; note?: string } = {}) =>
           requestPlanChange(adapter, orgId, { ...opts, memberId, plans, currentPlan: await planOf(orgId) }),
+        /** Ask for a bigger SEAT — the right ask while one exists above them. */
+        askSeat: async (orgId: string, memberId: string, opts: { seatType?: string; note?: string } = {}) =>
+          requestSeatChange(adapter, orgId, {
+            ...opts,
+            memberId,
+            plans,
+            currentPlan: await planOf(orgId),
+            currentSeatType: await getSeatType(adapter, orgId, memberId),
+          }),
+        /**
+         * WHICH ask to offer this person: a bigger seat, more usage, or a plan change.
+         *
+         * One call so a screen cannot invent its own ladder — a Standard member offered a
+         * top-up gets a few days and is in the same place next week, which is the mistake
+         * this exists to prevent.
+         */
+        next: async (orgId: string, memberId: string) => {
+          const plan = await planOf(orgId);
+          const seatType = await getSeatType(adapter, orgId, memberId);
+          const state = await resolveAllowance(adapter, config, {
+            orgId,
+            plans,
+            plan,
+            ledger,
+            caller: { kind: "user", id: memberId, ...(seatType ? { seatType } : {}) },
+          });
+          return nextUsageAsk(planModel(plans, plan), {
+            blocked: topUpTargetOf(state),
+            seatType,
+            plans,
+            currentPlan: plan,
+          });
+        },
         resolve: (orgId: string, requestId: string, decision: "done" | "denied") =>
           resolvePlanRequest(adapter, orgId, requestId, decision),
         /** Has the workspace already reached what this asked for? */

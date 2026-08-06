@@ -272,6 +272,19 @@ function registerPlanCommands(
       ),
     );
   plan
+    .command("request-seat")
+    .description("Ask an owner to move you to a bigger seat (does not change or charge anything)")
+    .option("--seat <seatType>", "Seat type to ask for. Defaults to the next one up")
+    .option("--note <note>", "A line for the owner")
+    .action(async (o: { seat?: string; note?: string }) =>
+      print(
+        await callTool(requireConfig(), "request_seat_change", {
+          ...(o.seat ? { seat_type: o.seat } : {}),
+          ...(o.note ? { note: o.note } : {}),
+        }),
+      ),
+    );
+  plan
     .command("resolve <requestId>")
     .description("Mark a plan-change request handled or refused (admin)")
     .option("--deny", "Refuse it rather than recording it handled")

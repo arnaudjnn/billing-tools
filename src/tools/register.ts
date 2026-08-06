@@ -235,5 +235,6 @@ export const BILLING_TOOL_NAMES = [
   "cancel_plan",
   // Asking to move up, for a plan with no per-member allowance to top up.
   "request_plan_change",
+  "request_seat_change",
   "resolve_plan_request",
 ] as const;

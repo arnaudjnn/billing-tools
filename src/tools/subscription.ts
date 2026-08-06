@@ -15,8 +15,10 @@ import {
   isSatisfied,
   listPlanRequests,
   requestPlanChange,
+  requestSeatChange,
   resolvePlanRequest,
 } from "../plan-request.js";
+import { getSeatType } from "../seats.js";
 import { ALL_TOOL_CAPABILITIES, type ToolCapabilities } from "../plan-model.js";
 import type { BillingAdapter, ResolvedConfig } from "../types.js";
 
@@ -252,8 +254,21 @@ can be cancelled) — the same set the billing screen offers.`,
         // billing screen makes. Satisfied asks are dropped — a want the workspace has
         // already met is not pending, however it got there.
         plan_requests: (await listPlanRequests(adapter, auth.orgId))
-          .filter((r) => r.status === "pending" && !isSatisfied(r, opts.plans, current))
-          .map((r) => ({ id: r.id, member_id: r.memberId, plan: r.plan, created_at: r.createdAt, note: r.note ?? null })),
+          .filter((r) => r.status === "pending")
+          // A SEAT request needs that member's seat to know whether it is satisfied, and
+          // reading one per row would be a query per request on a page that already reads
+          // plenty. Plan requests are filtered here; a seat one is filtered by the caller,
+          // which is holding the seat map anyway (`list_seats`).
+          .filter((r) => r.kind === "seat" || !isSatisfied(r, opts.plans, current))
+          .map((r) => ({
+            id: r.id,
+            member_id: r.memberId,
+            kind: r.kind ?? "plan",
+            target: r.plan,
+            plan: r.plan,
+            created_at: r.createdAt,
+            note: r.note ?? null,
+          })),
       });
     },
   );
@@ -310,9 +325,55 @@ the ask for whoever can. The plan defaults to the next one up.`,
   );
 
   server.tool(
+    "request_seat_change",
+    `Ask an owner to move you to a bigger seat. Use when a seat's per-cycle pack is exhausted
+and a better seat exists — that is the answer, not a top-up, because a bigger seat raises the
+pack permanently while a top-up buys a few days. Does NOT change the seat or take a payment.`,
+    {
+      seat_type: z.string().optional().describe("Seat type to ask for. Defaults to the next one up"),
+      note: z.string().max(140).optional().describe("A line for the owner, e.g. why"),
+    },
+    async ({ seat_type, note }) => {
+      const auth = await enforceAccess(adapter);
+      if ("isError" in auth) return auth;
+      const principal = currentPrincipal();
+      const memberId = principal?.userId ?? auth.orgId;
+      const current = (await adapter.getSubscription?.(auth.orgId))?.plan ?? null;
+      const seat = await getSeatType(adapter, auth.orgId, memberId);
+
+      const res = await requestSeatChange(adapter, auth.orgId, {
+        memberId,
+        plans: opts.plans,
+        currentPlan: current,
+        currentSeatType: seat,
+        ...(seat_type ? { seatType: seat_type } : {}),
+        ...(note ? { note } : {}),
+      });
+      if (!res.ok) {
+        if (res.reason === "already_pending") {
+          return json({
+            status: "already_pending",
+            pending: res.pending,
+            message: "You already have a request waiting on an owner.",
+          });
+        }
+        return err(
+          res.reason === "no_upgrade"
+            ? "There is no better seat to ask for on this plan."
+            : res.reason === "already_on_it"
+              ? `You are already on ${res.seatType} or better.`
+              : "Unknown seat type.",
+        );
+      }
+      return json({ status: "requested", id: res.id, seat_type: res.seatType, from: seat });
+    },
+  );
+
+  server.tool(
     "resolve_plan_request",
-    `Mark a plan-change request handled or refused (admin). Recording it handled does NOT
-move the plan — use change_plan for that, which takes a payment.`,
+    `Mark a plan-change or seat-change request handled or refused (admin). Recording it handled
+does NOT move anything — use change_plan or assign_seat_type for that, and change_plan takes
+a payment.`,
     {
       request_id: z.string().describe("The id from get_plan's plan_requests"),
       decision: z.enum(["done", "denied"]).describe("`done` once you have acted on it"),

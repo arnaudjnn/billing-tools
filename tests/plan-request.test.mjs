@@ -192,3 +192,157 @@ test("the queue is trimmed by CHARACTERS, and never drops a pending ask", async 
   const stillOpen = kept.filter((r) => r.status === "pending").map((r) => r.memberId).sort();
   assert.deepEqual(stillOpen, ["user_22", "user_23", "user_24"], "every open ask survived");
 });
+
+test("a queue too full for one more ask REFUSES it rather than dropping an old one", async () => {
+  // The line the trimming will not cross. Somebody is waiting for an answer on every pending
+  // record, so deleting the question means they wait for ever — and the person who caused the
+  // overflow is the one who should hear about it, not a stranger whose ask vanishes.
+  const adapter = fakeAdapter();
+  const asks = [];
+  for (let i = 0; i < 40; i++) {
+    asks.push(
+      await requestPlanChange(adapter, "org_1", {
+        memberId: `user_${String(i).padStart(3, "0")}`,
+        plans: PLANS,
+        currentPlan: "hobby",
+        note: "siamo bloccati e ci serve piu utilizzo per finire il lavoro",
+      }),
+    );
+  }
+
+  const refused = asks.filter((r) => r.reason === "queue_full");
+  assert.ok(refused.length > 0, "the queue does fill up");
+  const open = (await listPlanRequests(adapter, "org_1")).filter((r) => r.status === "pending");
+  assert.equal(open.length, asks.filter((r) => r.ok).length, "everyone who was ACCEPTED is still queued");
+  assert.ok(adapter.store.btPlanRequests.length <= 600);
+});
+
+// ── which ask to offer ───────────────────────────────────────────────────────
+
+test("a Standard member is offered a bigger SEAT, never a top-up", async () => {
+  // The rule that prompted this. Their pack is what their seat includes, so a top-up buys
+  // them a few days and leaves them in the same place next week — the seat is the answer.
+  const { nextUsageAsk } = await import("../dist/plan-request.js");
+  const { planModel } = await import("../dist/plan-model.js");
+  const PAID = {
+    pro: {
+      sells: {
+        kind: "seats",
+        seatTypes: {
+          standard: { price: { monthly: 2104 }, includedCredits: 1000, min: 1 },
+          premium: { price: { monthly: 10523 }, includedCredits: 5000 },
+        },
+      },
+      cap: { kind: "per_seat" },
+      sale: "self_serve",
+    },
+  };
+
+  const ask = nextUsageAsk(planModel(PAID, "pro"), {
+    blocked: { kind: "rate" },
+    seatType: "standard",
+    plans: PAID,
+    currentPlan: "pro",
+  });
+  assert.deepEqual(ask, { ask: "seat", to: "premium" });
+});
+
+test("on the BEST seat there is nothing above, so it becomes a usage top-up", async () => {
+  const { nextUsageAsk } = await import("../dist/plan-request.js");
+  const { planModel } = await import("../dist/plan-model.js");
+  const PAID = {
+    pro: {
+      sells: {
+        kind: "seats",
+        seatTypes: {
+          standard: { price: { monthly: 2104 }, includedCredits: 1000, min: 1 },
+          premium: { price: { monthly: 10523 }, includedCredits: 5000 },
+        },
+      },
+      cap: { kind: "per_seat" },
+      sale: "self_serve",
+    },
+  };
+
+  assert.deepEqual(
+    nextUsageAsk(planModel(PAID, "pro"), {
+      blocked: { kind: "rate" },
+      seatType: "premium",
+      plans: PAID,
+      currentPlan: "pro",
+    }),
+    { ask: "usage" },
+  );
+});
+
+test("a plan with no seats offers the PLAN, because nothing personal can be raised", async () => {
+  const { nextUsageAsk } = await import("../dist/plan-request.js");
+  const { planModel } = await import("../dist/plan-model.js");
+  assert.deepEqual(
+    nextUsageAsk(planModel(PLANS, "hobby"), {
+      blocked: { kind: "pack" },
+      seatType: null,
+      plans: PLANS,
+      currentPlan: "hobby",
+    }),
+    { ask: "plan", to: "pro" },
+  );
+});
+
+test("nothing blocked offers nothing at all", async () => {
+  const { nextUsageAsk } = await import("../dist/plan-request.js");
+  const { planModel } = await import("../dist/plan-model.js");
+  assert.equal(
+    nextUsageAsk(planModel(PLANS, "hobby"), { blocked: null, plans: PLANS, currentPlan: "hobby" }),
+    null,
+  );
+});
+
+test("the top plan with no seats has nothing to offer either", async () => {
+  const { nextUsageAsk } = await import("../dist/plan-request.js");
+  const POOLED = { solo: { sells: { kind: "nothing" }, cap: { kind: "pool", credits: 100 }, sale: "free" } };
+  const { planModel } = await import("../dist/plan-model.js");
+  assert.equal(
+    nextUsageAsk(planModel(POOLED, "solo"), {
+      blocked: { kind: "pack" },
+      plans: POOLED,
+      currentPlan: "solo",
+    }),
+    null,
+  );
+});
+
+// ── a seat request answers itself too ────────────────────────────────────────
+
+test("a seat request is satisfied once they hold that seat, or better", async () => {
+  const { requestSeatChange, pendingPlanRequest } = await import("../dist/plan-request.js");
+  const PAID = {
+    pro: {
+      sells: {
+        kind: "seats",
+        seatTypes: {
+          standard: { price: { monthly: 2104 }, includedCredits: 1000, min: 1 },
+          premium: { price: { monthly: 10523 }, includedCredits: 5000 },
+        },
+      },
+      cap: { kind: "per_seat" },
+      sale: "self_serve",
+    },
+  };
+  const adapter = fakeAdapter();
+  const res = await requestSeatChange(adapter, "org_1", {
+    memberId: "u1",
+    plans: PAID,
+    currentPlan: "pro",
+    currentSeatType: "standard",
+  });
+  assert.equal(res.seatType, "premium");
+
+  const args = { plans: PAID, currentPlan: "pro" };
+  assert.ok(await pendingPlanRequest(adapter, "org_1", "u1", { ...args, currentSeatType: "standard" }));
+  assert.equal(
+    await pendingPlanRequest(adapter, "org_1", "u1", { ...args, currentSeatType: "premium" }),
+    null,
+    "the owner assigned the seat; nothing left to answer",
+  );
+});

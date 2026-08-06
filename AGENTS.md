@@ -76,7 +76,7 @@ Deliberate exceptions — don't "fix" these:
 
 REST and MCP get it structurally (`createDispatcher` monkey-patches `server.tool`, so every registered tool is an endpoint). `tests/surface.test.mjs` asserts `BILLING_TOOL_NAMES` matches what registration produces, **in both directions and by count**. The CLI is hand-written and is the one surface that can silently fall behind, so `tests/conventions.test.mjs` asserts it reaches every tool — and, since it is hand-written, that it is **gated by the same `toolCapabilities`**: pass `plans` to `registerBillingCommands` and a flat/pooled deployment stops shipping `seats` / `assign-seat` / the five `topup` commands, which on that catalogue call tools that were never registered and can only answer "Unknown tool". A dead command is the same false statement as a dead tool. Omitting `plans` registers everything, because undefined is "the caller did not say". Coverage is per tool, not per command: `get_api_key` has no command because `auth` performs that flow, `preview_credit_purchase` is `buy --quote`, `set_spend_controls` is `spend limit` / `spend alerts`.
 
-### The 35 tools
+### The 36 tools
 
 `BILLING_TOOL_NAMES` (`tools/register.ts`) is the canonical list of what the library **can** register. The **needs** column is not documentation: `toolCapabilities(plans)` computes it and `registerBillingTools` reads it, so the table and the code cannot disagree.
 
@@ -110,6 +110,7 @@ REST and MCP get it structurally (`createDispatcher` monkey-patches `server.tool
 | `change_plan` | lifecycle | Up, down or off — one entry point | `plans` **+** a `self_serve` plan |
 | `cancel_plan` | lifecycle | Cancel at the end of the period already paid for | `plans` **+** a `self_serve` plan |
 | `request_plan_change` | lifecycle | A member asks an owner to move the workspace up a tier | `plans` |
+| `request_seat_change` | lifecycle | A member asks for a bigger SEAT — the right ask while one exists | `plans` |
 | `resolve_plan_request` | lifecycle | Owner records that ask handled or refused (admin) | `plans` |
 | `get_billing_profile` | account | Invoice recipient, company name, billing address | Stripe customer |
 | `set_billing_profile` | account | Patches those fields | Stripe customer |
@@ -129,13 +130,13 @@ REST and MCP get it structurally (`createDispatcher` monkey-patches `server.tool
 | catalogue | `sells: flat`, `cap: pool`, `purchase` + `autoReload` | `nothing`/`seats`/`seats`, `pool` + `per_seat` + `wallet`, `purchase` + `autoReload` + `request` |
 | seats (2) | – | ✓ |
 | top-ups (5) | – | ✓ |
-| everything else (28) | ✓ | ✓ |
+| everything else (29) | ✓ | ✓ |
 
 - **Reads are never gated on a write's precondition.** `list_plans` and `get_plan` register on any catalogue including a wholly quote-only one, `get_usage` on any at all, `get_usage_limits` wherever a plan has a window — a rate limit counts, because it is the one refusal a caller can wait out.
 - **`caps` is independent of the adapter's metadata check.** The catalogue says whether a group can ever be *needed*, the adapter whether the answer can be *stored*; neither implies the other.
 - **No catalogue means no declaration to read, so everything registers.** `undefined` is "the caller did not say", never "nothing applies" — inventing a `false` would silently delete tools from a working deployment. `capabilities: { request: true }` is the per-group override for a plan not shipped yet; `profileTools` / `subscriptionTools` turn their groups off for an app whose own UI owns the flow.
 
-**Rejected: merging the redundant pairs** into `buy_credits{quote}`, `change_plan{dry_run}`, `get_invoice{pdf}`, `resolve_top_up{decision}` (35 → 28). Gating already beats that per deployment, and a preview sharing its code path with the charge is safer as a separate tool than as a boolean an agent can forget — a forgotten `dry_run: true` moves money.
+**Rejected: merging the redundant pairs** into `buy_credits{quote}`, `change_plan{dry_run}`, `get_invoice{pdf}`, `resolve_top_up{decision}` (36 → 29). Gating already beats that per deployment, and a preview sharing its code path with the charge is safer as a separate tool than as a boolean an agent can forget — a forgotten `dry_run: true` moves money.
 
 ## Changing plan mid-cycle — what the customer is charged
 
@@ -239,6 +240,14 @@ They are constantly confused, so the distinction is worth stating once:
 **It raises the window that is REFUSING them, not everything.** `topUpTargetOf` picks the tightest exhausted caller-scoped window; a weekly grant leaves the monthly pack exactly where it was, and vice versa. If both are blocked the week goes first (it refuses the next call) and the pack is a second ask — measured in `tests/window-topup.test.mjs`, which also pins that the extra is gone when the window rolls, because it is filed under that window's own key.
 
 **An ORG-scoped window can never be raised for a person.** It is the product's pace, not theirs; lifting it for one member lifts it for everyone, which is a plan change and not an exception.
+
+**WHICH ask to offer is one decision, and `nextUsageAsk` owns it.** A ladder, cheapest and most targeted rung first, each existing because the one below cannot help:
+
+1. **a better SEAT** — their pack is what their seat includes, so a Standard member out of usage should be offered a bigger seat, never a top-up. A top-up buys them a few days and leaves them in the same place next week.
+2. **extra USAGE on the blocked window** — the answer once they are on the best seat there is, where nothing remains but more of what they have.
+3. **a PLAN change** — for a plan with no per-member allowance at all.
+
+Null when nothing is blocked, because a control permanently on screen asks a question nobody at 40% can answer. A screen inventing its own ladder is how a Standard member ends up being sold a weekly top-up forever.
 
 **Where extra allowance cannot apply, the other ask is a PLAN change** (`src/plan-request.ts`). A pooled plan has nothing per-member to raise, so `grant_top_up` refuses it (`not_capped`) and a screen offering one offers a door that does not open. `request_plan_change` queues "please move us up" for whoever can, defaulting to the next tier — the member is saying they need more, not choosing a SKU. **Resolving it moves no plan and charges nobody**: `change_plan` takes a payment, and nothing a member asks for may charge an owner as a side effect of being answered. A request is satisfied the moment the workspace is on that plan or better, however it got there, so a want somebody already granted stops appearing without anyone clicking.
 

@@ -1,5 +1,5 @@
 import { planActions, planRank } from "./subscription.js";
-import { normalizePlans, planModel, type PlanCatalog } from "./plan-model.js";
+import { normalizePlans, planModel, type PlanCatalog, type PlanModel } from "./plan-model.js";
 import type { BillingAdapter } from "./types.js";
 
 // "Can we move up a plan?" — the ask a member makes when extra allowance is not the answer.
@@ -32,7 +32,17 @@ export interface PlanRequest {
   id: string;
   /** WorkOS user id of whoever asked. */
   memberId: string;
-  /** The plan they are asking to move to. */
+  /**
+   * WHAT they are asking to move: the workspace's plan, or their own seat.
+   *
+   * They are different asks with different prices and different approvers' reasoning — a
+   * seat upgrade costs one seat's difference and affects one person, a plan change moves
+   * everybody — but they queue in the same place, because to an owner they are one list of
+   * "people who need more". Absent means `plan`, so records written before seats existed
+   * still read.
+   */
+  kind?: "plan" | "seat";
+  /** The plan, or the seat type, they are asking to move to. */
   plan: string;
   status: "pending" | "done" | "denied";
   createdAt: string;
@@ -50,16 +60,46 @@ async function read(adapter: BillingAdapter, orgId: string): Promise<PlanRequest
   }
 }
 
-async function write(adapter: BillingAdapter, orgId: string, list: PlanRequest[]): Promise<void> {
-  // Trimmed by CHARACTERS, the unit the store rejects on — and settled records go before
-  // pending ones, because losing history costs a row and losing an open ask loses the ask.
-  const ordered = [...list].sort((a, b) => Number(a.status !== "pending") - Number(b.status !== "pending"));
-  let kept = ordered;
-  while (kept.length > 1 && JSON.stringify(kept).length > VALUE_LIMIT) {
-    const dropAt = kept.map((r) => r.status !== "pending").lastIndexOf(true);
-    kept = kept.filter((_, i) => i !== (dropAt === -1 ? kept.length - 1 : dropAt));
+/**
+ * Fit the queue into one metadata value, shedding in order of what costs least to lose.
+ *
+ *   1. NOTES on settled records — decoration on something already answered.
+ *   2. settled records themselves — history; losing one costs a UI a row.
+ *   3. notes on pending records — the ask survives, its sentence does not.
+ *
+ * And then it stops. A pending ask is never dropped: somebody is waiting for an answer, and
+ * silently deleting the question means they wait for ever. The first version dropped the
+ * oldest pending record once nothing else was left, which a test caught by watching an open
+ * request disappear — so past that point the WRITE fails instead, and the caller refuses the
+ * new request with `queue_full` rather than quietly losing an old one.
+ */
+function pack(list: PlanRequest[]): { kept: PlanRequest[]; fits: boolean } {
+  const byPendingFirst = [...list].sort(
+    (a, b) => Number(a.status !== "pending") - Number(b.status !== "pending"),
+  );
+  const size = (l: PlanRequest[]) => JSON.stringify(l).length;
+  let kept = byPendingFirst;
+  if (size(kept) <= VALUE_LIMIT) return { kept, fits: true };
+
+  const strip = (r: PlanRequest) => {
+    const { note: _note, ...rest } = r;
+    return rest as PlanRequest;
+  };
+  kept = kept.map((r) => (r.status === "pending" ? r : strip(r)));
+  while (size(kept) > VALUE_LIMIT) {
+    const settledAt = kept.map((r) => r.status !== "pending").lastIndexOf(true);
+    if (settledAt === -1) break;
+    kept = kept.filter((_, i) => i !== settledAt);
   }
+  if (size(kept) > VALUE_LIMIT) kept = kept.map(strip);
+  return { kept, fits: size(kept) <= VALUE_LIMIT };
+}
+
+async function write(adapter: BillingAdapter, orgId: string, list: PlanRequest[]): Promise<boolean> {
+  const { kept, fits } = pack(list);
+  if (!fits) return false;
   await adapter.setOrgMetadata?.(orgId, { [REQUESTS_KEY]: JSON.stringify(kept) });
+  return true;
 }
 
 /** Every request, newest first. */
@@ -77,11 +117,11 @@ export async function pendingPlanRequest(
   adapter: BillingAdapter,
   orgId: string,
   memberId: string,
-  opts: { plans: PlanCatalog; currentPlan?: string | null },
+  opts: { plans: PlanCatalog; currentPlan?: string | null; currentSeatType?: string | null },
 ): Promise<PlanRequest | null> {
   const open = (await read(adapter, orgId)).find((r) => r.memberId === memberId && r.status === "pending");
   if (!open) return null;
-  return isSatisfied(open, opts.plans, opts.currentPlan ?? null) ? null : open;
+  return isSatisfied(open, opts.plans, opts.currentPlan ?? null, opts.currentSeatType ?? null) ? null : open;
 }
 
 /** Has the workspace already reached (or passed) what this request asked for? */
@@ -89,11 +129,92 @@ export function isSatisfied(
   request: PlanRequest,
   plans: PlanCatalog,
   currentPlan: string | null,
+  /** The asker's seat type now — needed only for a seat request. */
+  currentSeatType?: string | null,
 ): boolean {
+  if (request.kind === "seat") {
+    const model = currentPlan ? planModel(plans, currentPlan) : null;
+    if (!model) return false;
+    return seatRank(model, currentSeatType ?? null) >= seatRank(model, request.plan);
+  }
   const want = planModel(plans, request.plan);
   const have = currentPlan ? planModel(plans, currentPlan) : null;
   if (!want || !have) return false;
   return planRank(have) >= planRank(want);
+}
+
+/** What a seat costs per month — the ordering "a better seat" means. Unknown seats rank 0,
+ *  so a member on no seat at all is below every real one. */
+export function seatRank(model: PlanModel, seatType: string | null): number {
+  if (!seatType) return 0;
+  return model.seatTypes.find((s) => s.key === seatType)?.price.monthly ?? 0;
+}
+
+/** The next seat type up from `seatType`, or null when they are already on the best one. */
+export function nextSeatUp(model: PlanModel, seatType: string | null): string | null {
+  const ladder = [...model.seatTypes]
+    .filter((s) => !s.shared)
+    .sort((a, b) => a.price.monthly - b.price.monthly);
+  const above = ladder.filter((s) => s.price.monthly > seatRank(model, seatType));
+  return above[0]?.key ?? null;
+}
+
+/**
+ * Ask to move up a SEAT — the answer when a better seat exists.
+ *
+ * This is the ask a Standard-seat member should be offered, not a top-up: their pack is what
+ * their seat includes, and the way to have more of it permanently is a bigger seat. A top-up
+ * is the answer only once they are on the best seat there is, where nothing else remains.
+ * Same queue, same one-open-ask rule, same "answers itself" behaviour.
+ */
+export async function requestSeatChange(
+  adapter: BillingAdapter,
+  orgId: string,
+  input: {
+    memberId: string;
+    plans: PlanCatalog;
+    currentPlan?: string | null;
+    currentSeatType?: string | null;
+    /** Defaults to the next seat up. */
+    seatType?: string;
+    note?: string;
+    id?: string;
+    now?: number;
+  },
+): Promise<{
+  ok: boolean;
+  id?: string;
+  seatType?: string;
+  pending?: PlanRequest;
+  reason?: "no_upgrade" | "unknown_plan" | "already_pending" | "already_on_it" | "queue_full";
+}> {
+  const model = input.currentPlan ? planModel(input.plans, input.currentPlan) : null;
+  if (!model || model.sells.kind !== "seats") return { ok: false, reason: "no_upgrade" };
+
+  const target = input.seatType ?? nextSeatUp(model, input.currentSeatType ?? null);
+  if (!target) return { ok: false, reason: "no_upgrade" };
+  if (!model.seatTypes.some((s) => s.key === target)) return { ok: false, reason: "unknown_plan" };
+  if (seatRank(model, input.currentSeatType ?? null) >= seatRank(model, target)) {
+    return { ok: false, reason: "already_on_it", seatType: target };
+  }
+
+  const list = await read(adapter, orgId);
+  const open = list.find((r) => r.memberId === input.memberId && r.status === "pending");
+  if (open) return { ok: false, reason: "already_pending", pending: open, seatType: open.plan };
+
+  const request: PlanRequest = {
+    id: input.id ?? crypto.randomUUID(),
+    memberId: input.memberId,
+    kind: "seat",
+    plan: target,
+    status: "pending",
+    createdAt: new Date(input.now ?? Date.now()).toISOString(),
+    ...(input.note ? { note: input.note.slice(0, 140) } : {}),
+  };
+  if (!(await write(adapter, orgId, [...list, request]))) {
+    return { ok: false, reason: "queue_full" };
+  }
+  return { ok: true, id: request.id, seatType: target };
 }
 
 /**
@@ -121,7 +242,7 @@ export async function requestPlanChange(
   id?: string;
   plan?: string;
   pending?: PlanRequest;
-  reason?: "no_upgrade" | "unknown_plan" | "already_pending" | "already_on_it";
+  reason?: "no_upgrade" | "unknown_plan" | "already_pending" | "already_on_it" | "queue_full";
 }> {
   const currentPlan = input.currentPlan ?? null;
   const target = input.plan ?? planActions(input.plans, currentPlan).upgradeTo;
@@ -150,12 +271,15 @@ export async function requestPlanChange(
   const request: PlanRequest = {
     id: input.id ?? crypto.randomUUID(),
     memberId: input.memberId,
+    kind: "plan",
     plan: target,
     status: "pending",
     createdAt: new Date(input.now ?? Date.now()).toISOString(),
     ...(input.note ? { note: input.note.slice(0, 140) } : {}),
   };
-  await write(adapter, orgId, [...list.filter((r) => r.id !== request.id), request]);
+  if (!(await write(adapter, orgId, [...list.filter((r) => r.id !== request.id), request]))) {
+    return { ok: false, reason: "queue_full" };
+  }
   return { ok: true, id: request.id, plan: target };
 }
 
@@ -183,4 +307,47 @@ export async function resolvePlanRequest(
     list.map((r) => (r.id === requestId ? updated : r)),
   );
   return updated;
+}
+
+/**
+ * WHICH ask to offer someone who is out of usage. One decision, in one place.
+ *
+ * The ladder climbs the cheapest, most targeted rung first, and each rung exists because the
+ * one below it cannot help:
+ *
+ *   1. a better SEAT — their pack is what their seat includes, so the way to have more of it
+ *      is a bigger seat. A Standard member should be offered this, never a top-up: topping
+ *      up buys them a few days and leaves them in the same place next week.
+ *   2. extra USAGE on the blocked window — the answer once they are on the best seat there
+ *      is, where nothing else remains but more of what they already have.
+ *   3. a PLAN change — for a plan with no per-member allowance at all. A pooled plan's
+ *      windows belong to the workspace, so there is nothing personal to raise and
+ *      `grant_top_up` refuses it outright.
+ *
+ * Returns null when nothing is blocked, which is when nothing should be offered — a control
+ * permanently on screen asks a question nobody at 40% can answer.
+ */
+export function nextUsageAsk(
+  model: PlanModel | null,
+  input: {
+    /** From `topUpTargetOf` — what, if anything, is refusing them. */
+    blocked: { kind: "rate" | "pack" } | null;
+    seatType?: string | null;
+    plans: PlanCatalog;
+    currentPlan?: string | null;
+  },
+): { ask: "seat"; to: string } | { ask: "usage" } | { ask: "plan"; to: string } | null {
+  if (!input.blocked) return null;
+
+  if (model?.sells.kind === "seats") {
+    const better = nextSeatUp(model, input.seatType ?? null);
+    if (better) return { ask: "seat", to: better };
+    // On the best seat: more of the same is all that is left.
+    return { ask: "usage" };
+  }
+
+  // No seats, so nothing per-member to raise. The only route is the workspace buying more
+  // product — and if there is nothing above them, there is nothing to offer at all.
+  const up = planActions(input.plans, input.currentPlan ?? null).upgradeTo;
+  return up ? { ask: "plan", to: up } : null;
 }
