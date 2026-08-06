@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-import { enforceAccess, enforceAdmin } from "../auth.js";
+import { currentPrincipal, enforceAccess, enforceAdmin } from "../auth.js";
 import { stripeConfigured } from "../billing.js";
 import {
   cancelPlan,
@@ -11,6 +11,12 @@ import {
   PlanChangeError,
 } from "../subscription.js";
 import { normalizePlans, type PlanCatalog } from "../plans.js";
+import {
+  isSatisfied,
+  listPlanRequests,
+  requestPlanChange,
+  resolvePlanRequest,
+} from "../plan-request.js";
 import { ALL_TOOL_CAPABILITIES, type ToolCapabilities } from "../plan-model.js";
 import type { BillingAdapter, ResolvedConfig } from "../types.js";
 
@@ -240,7 +246,83 @@ can be cancelled) — the same set the billing screen offers.`,
           can_cancel: actions.canCancel,
           cancel_to: named(actions.cancelTo),
         },
+        // Who has ASKED to move up, folded in here rather than given a tool of its own:
+        // "what is this workspace on, and what does anyone want it to be on" is one
+        // question, and a separate `list_plan_requests` would be a second call every
+        // billing screen makes. Satisfied asks are dropped — a want the workspace has
+        // already met is not pending, however it got there.
+        plan_requests: (await listPlanRequests(adapter, auth.orgId))
+          .filter((r) => r.status === "pending" && !isSatisfied(r, opts.plans, current))
+          .map((r) => ({ id: r.id, member_id: r.memberId, plan: r.plan, created_at: r.createdAt, note: r.note ?? null })),
       });
+    },
+  );
+
+  // ── Asking to move up ─────────────────────────────────────────────────────
+  //
+  // The other answer to "I am out of usage", and the only one on a plan whose windows belong
+  // to the workspace: a pooled plan has nothing per-member to top up, so `request_top_up`
+  // refuses it outright and a screen offering one is offering a door that does not open.
+
+  server.tool(
+    "request_plan_change",
+    `Ask an owner to move the workspace up a plan. Use when usage is exhausted and the plan
+has no per-seat allowance to top up. Does NOT change the plan or take a payment — it queues
+the ask for whoever can. The plan defaults to the next one up.`,
+    {
+      plan: z.string().optional().describe("Plan key to ask for. Defaults to the next one up"),
+      note: z.string().max(140).optional().describe("A line for the owner, e.g. why"),
+    },
+    async ({ plan, note }) => {
+      const auth = await enforceAccess(adapter);
+      if ("isError" in auth) return auth;
+      // Whoever is asking is who it is FROM: unlike a top-up there is no `member_id`
+      // argument, so there is nothing to name someone else with.
+      const principal = currentPrincipal();
+      const memberId = principal?.userId ?? auth.orgId;
+      const current = (await adapter.getSubscription?.(auth.orgId))?.plan ?? null;
+
+      const res = await requestPlanChange(adapter, auth.orgId, {
+        memberId,
+        plans: opts.plans,
+        currentPlan: current,
+        ...(plan ? { plan } : {}),
+        ...(note ? { note } : {}),
+      });
+      if (!res.ok) {
+        if (res.reason === "already_pending") {
+          return json({
+            status: "already_pending",
+            pending: res.pending,
+            message: "Somebody has already asked to move this workspace up; it is waiting on an owner.",
+          });
+        }
+        return err(
+          res.reason === "no_upgrade"
+            ? "There is no plan above this one to ask for."
+            : res.reason === "already_on_it"
+              ? `This workspace is already on ${res.plan} or better.`
+              : "Unknown plan.",
+        );
+      }
+      return json({ status: "requested", id: res.id, plan: res.plan, from: current });
+    },
+  );
+
+  server.tool(
+    "resolve_plan_request",
+    `Mark a plan-change request handled or refused (admin). Recording it handled does NOT
+move the plan — use change_plan for that, which takes a payment.`,
+    {
+      request_id: z.string().describe("The id from get_plan's plan_requests"),
+      decision: z.enum(["done", "denied"]).describe("`done` once you have acted on it"),
+    },
+    async ({ request_id, decision }) => {
+      const auth = await enforceAdmin(adapter, "resolve_plan_request");
+      if ("isError" in auth) return auth;
+      const r = await resolvePlanRequest(adapter, auth.orgId, request_id, decision);
+      if (!r) return err(`Request not found or already handled: ${request_id}`);
+      return json({ status: r.status, request_id, plan: r.plan });
     },
   );
 }

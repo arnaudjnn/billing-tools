@@ -239,9 +239,12 @@ test("the two shapes differ by exactly the seven tools", () => {
   const scart = names({ plans: SCARTOFFIE });
   const extra = [...scart].filter((n) => !gtm.has(n)).sort();
   assert.deepEqual(extra, [...SEAT_TOOLS, ...TOP_UP_TOOLS].sort());
-  // 33 − 7. Both numbers are quoted in AGENTS.md, so both are asserted here.
-  assert.equal(gtm.size, 26);
-  assert.equal(scart.size, 33);
+  // 35 − 7. Both numbers are quoted in AGENTS.md, so both are asserted here. The pair that
+  // took them from 33 to 35 is `request_plan_change` / `resolve_plan_request`, which every
+  // catalogue with plans gets: asking to move up is the answer on exactly the plans that
+  // have no per-member allowance to top up.
+  assert.equal(gtm.size, 28);
+  assert.equal(scart.size, 35);
 });
 
 test("no catalogue means no declaration to read, so every group registers", () => {

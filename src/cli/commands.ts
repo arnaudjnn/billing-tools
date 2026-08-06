@@ -254,8 +254,35 @@ function registerPlanCommands(
   const plan = program.command("plan").description("Show and change this workspace's plan");
   plan
     .command("show", { isDefault: true })
-    .description("Current plan, any scheduled change, and the moves available")
+    .description("Current plan, any scheduled change, the moves available, and who has asked to move up")
     .action(async () => print(await callTool(requireConfig(), "get_plan")));
+  // Asking is not changing, so these are NOT behind the `lifecycle` gate below: the one
+  // catalogue where asking matters most is the one whose plan you cannot self-serve out of.
+  plan
+    .command("request")
+    .description("Ask an owner to move this workspace up a plan (does not change or charge anything)")
+    .option("--plan <plan>", "Plan to ask for. Defaults to the next one up")
+    .option("--note <note>", "A line for the owner")
+    .action(async (o: { plan?: string; note?: string }) =>
+      print(
+        await callTool(requireConfig(), "request_plan_change", {
+          ...(o.plan ? { plan: o.plan } : {}),
+          ...(o.note ? { note: o.note } : {}),
+        }),
+      ),
+    );
+  plan
+    .command("resolve <requestId>")
+    .description("Mark a plan-change request handled or refused (admin)")
+    .option("--deny", "Refuse it rather than recording it handled")
+    .action(async (requestId: string, o: { deny?: boolean }) =>
+      print(
+        await callTool(requireConfig(), "resolve_plan_request", {
+          request_id: requestId,
+          decision: o.deny ? "denied" : "done",
+        }),
+      ),
+    );
   // Only the three that CHANGE a subscription. On a catalogue that is entirely free
   // or quote-only there is no such move, so `change_plan` is not registered and these
   // could only refuse — while `plans` and `plan show` above stay useful reads.

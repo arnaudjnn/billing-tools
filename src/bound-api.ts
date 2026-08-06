@@ -63,6 +63,13 @@ import {
 } from "./topup.js";
 import { closeWorkspace, findOrphanedSubscriptions } from "./close-workspace.js";
 import { topUpTargetOf } from "./allowance.js";
+import {
+  isSatisfied,
+  listPlanRequests,
+  pendingPlanRequest,
+  requestPlanChange,
+  resolvePlanRequest,
+} from "./plan-request.js";
 import { currentCycle, resolveAllowance } from "./allowance.js";
 import { memberUsage, usageSummary } from "./usage.js";
 import type { PlanCatalog } from "./plans.js";
@@ -182,6 +189,26 @@ export function createBoundApi(deps: BoundApiDeps) {
         to: Parameters<typeof previewPlanChange>[2]["to"],
         opts: Omit<Parameters<typeof previewPlanChange>[2], "plans" | "to" | "currency"> = {},
       ) => previewPlanChange(adapter, orgId, { ...opts, plans, to, currency: config.currency }),
+      /**
+       * The OTHER ask: move the workspace up a tier.
+       *
+       * Queued, never applied — approving does not charge anybody. `change_plan` is the
+       * upgrade, and it takes a payment, which is not something a member's request may
+       * trigger on an owner's behalf.
+       */
+      requests: {
+        list: (orgId: string) => listPlanRequests(adapter, orgId),
+        /** That member's open ask, or null once the workspace has reached the plan anyway. */
+        pending: async (orgId: string, memberId: string) =>
+          pendingPlanRequest(adapter, orgId, memberId, { plans, currentPlan: await planOf(orgId) }),
+        ask: async (orgId: string, memberId: string, opts: { plan?: string; note?: string } = {}) =>
+          requestPlanChange(adapter, orgId, { ...opts, memberId, plans, currentPlan: await planOf(orgId) }),
+        resolve: (orgId: string, requestId: string, decision: "done" | "denied") =>
+          resolvePlanRequest(adapter, orgId, requestId, decision),
+        /** Has the workspace already reached what this asked for? */
+        satisfied: async (orgId: string, request: Parameters<typeof isSatisfied>[0]) =>
+          isSatisfied(request, plans, await planOf(orgId)),
+      },
       cancel: (
         orgId: string,
         opts: Omit<Parameters<typeof cancelPlan>[2], "plans" | "currency"> = {},
