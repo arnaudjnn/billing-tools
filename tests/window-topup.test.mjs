@@ -139,6 +139,55 @@ test("a grant on the week actually unblocks the caller", async () => {
   assert.equal(fundingFor(after, planModel(PLANS, "pro"), 1, CALLER).ok, true, "and the call goes through");
 });
 
+test("a SECOND grant is quoted from the bare window, not from the first grant", async () => {
+  // `basis` excludes what was already granted and `extra` reports it separately, because
+  // `grantExtraAllowance` takes its percentage of the bare window. A caller that read the
+  // window's current SIZE as the basis compounded: measured on the screen that did it, a
+  // second 25% offered "+313 crediti" and applied 250.
+  const adapter = fakeAdapter({ members: ["u1"], subscription: SUB });
+  // 700 rather than 600: past the first grant the window is 625, and a member the grant has
+  // UNBLOCKED has no target at all — correctly, since nothing is refusing them.
+  const grant = async () => {
+    const t = topUpTargetOf(await state(adapter, ledgerFor({ week: 700, month: 700 })));
+    return { t, res: await grantExtraAllowance(adapter, {
+      orgId: "org_1", plans: PLANS, plan: "pro", memberId: "u1",
+      percent: 25, windowKey: t.windowKey, basis: t.basis,
+    }) };
+  };
+
+  const first = await grant();
+  assert.deepEqual([first.t.basis, first.t.extra], [500, 0]);
+  assert.equal(first.res.granted, 125);
+
+  const second = await grant();
+  assert.deepEqual([second.t.basis, second.t.extra], [500, 125], "the basis did not move");
+  assert.equal(second.res.granted, 125, "and the second grant is the same size as the first");
+  // basis + extra is the window as it stands now, which is what a summary line should say.
+  assert.equal(second.t.basis + second.t.extra, 625);
+});
+
+test("the PACK target reports its granted extra WITHOUT double-subtracting it", async () => {
+  // The asymmetry worth knowing: a rate window's `size` includes what was granted onto it,
+  // the pack's does not. `basis` is the bare figure either way — the one the grant is a
+  // percentage OF — so this branch must not subtract, and a fix that "made them consistent"
+  // undercut every grant after the first by the size of the last one.
+  const NO_RATE = { pro: { ...PLANS.pro, limits: {} } };
+  const adapter = fakeAdapter({ members: ["u1"], subscription: SUB });
+  const packState = () =>
+    resolveAllowance(adapter, config, {
+      orgId: "org_1", plans: NO_RATE, plan: "pro", ledger: ledgerFor({}, 1400), caller: CALLER,
+    });
+
+  const before = topUpTargetOf(await packState());
+  assert.deepEqual(before, { kind: "pack", basis: 1000, extra: 0 });
+  await grantExtraAllowance(adapter, {
+    orgId: "org_1", plans: NO_RATE, plan: "pro", memberId: "u1", percent: 25,
+  });
+
+  const after = topUpTargetOf(await packState());
+  assert.deepEqual(after, { kind: "pack", basis: 1000, extra: 250 }, "not basis 1250");
+});
+
 test("it does NOT leak into the seat pack", async () => {
   // The two are different windows. A week's exception that quietly widened the month would
   // hand out four times what was granted.

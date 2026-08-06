@@ -466,7 +466,10 @@ export interface FundingDecision {
  */
 export function topUpTargetOf(
   state: AllowanceState,
-): { kind: "rate"; windowKey: string; basis: number; every: Every; resetsAt: number | null } | { kind: "pack"; basis: number } | null {
+):
+  | { kind: "rate"; windowKey: string; basis: number; extra: number; every: Every; resetsAt: number | null }
+  | { kind: "pack"; basis: number; extra: number }
+  | null {
   const ORDER: Every[] = ["hour", "day", "week", "month", "cycle"];
   const blocked = state.limits
     .filter((l) => l.scope === "caller" && l.remaining <= 0)
@@ -480,13 +483,26 @@ export function topUpTargetOf(
       // The percentage applies to THIS window, not to the seat pack: "25% more this week"
       // means a quarter of the week's allowance, and a pack-sized share of a weekly window
       // would be a different — usually much larger — number.
+      //
+      // `basis` EXCLUDES what has already been granted, because that is what the grant is
+      // computed from; `extra` is reported beside it so a screen can show the window's real
+      // current size (`basis + extra`) without having to add a second read to find it. A
+      // caller left to guess it quotes the first grant twice — measured: a second 25% offered
+      // "+313 crediti" and applied 250.
       basis: tightest.size - (tightest.extra ?? 0),
+      extra: tightest.extra ?? 0,
       every: tightest.every,
       resetsAt: tightest.window.end,
     };
   }
   if (state.pack && state.pack.remaining <= 0) {
-    return { kind: "pack", basis: state.pack.size };
+    // NO subtraction here, and the asymmetry is real rather than an oversight: a rate
+    // window's `size` INCLUDES what has been granted onto it, while the pack's `size` is
+    // the bare pack with its `extra` reported alongside. So `basis` is the bare figure in
+    // both cases — which is what `grantExtraAllowance` takes its percentage of — and
+    // `basis + extra` is the current ceiling in both cases too. Subtracting twice here
+    // undercut every grant after the first by the size of the last one.
+    return { kind: "pack", basis: state.pack.size, extra: state.pack.extra ?? 0 };
   }
   return null;
 }
