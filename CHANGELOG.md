@@ -1,3 +1,10 @@
+# [15.19.0](https://github.com/arnaudjnn/billing-tools/compare/v15.18.1...v15.19.0) (2026-08-06)
+
+
+### Features
+
+* **plans:** let a member ask to move up, where a top-up cannot help ([f84e88f](https://github.com/arnaudjnn/billing-tools/commit/f84e88fcdefe446116637a1902279e70e86827e0))
+
 ## [15.18.1](https://github.com/arnaudjnn/billing-tools/compare/v15.18.0...v15.18.1) (2026-08-06)
 
 
