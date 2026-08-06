@@ -1,3 +1,10 @@
+## [15.22.1](https://github.com/arnaudjnn/billing-tools/compare/v15.22.0...v15.22.1) (2026-08-06)
+
+
+### Bug Fixes
+
+* **topup:** refuse an ask from a member nothing is refusing ([830b1cb](https://github.com/arnaudjnn/billing-tools/commit/830b1cb028a3dc862c965e7b2a654d0b044ef93b))
+
 # [15.22.0](https://github.com/arnaudjnn/billing-tools/compare/v15.21.4...v15.22.0) (2026-08-06)
 
 
