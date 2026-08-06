@@ -421,7 +421,15 @@ export function derivePlanView(
 
 export interface MarkdownOptions {
   columns?: readonly ("name" | "members" | "included" | "monthly" | "yearly" | "seats")[];
-  /** Escape `$` so MDX doesn't read it as an expression. Default true. */
+  /**
+   * Escape `$` so MDX doesn't read it as an expression. Default true.
+   *
+   * BODY only. `\$` is a character escape in MDX and an INVALID one in YAML, so carrying
+   * this into a page's frontmatter breaks the whole build rather than one line: Fern
+   * refused a consumer's docs deploy for four days with "unknown escape sequence
+   * (4:102)", pointing at a `description:` scalar somebody had escaped by the same
+   * convention. Nothing these renderers return belongs in frontmatter.
+   */
   mdx?: boolean;
   /** Header for the `included` column. Overrides `messages.columnIncluded`. */
   includedLabel?: string;
