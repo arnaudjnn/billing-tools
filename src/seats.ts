@@ -1,3 +1,4 @@
+import { defaultSeatOf } from "./ladder.js";
 import type { BillingAdapter } from "./types.js";
 import type { PlanModel } from "./plan-model.js";
 
@@ -210,27 +211,72 @@ export async function seatAssignable(
   const spec = model.seatTypes.find((s) => s.key === seatType);
   if (!spec) return { ok: true }; // unknown type — the caller validates that separately
 
-  const assignments = await listSeatAssignments(adapter, orgId);
-  const already = Object.entries(assignments).filter(([id, t]) => t === seatType && id !== memberId).length;
-
-  // Unassigned members draw the default seat, so they occupy it.
-  const isDefault = [...model.seatTypes]
-    .filter((s) => !s.shared)
-    .sort((a, b) => a.price.monthly - b.price.monthly)[0]?.key === seatType;
-  let implicit = 0;
-  if (isDefault && adapter.listMemberIds) {
-    const members = await adapter.listMemberIds(orgId).catch((): string[] => []);
-    implicit = members.filter((id) => id !== memberId && !assignments[id]).length;
-  }
-  const assigned = already + implicit;
+  const { assigned, purchased } = await occupancy(adapter, orgId, model, seatType, memberId);
 
   if (spec.max != null && assigned + 1 > spec.max) {
     return { ok: false, reason: "at_max", assigned };
   }
-
-  const purchased = (await adapter.getSubscription?.(orgId).catch(() => null))?.seatCounts?.[seatType];
   if (purchased != null && assigned + 1 > purchased) {
     return { ok: false, reason: "not_purchased", purchased, assigned };
   }
   return { ok: true };
+}
+
+/** How many hold this seat, and how many were bought — the two numbers both the guard and
+ *  the capacity read are counting. `exclude` leaves one member out, which is what makes the
+ *  guard ask "is there room for THEM" rather than "is there room for one more". */
+async function occupancy(
+  adapter: BillingAdapter,
+  orgId: string,
+  model: PlanModel,
+  seatType: string,
+  exclude?: string,
+): Promise<{ assigned: number; purchased: number | null }> {
+  const assignments = await listSeatAssignments(adapter, orgId);
+  const already = Object.entries(assignments).filter(([id, t]) => t === seatType && id !== exclude).length;
+
+  // Unassigned members draw the default seat, so they occupy it.
+  let implicit = 0;
+  if (defaultSeatOf(model) === seatType && adapter.listMemberIds) {
+    const members = await adapter.listMemberIds(orgId).catch((): string[] => []);
+    implicit = members.filter((id) => id !== exclude && !assignments[id]).length;
+  }
+  const purchased = (await adapter.getSubscription?.(orgId).catch(() => null))?.seatCounts?.[seatType];
+  return { assigned: already + implicit, purchased: purchased ?? null };
+}
+
+/**
+ * How much room is left on a seat type — the same counting `seatAssignable` does, as a READ.
+ *
+ * The guard answers "may I put THIS member here", one candidate at a time, and returns a
+ * reason when the answer is no. That is the wrong shape for the two things a caller actually
+ * wants before it offers a control: how many are left, and whether to grey the option out at
+ * all. Asking the guard N times to draw one picker is N × (assignments + members +
+ * subscription) reads, so consumers stopped asking and offered every seat — which is how a
+ * picker comes to show a Premium seat that the write then refuses.
+ *
+ * `remaining: null` means UNKNOWN, not zero, and it is the common case: no subscription
+ * record, no `seatCounts`, no `max`. Unknown allows, exactly as the guard does — a UI must
+ * render an unknown as available, never as full.
+ */
+export async function seatCapacity(
+  adapter: BillingAdapter,
+  orgId: string,
+  model: PlanModel | null,
+  seatType: string,
+): Promise<{ seatType: string; assigned: number; purchased: number | null; max: number | null; remaining: number | null }> {
+  const spec = model?.seatTypes.find((s) => s.key === seatType);
+  if (!model || !spec || model.sells.kind !== "seats") {
+    return { seatType, assigned: 0, purchased: null, max: null, remaining: null };
+  }
+  const { assigned, purchased } = await occupancy(adapter, orgId, model, seatType);
+  const max = spec.max ?? null;
+  const ceilings = [max, purchased].filter((n): n is number => n != null);
+  return {
+    seatType,
+    assigned,
+    purchased,
+    max,
+    remaining: ceilings.length ? Math.max(0, Math.min(...ceilings) - assigned) : null,
+  };
 }

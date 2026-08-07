@@ -12,7 +12,8 @@ import {
   grantExtraAllowance,
 } from "../topup.js";
 import { currentCycle, resolveAllowance, topUpTargetOf } from "../allowance.js";
-import { assignSeatType, listSeatAssignments, seatAssignable } from "../seats.js";
+import { assignSeatType, listSeatAssignments, seatAssignable, seatCapacity } from "../seats.js";
+import { defaultSeatOf, isTopSeat, seatLadder, seatTypeExists } from "../ladder.js";
 import { normalizePlans, planModel, type PlanCatalog } from "../plans.js";
 import { ALL_TOOL_CAPABILITIES, type ToolCapabilities } from "../plan-model.js";
 import { callerWithSeat, usageSummary } from "../usage.js";
@@ -178,6 +179,14 @@ per billing cycle), how much of each is used, and when each resets.`,
       for (const seat of model.seatTypes) knownSeatTypes.add(seat.key);
     }
 
+    /** The org's OWN plan model — what every seat question is really about. */
+    const orgModel = async (orgId: string) => {
+      const plan = opts.resolvePlan
+        ? await opts.resolvePlan(orgId)
+        : ((await adapter.getSubscription?.(orgId))?.plan ?? null);
+      return planModel(opts.plans ?? {}, plan);
+    };
+
     server.tool(
       "list_seats",
       `List the workspace's per-member seat-type assignments. Members without an entry
@@ -186,9 +195,35 @@ draw the default seat.`,
       async () => {
         const auth = await enforceAccess(adapter);
         if ("isError" in auth) return auth;
+        const model = await orgModel(auth.orgId);
+        const assignments = await listSeatAssignments(adapter, auth.orgId);
+        const fallback = model ? defaultSeatOf(model) : null;
         return json({
-          assignments: await listSeatAssignments(adapter, auth.orgId),
-          seat_types: [...knownSeatTypes],
+          assignments,
+          // THIS org's plan, not the catalogue: a Premium key another plan sells is not a
+          // seat this workspace has, and answering with the union invited exactly the
+          // assignment the write then refused.
+          seat_types: model ? model.seatTypes.map((s) => s.key) : [...knownSeatTypes],
+          // The rungs a person climbs, cheapest first, shared seats excluded — the ordering
+          // rule, published, so a picker stops re-deriving it from config order.
+          ladder: model ? seatLadder(model).map((s) => s.key) : [],
+          default_seat: fallback,
+          // What each member actually holds, and whether there is anything above them. An
+          // absent assignment is not "no seat": it is the default one, which is what the
+          // meter measures them against.
+          members: Object.entries(assignments).map(([member_id, seat_type]) => ({
+            member_id,
+            seat_type: seat_type || fallback,
+            is_top: model ? isTopSeat(model, seat_type || null) : false,
+          })),
+          // How many of each are left, so a caller can offer only what will be accepted.
+          // null means unknown (no subscription, no seatCounts, no max) — and unknown
+          // ALLOWS, the same way the guard does.
+          capacity: model
+            ? await Promise.all(
+                model.seatTypes.map((s) => seatCapacity(adapter, auth.orgId, model, s.key)),
+              )
+            : [],
         });
       },
     );
@@ -211,15 +246,23 @@ the assignment (back to the default seat).`,
         const stranger = await enforceMember(adapter, auth.orgId, member_id, "assign_seat_type");
         if (stranger) return stranger;
         const st = seat_type && seat_type.length ? seat_type : null;
-        if (st && knownSeatTypes.size && !knownSeatTypes.has(st)) {
+        const model = await orgModel(auth.orgId);
+        // Against THIS workspace's plan. The catalogue-wide union was the wrong question:
+        // it accepted a key some OTHER plan sells, and the write landed on a seat this
+        // plan cannot price, so the member drew a pack nobody bought. The union stays only
+        // as the answer when the plan is unknown, where refusing would be worse.
+        if (st && model && !seatTypeExists(model, st)) {
+          const sells = model.seatTypes.map((t) => t.key).join(", ");
+          return err(
+            `This workspace's plan (${model.key}) does not sell a "${st}" seat. It sells: ${sells || "(no seats)"}.`,
+          );
+        }
+        if (st && !model && knownSeatTypes.size && !knownSeatTypes.has(st)) {
           return err(`Unknown seat type "${st}". Known: ${[...knownSeatTypes].join(", ") || "(none configured)"}.`);
         }
         // A seat is a PRICE, and this write does not touch the subscription — so without this
         // an owner (or an approved request) hands out the most expensive seat for nothing.
-        const plan = opts.resolvePlan
-          ? await opts.resolvePlan(auth.orgId)
-          : ((await adapter.getSubscription?.(auth.orgId))?.plan ?? null);
-        const room = await seatAssignable(adapter, auth.orgId, planModel(opts.plans ?? {}, plan), member_id, st);
+        const room = await seatAssignable(adapter, auth.orgId, model, member_id, st);
         if (!room.ok) {
           return err(
             room.reason === "not_purchased"

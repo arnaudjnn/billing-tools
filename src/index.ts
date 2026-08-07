@@ -289,6 +289,12 @@ export {
   // `assign_seat_type` and `api.seats.assign`, and until now a consumer could not ask the
   // question before offering the control — so a picker offered seats the write refused.
   seatAssignable,
+  // The same counting as a READ: how many hold this seat, how many were bought, how many
+  // are left. `seatAssignable` answers for one candidate and returns a reason; a picker
+  // needs the number BEFORE it offers the option, and asking the guard once per seat is
+  // N × (assignments + members + subscription) reads — which is why consumers stopped
+  // asking and offered seats the write then refused.
+  seatCapacity,
   // Everything this member holds in one org, cleared when they leave it.
   clearMemberRecords,
 } from "./seats.js";

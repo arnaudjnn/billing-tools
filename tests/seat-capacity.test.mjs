@@ -17,7 +17,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 
-import { assignSeatType, listSeatAssignments, seatAssignable } from "../dist/seats.js";
+import { assignSeatType, listSeatAssignments, seatAssignable, seatCapacity } from "../dist/seats.js";
 import { planModel } from "../dist/plan-model.js";
 import { fakeAdapter } from "./helpers.mjs";
 
@@ -155,4 +155,56 @@ test("assignUnchecked stays the deliberate way past it", async () => {
 
   await api.seats.assignUnchecked("org_1", "u2", "premium");
   assert.equal((await listSeatAssignments(adapter, "org_1")).u2, "premium");
+});
+
+// ── the same counting, as a READ ─────────────────────────────────────────────
+//
+// `seatAssignable` answers for ONE candidate and explains a refusal. A picker needs the
+// number before it offers anything, and asking the guard once per seat type costs
+// N × (assignments + members + subscription) reads — so consumers stopped asking and
+// offered every seat, which is how a UI comes to show an option the write refuses.
+
+test("capacity reports what is left, from the tighter of the two ceilings", async () => {
+  const adapter = withSeats({ standard: 3, premium: 2 });
+  await assignSeatType(adapter, "org_1", "u1", "premium");
+
+  const premium = await seatCapacity(adapter, "org_1", model, "premium");
+  assert.deepEqual(premium, {
+    seatType: "premium",
+    assigned: 1,
+    purchased: 2,
+    max: null,
+    remaining: 1,
+  });
+
+  // Standard is the default seat, so the two members nobody assigned occupy it.
+  const standard = await seatCapacity(adapter, "org_1", model, "standard");
+  assert.equal(standard.assigned, 2);
+  assert.equal(standard.remaining, 1);
+});
+
+test("the plan's own max wins when it is tighter than what was purchased", async () => {
+  // `agent` is capped at 1 by the product rule whatever the subscription says.
+  const adapter = withSeats({ standard: 3, agent: 9 });
+  const agent = await seatCapacity(adapter, "org_1", model, "agent");
+  assert.equal(agent.max, 1);
+  assert.equal(agent.remaining, 1);
+});
+
+test("unknown is null, never zero — and a UI must read it as available", async () => {
+  // No subscription record at all: nothing declares a ceiling, so nothing is full. Zero
+  // here would grey out every seat on every adapter that reports no counts, which is the
+  // failure the guard's fail-open exists to avoid.
+  const adapter = fakeAdapter({ members: ["u1", "u2"] });
+  const res = await seatCapacity(adapter, "org_1", model, "premium");
+  assert.equal(res.purchased, null);
+  assert.equal(res.max, null);
+  assert.equal(res.remaining, null);
+});
+
+test("a plan that sells no seats has no capacity to report", async () => {
+  const free = planModel({ hobby: { sells: { kind: "nothing" }, sale: "free" } }, "hobby");
+  const res = await seatCapacity(fakeAdapter({ members: ["u1"] }), "org_1", free, "standard");
+  assert.equal(res.remaining, null);
+  assert.equal(res.assigned, 0);
 });

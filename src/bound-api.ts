@@ -48,7 +48,7 @@ import {
   listPaymentMethods,
   setDefaultPaymentMethod,
 } from "./payment-methods.js";
-import { assignSeatType, clearMemberRecords, getSeatType, listSeatAssignments, seatAssignable } from "./seats.js";
+import { assignSeatType, clearMemberRecords, getSeatType, listSeatAssignments, seatAssignable, seatCapacity } from "./seats.js";
 import { cancelPlan, changePlan, previewPlanChange } from "./subscription.js";
 import {
   approveTopUp,
@@ -65,6 +65,8 @@ import { closeWorkspace, findOrphanedSubscriptions } from "./close-workspace.js"
 import { topUpTargetOf } from "./allowance.js";
 import {
   defaultSeatOf,
+  seatLadder,
+  seatTypeExists,
   isSatisfied,
   listPlanRequests,
   nextUsageAsk,
@@ -307,15 +309,20 @@ export function createBoundApi(deps: BoundApiDeps) {
       assign: async (orgId: string, memberId: string, seatType: string | null) => {
         const stranger = await enforceMember(adapter, orgId, memberId, "assign seat");
         if (stranger) throw new Error(stranger.content[0].text);
+        const model = planModel(plans, await planOf(orgId));
+        // Does THIS plan sell that seat? The tool checked and this did not, so the one path
+        // a consumer's own server action takes was the one that would write an undeclared
+        // seat key — `seatAssignable` fails open on a type it cannot find, by design, so
+        // nothing downstream caught it either.
+        if (seatType && model && !seatTypeExists(model, seatType)) {
+          const sells = model.seatTypes.map((t) => t.key).join(", ");
+          throw new Error(
+            `This workspace's plan (${model.key}) does not sell a "${seatType}" seat. It sells: ${sells || "(no seats)"}.`,
+          );
+        }
         // A seat is a PRICE and this write does not touch the subscription, so an unchecked
         // assign gives the most expensive seat away. Same guard the tool applies.
-        const room = await seatAssignable(
-          adapter,
-          orgId,
-          planModel(plans, await planOf(orgId)),
-          memberId,
-          seatType,
-        );
+        const room = await seatAssignable(adapter, orgId, model, memberId, seatType);
         if (!room.ok) {
           throw new Error(
             room.reason === "not_purchased"
@@ -324,6 +331,15 @@ export function createBoundApi(deps: BoundApiDeps) {
           );
         }
         return assignSeatType(adapter, orgId, memberId, seatType);
+      },
+      /** Room left on a seat type: `{ assigned, purchased, max, remaining }`, `remaining: null`
+       *  when nothing declares a ceiling. What a picker needs before it offers the option. */
+      capacity: async (orgId: string, seatType: string) =>
+        seatCapacity(adapter, orgId, planModel(plans, await planOf(orgId)), seatType),
+      /** The ladder for this org's plan, cheapest rung first, shared seats excluded. */
+      ladder: async (orgId: string) => {
+        const model = planModel(plans, await planOf(orgId));
+        return model ? seatLadder(model).map((s) => s.key) : [];
       },
       /** The raw write, no membership check — for seating an invitee who has not accepted. */
       assignUnchecked: (orgId: string, memberId: string, seatType: string | null) =>
