@@ -1,3 +1,10 @@
+# [20.1.0](https://github.com/arnaudjnn/billing-tools/compare/v20.0.0...v20.1.0) (2026-08-07)
+
+
+### Features
+
+* **mpp:** a paid request credits the wallet, and the protocol gets tests ([113c288](https://github.com/arnaudjnn/billing-tools/commit/113c28818eb55efdf6fc1f6b325446e33868cc50))
+
 # [20.0.0](https://github.com/arnaudjnn/billing-tools/compare/v19.3.0...v20.0.0) (2026-08-07)
 
 
