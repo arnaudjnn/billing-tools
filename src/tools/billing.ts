@@ -431,20 +431,52 @@ every threshold. The window is the calendar month, even on an annual plan.`,
   server.tool(
     "get_billing_portal",
     `Get a Stripe billing-portal URL to manage your subscription (upgrade, downgrade, cancel),
-update your payment method, and view invoices. Returns a short-lived link.`,
-    { return_url: z.string().url().optional().describe("Where to send the user back to after the portal (defaults to the app)") },
-    async ({ return_url }) => {
+update your payment method, and view invoices. Returns a short-lived link.
+
+Pass \`flow\` to land the customer directly on one screen — \`payment_method_update\` is how
+you get a card ADDED when you have no browser of your own: you cannot confirm a SetupIntent,
+but you can hand a person a link that opens on the card form.`,
+    {
+      return_url: z.string().url().optional().describe("Where to send the user back to after the portal (defaults to the app)"),
+      flow: z
+        .enum(["payment_method_update", "subscription_cancel", "subscription_update"])
+        .optional()
+        .describe("Open a specific portal flow instead of the portal home"),
+    },
+    async ({ return_url, flow }) => {
       const auth = await enforceAccess(adapter);
       if ("isError" in auth) return auth;
       if (!stripeConfigured()) return NO_STRIPE;
       const cid = await customerId(auth.orgId);
-      const url = await createBillingPortalSession(cid, return_url ?? config.baseUrl);
+      // The two subscription flows need a subscription id and Stripe 400s without one, so
+      // it is read here rather than asked of the caller — an agent knows the org, not the
+      // `sub_…`. No subscription and a subscription flow requested is a refusal with a
+      // reason, not a Stripe error surfaced raw.
+      const subscriptionId =
+        flow && flow !== "payment_method_update"
+          ? ((await adapter.getSubscription?.(auth.orgId))?.subscriptionId ?? null)
+          : null;
+      if (flow && flow !== "payment_method_update" && !subscriptionId) {
+        return err(`No subscription to ${flow.replace("subscription_", "")} — this workspace has none.`);
+      }
+      const url = await createBillingPortalSession(cid, return_url ?? config.baseUrl, {
+        flow,
+        ...(subscriptionId ? { subscriptionId } : {}),
+      });
       return {
         content: [
           {
             type: "text" as const,
             text: JSON.stringify(
-              { status: "portal_created", portal_url: url, message: "Open this URL to manage billing." },
+              {
+                status: "portal_created",
+                portal_url: url,
+                flow: flow ?? "home",
+                message:
+                  flow === "payment_method_update"
+                    ? "Open this URL to add or update the card on file."
+                    : "Open this URL to manage billing.",
+              },
               null,
               2,
             ),

@@ -617,16 +617,49 @@ export async function createCreditCheckoutSession(
   return embedded ? session.client_secret! : session.url!;
 }
 
+/**
+ * Where a portal link LANDS. Stripe calls it `flow_data`, and it is the difference between
+ * handing someone a menu and handing them the form they need.
+ *
+ * It matters because this link is the library's answer to the one thing that genuinely
+ * cannot be done headlessly: entering a card. A caller with no browser cannot confirm a
+ * SetupIntent — but it can produce a URL, and a URL that opens on "add a payment method"
+ * is a different quality of answer from one that opens on a dashboard the customer then
+ * has to navigate.
+ */
+export type PortalFlow = "payment_method_update" | "subscription_cancel" | "subscription_update";
+
 /** A Stripe Billing Portal session URL — the no-code self-serve surface where a
  *  customer manages their subscription (upgrade/downgrade/cancel), updates the
- *  payment method (fixes a failing card), and views invoices. */
+ *  payment method (fixes a failing card), and views invoices.
+ *
+ *  Pass `flow` to open a specific one directly. `subscription_cancel` and
+ *  `subscription_update` need a subscription id, which is why they are only reachable when
+ *  the caller supplies one — Stripe rejects the session otherwise, and a 400 at link-creation
+ *  time is a worse failure than the menu. */
 export async function createBillingPortalSession(
   stripeCustomerId: string,
   returnUrl: string,
+  opts: { flow?: PortalFlow; subscriptionId?: string } = {},
 ): Promise<string> {
   const session = await getStripe().billingPortal.sessions.create({
     customer: stripeCustomerId,
     return_url: returnUrl,
+    ...(opts.flow
+      ? {
+          flow_data: (opts.flow === "payment_method_update"
+            ? { type: "payment_method_update" as const }
+            : opts.flow === "subscription_cancel"
+              ? {
+                  type: "subscription_cancel" as const,
+                  subscription_cancel: { subscription: opts.subscriptionId! },
+                }
+              : {
+                  type: "subscription_update" as const,
+                  subscription_update: { subscription: opts.subscriptionId! },
+                }) as Stripe.BillingPortal.SessionCreateParams.FlowData,
+        }
+      : {}),
   });
   return session.url;
 }

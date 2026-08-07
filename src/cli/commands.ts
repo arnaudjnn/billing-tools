@@ -358,7 +358,12 @@ function registerPlanCommands(
   program
     .command("portal")
     .description("Open the Stripe billing portal (manage subscription, cards, invoices)")
-    .action(async () => print(await callTool(requireConfig(), "get_billing_portal")));
+    // `--flow payment_method_update` is how a terminal gets a card added: it cannot confirm
+    // a SetupIntent, but it can print a link that opens on the card form.
+    .option("--flow <flow>", "payment_method_update | subscription_cancel | subscription_update")
+    .action(async (o: { flow?: string }) =>
+      print(await callTool(requireConfig(), "get_billing_portal", o.flow ? { flow: o.flow } : {})),
+    );
 
   const autoReload = program
     .command("auto-reload")

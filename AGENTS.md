@@ -94,7 +94,7 @@ REST and MCP get it structurally (`createDispatcher` monkey-patches `server.tool
 | `list_invoices` | invoices | Recent invoices: amount, date, status, PDF links | Stripe customer |
 | `view_invoice` | invoices | One invoice + a hosted browser link | Stripe customer |
 | `download_invoice` | invoices | Direct PDF link (drafts and receipts have none) | Stripe customer |
-| `get_billing_portal` | invoices | Short-lived Stripe Billing Portal URL | Stripe customer |
+| `get_billing_portal` | invoices | Short-lived portal URL; `flow` lands on the card form / cancel / update | Stripe customer |
 | `get_usage` | usage | Credits spent this cycle, filterable by caller or a day window | — |
 | `get_usage_limits` | usage | Every window that applies now: used, remaining, `resets_at` | a `cap` or a `limits.rate` |
 | `get_org_usage` | usage | Every member against their own cap, who is over it, the team average | `listMemberIds` |
