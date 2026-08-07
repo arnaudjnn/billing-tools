@@ -1,3 +1,17 @@
+# [20.0.0](https://github.com/arnaudjnn/billing-tools/compare/v19.3.0...v20.0.0) (2026-08-07)
+
+
+* feat(purchase)!: one purchase, four ways to pay for it ([206ca28](https://github.com/arnaudjnn/billing-tools/commit/206ca287a588aaeeb833803d10caf98eda25b83c))
+
+
+### BREAKING CHANGES
+
+* `createCreditCheckoutSession` returns `{url, clientSecret,
+sessionId}` instead of one string whose meaning depended on the mode — which forced
+embedded callers to recover the session id by splitting the client secret.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
 # [19.3.0](https://github.com/arnaudjnn/billing-tools/compare/v19.2.0...v19.3.0) (2026-08-07)
 
 
