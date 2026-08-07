@@ -53,6 +53,13 @@ export {
   grantCredits,
   usageSince,
   createCreditCheckoutSession,
+  // One purchase, four ways to pay for it — the single implementation behind `buy_credits`
+  // AND behind a consuming app's own dialog. `saved_card` is the only one that needs no
+  // browser at all; `invoice` is the one that works with no card at all.
+  purchaseCredits,
+  type PurchaseMethod,
+  type PurchaseResult,
+  type PortalFlow,
   quoteCreditPurchase,
   invalidateCreditQuotes,
   type CreditQuote,

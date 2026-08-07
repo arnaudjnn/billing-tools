@@ -290,6 +290,24 @@ export function createStripeEventHandler(opts: {
         billing_reason?: string | null;
         customer?: string | null;
       };
+      // A library-issued credit invoice (`purchaseCredits` with method "invoice", or an
+      // auto-reload) carries its credits in metadata and has `billing_reason: "manual"`.
+      // It is not a subscription grant, so it is settled here and returns — before the
+      // reason filter below, which is what dropped it entirely: the customer paid the
+      // invoice Stripe emailed them and nothing credited the wallet.
+      const purchased = parseInt(invoice.metadata?.credits ?? "0", 10);
+      if (Number.isFinite(purchased) && purchased > 0 && invoice.customer) {
+        await grantCredits(
+          invoice.customer,
+          purchased,
+          `Purchase: ${purchased} credits by invoice`,
+          opts.currency ?? "usd",
+          // Shared with the off-session path, so a charge credited synchronously is not
+          // credited a second time when its event lands.
+          `credit:invoice:${invoice.id}`,
+        );
+        return;
+      }
       if (invoice.billing_reason !== "subscription_create" && invoice.billing_reason !== "subscription_cycle") return;
       const ref = subscriptionRefOf(invoice);
       if (!ref.subscriptionId || !invoice.customer) return;

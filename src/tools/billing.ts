@@ -22,6 +22,7 @@ import {
   getSpendControls,
   setSpendControls,
   createCreditCheckoutSession,
+  purchaseCredits,
   quoteCreditPurchase,
   createBillingPortalSession,
   listInvoices,
@@ -187,16 +188,34 @@ Quoted from the same Stripe tax rates buy_credits will charge, so the two agree.
 
     server.tool(
       "buy_credits",
-      `Purchase credits via Stripe Checkout. Returns a payment URL.
-1 unit of currency = 100 credits. Minimum 5, maximum 200,000. Your card is saved for auto-reload.`,
+      `Purchase credits. 1 unit of currency = 100 credits.
+
+HOW it is paid for is \`method\`, and one of them needs no browser at all:
+  saved_card  charge the card already on file, off-session. Returns immediately with the
+              credits granted. Refuses \`no_card\` when there is none.
+  invoice     Stripe EMAILS a payable invoice. The path for a customer with no card, which
+              is what saved_card cannot bootstrap. Credits land when it is paid.
+  checkout    a hosted Checkout URL for a human to open (the default).
+  embedded    a client secret, only useful to a browser running Stripe.js.`,
       {
         amount: z
           .number()
           .min(widest.min)
           .max(widest.max)
           .describe("Amount in your currency to purchase (e.g. 10 = 1000 credits)"),
+        method: z
+          .enum(["checkout", "embedded", "saved_card", "invoice"])
+          .optional()
+          .describe("How to collect it. Default `checkout`"),
+        days_until_due: z
+          .number()
+          .int()
+          .min(1)
+          .max(90)
+          .optional()
+          .describe("For `invoice`: how long it stays payable. Default 7"),
       },
-      async ({ amount }) => {
+      async ({ amount, method, days_until_due }) => {
         // Spending the workspace's money is an owner action, like every other write that
         // costs something (`change_plan`, `assign_seat_type`, `grant_top_up`). This was the
         // one that was not: any member holding an org key could charge the card the owner
@@ -209,30 +228,50 @@ Quoted from the same Stripe tax rates buy_credits will charge, so the two agree.
         const outside = await withinPlan(auth.orgId, amount);
         if (outside) return err(outside);
         const cid = await customerId(auth.orgId);
-        const url = await createCreditCheckoutSession(cid, auth.orgId, amount, config, {
-          ...(await topUpTax(auth.orgId, cid)),
+        const out = await purchaseCredits(cid, auth.orgId, amount, config, {
+          method,
+          daysUntilDue: days_until_due,
+          tax: await topUpTax(auth.orgId, cid),
           successUrl: topUp.successUrl,
           cancelUrl: topUp.cancelUrl,
         });
-        const credits = Math.round(amount * 100);
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(
-                {
-                  status: "checkout_created",
-                  checkout_url: url,
+        // A refusal is an ANSWER here — "no card on file" tells the caller which other
+        // method to use — so it comes back as a result with a reason, not as an error the
+        // dispatcher turns into a throw.
+        if (out.status === "refused") return err(`${out.reason}: ${out.message}`);
+        const body =
+          out.status === "charged"
+            ? {
+                status: "charged",
+                amount,
+                credits: out.credits,
+                invoice_id: out.invoiceId,
+                message: `Charged the card on file. ${out.credits} credits added.`,
+              }
+            : out.status === "invoiced"
+              ? {
+                  status: "invoiced",
                   amount,
-                  credits,
-                  message: `Open this URL to purchase ${credits} credits.`,
-                },
-                null,
-                2,
-              ),
-            },
-          ],
-        };
+                  credits: out.credits,
+                  invoice_id: out.invoiceId,
+                  invoice_url: out.hostedInvoiceUrl,
+                  due_at: out.dueAt ? new Date(out.dueAt).toISOString() : null,
+                  message: `Stripe emailed the invoice. ${out.credits} credits are added when it is paid.`,
+                }
+              : {
+                  status: "checkout_created",
+                  amount,
+                  credits: out.credits,
+                  checkout_url: out.url,
+                  // Only ever populated for `embedded`, and useless without a browser —
+                  // named so nobody mistakes it for something to open.
+                  client_secret: out.clientSecret,
+                  checkout_session_id: out.sessionId,
+                  message: out.url
+                    ? `Open this URL to purchase ${out.credits} credits.`
+                    : `Mount this client secret with Stripe.js to purchase ${out.credits} credits.`,
+                };
+        return { content: [{ type: "text" as const, text: JSON.stringify(body, null, 2) }] };
       },
     );
   }

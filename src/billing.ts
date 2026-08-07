@@ -511,7 +511,7 @@ export async function createCreditCheckoutSession(
   amountMajor: number,
   config: ResolvedConfig,
   opts: TopUpCheckoutOptions = {},
-): Promise<string> {
+): Promise<{ url: string | null; clientSecret: string | null; sessionId: string }> {
   const amountMinor = Math.round(amountMajor * 100);
   const credits = amountMinor; // 1 credit = 1 minor unit
   const taxRates = opts.taxRates?.length ? opts.taxRates : null;
@@ -613,8 +613,200 @@ export async function createCreditCheckoutSession(
           cancel_url: opts.cancelUrl ?? `${config.baseUrl}/billing/cancel`,
         }),
   });
-  // The caller knows which it asked for; returning one string keeps the signature.
-  return embedded ? session.client_secret! : session.url!;
+  // BOTH, plus the id. It used to return one string whose meaning depended on the mode,
+  // which forced every embedded caller to recover the session id by splitting the client
+  // secret on "_secret_" — a consumer really did that, in production, with a comment
+  // apologising for it. A hosted caller reads `url`, an embedded one `clientSecret`, and
+  // `sessionId` is what settles the purchase afterwards either way.
+  return {
+    url: session.url ?? null,
+    clientSecret: session.client_secret ?? null,
+    sessionId: session.id,
+  };
+}
+
+/**
+ * HOW the money is collected. One purchase, four ways to pay for it.
+ *
+ * Every one of these existed as a different shape or not at all: `checkout` and `embedded`
+ * were a `uiMode` on one function, the off-session charge lived only inside `tryAutoReload`
+ * (threshold-triggered, uncallable), and the emailed invoice did not exist. So a consumer
+ * with a browser wrote its own purchase and a caller without one had a single answer — a
+ * link. Two implementations of one act, and only one of them had the app's settlement.
+ *
+ *   checkout    a hosted Stripe Checkout URL. Anyone can open it. The default.
+ *   embedded    a client secret for Stripe.js — what an app's own Elements form mounts.
+ *   saved_card  charge the default card off-session. The ONLY fully headless path: no
+ *               browser, no link, no human. Refuses `no_card`.
+ *   invoice     Stripe emails a payable invoice. The path for a customer with NO card,
+ *               which is the case `saved_card` cannot bootstrap. Refuses `no_email`.
+ */
+export type PurchaseMethod = "checkout" | "embedded" | "saved_card" | "invoice";
+
+export type PurchaseResult =
+  | { status: "checkout"; method: PurchaseMethod; credits: number; url: string | null; clientSecret: string | null; sessionId: string }
+  | { status: "charged"; method: "saved_card"; credits: number; invoiceId: string }
+  | { status: "invoiced"; method: "invoice"; credits: number; invoiceId: string; hostedInvoiceUrl: string | null; dueAt: number | null }
+  | { status: "refused"; reason: "no_card" | "no_email" | "charge_failed"; message: string };
+
+/**
+ * Buy credits, by whichever method the caller can actually complete.
+ *
+ * The single implementation behind `buy_credits` AND behind a consuming app's own purchase
+ * dialog — which is the point. scartoffie had its own copy that forced the embedded mode
+ * and bypassed the tool, so `savePaymentMethod: "always"`, the card prune and the settlement
+ * lived on one path and not the other.
+ *
+ * `credits` are minor units: 1 credit = 1 cent, the same equivalence
+ * `createCreditCheckoutSession` and `tryAutoReload` already use.
+ */
+export async function purchaseCredits(
+  stripeCustomerId: string,
+  orgId: string,
+  amountMajor: number,
+  config: ResolvedConfig,
+  opts: TopUpCheckoutOptions & {
+    method?: PurchaseMethod;
+    /** How long an emailed invoice is payable for. Stripe requires it on `send_invoice`. */
+    daysUntilDue?: number;
+    /** Resolved tax for the charge — the same rates the quote used. */
+    tax?: ChargeTax;
+  } = {},
+): Promise<PurchaseResult> {
+  const method = opts.method ?? "checkout";
+  const credits = Math.round(amountMajor * 100);
+  const currency = config.currency;
+  const stripe = getStripe();
+
+  if (method === "checkout" || method === "embedded") {
+    const session = await createCreditCheckoutSession(stripeCustomerId, orgId, amountMajor, config, {
+      ...opts,
+      // The tax the CALLER resolved, flattened into the shape the session builder takes.
+      // Passing it nested silently dropped the rates — the session was created untaxed
+      // while the quote beside it showed 22%, which is the one discrepancy a checkout
+      // must never have.
+      ...(opts.tax ?? {}),
+      uiMode: method === "embedded" ? "embedded" : "hosted",
+    });
+    return { status: "checkout", method, credits, ...session };
+  }
+
+  const tax = opts.tax ?? (await taxFor(stripeCustomerId, config.tax));
+  const taxRates = tax.taxRates?.length ? tax.taxRates : null;
+  // Same key for the item and the invoice, so a retried call reuses the invoice Stripe
+  // already made rather than billing a second time. Not the amount alone — two callers
+  // buying the same amount an hour apart are two purchases.
+  const key = `purchase:${stripeCustomerId}:${credits}:${method}:${Date.now()}`;
+
+  if (method === "saved_card") {
+    const pms = await stripe.paymentMethods.list({ customer: stripeCustomerId, type: "card", limit: 1 });
+    if (pms.data.length === 0) {
+      return {
+        status: "refused",
+        reason: "no_card",
+        message:
+          "No card on file to charge. Use method \"invoice\" to have Stripe email a payable invoice, " +
+          "or get_billing_portal with flow \"payment_method_update\" to add one.",
+      };
+    }
+    await stripe.invoiceItems.create(
+      {
+        customer: stripeCustomerId,
+        currency,
+        amount: credits,
+        description: `Purchase: ${credits} credits`,
+        ...(taxRates ? { tax_rates: taxRates } : {}),
+      },
+      { idempotencyKey: `${key}:item` },
+    );
+    const invoice = await stripe.invoices.create(
+      {
+        customer: stripeCustomerId,
+        currency,
+        collection_method: "charge_automatically",
+        default_payment_method: pms.data[0].id,
+        auto_advance: false,
+        // As in `tryAutoReload`: without this, a customer WITH a subscription has the
+        // pending item swept onto their next renewal invoice instead — the purchase comes
+        // back paid, numbered and totalling zero, and the credits appear a month later.
+        pending_invoice_items_behavior: "include",
+        description: `Purchase: ${credits} credits`,
+        ...(!taxRates && tax.automaticTax ? { automatic_tax: { enabled: true } } : {}),
+        metadata: { org_id: orgId, credits: String(credits) },
+      },
+      { idempotencyKey: `${key}:invoice` },
+    );
+    if (!invoice.id) return { status: "refused", reason: "charge_failed", message: "Stripe returned no invoice." };
+    try {
+      const paid = await stripe.invoices.pay(invoice.id, { off_session: true });
+      if (paid.status !== "paid") {
+        return { status: "refused", reason: "charge_failed", message: `Invoice is ${paid.status}, not paid.` };
+      }
+    } catch (e) {
+      // A decline is an ANSWER, not a crash: the caller can switch to `invoice` or send the
+      // customer to the portal to fix the card.
+      return {
+        status: "refused",
+        reason: "charge_failed",
+        message: e instanceof Error ? e.message : "The card was declined.",
+      };
+    }
+    // Credited here rather than left to `invoice.paid`, because an off-session charge is
+    // synchronous: the caller gets `charged` and the balance is already true. The webhook
+    // grants on the same key, so a delivered event cannot double it.
+    await grantCredits(stripeCustomerId, credits, `Purchase: ${credits} credits`, currency, `credit:invoice:${invoice.id}`);
+    return { status: "charged", method, credits, invoiceId: invoice.id };
+  }
+
+  // method === "invoice" — Stripe sends the bill and collects it.
+  const customer = await stripe.customers.retrieve(stripeCustomerId);
+  const email = !("deleted" in customer && customer.deleted) ? customer.email : null;
+  if (!email) {
+    return {
+      status: "refused",
+      reason: "no_email",
+      message: "Stripe cannot email an invoice to a customer with no email address. Set one with set_billing_profile.",
+    };
+  }
+  await stripe.invoiceItems.create(
+    {
+      customer: stripeCustomerId,
+      currency,
+      amount: credits,
+      description: `Purchase: ${credits} credits`,
+      ...(taxRates ? { tax_rates: taxRates } : {}),
+    },
+    { idempotencyKey: `${key}:item` },
+  );
+  const draft = await stripe.invoices.create(
+    {
+      customer: stripeCustomerId,
+      currency,
+      collection_method: "send_invoice",
+      days_until_due: opts.daysUntilDue ?? 7,
+      auto_advance: false,
+      pending_invoice_items_behavior: "include",
+      description: `Purchase: ${credits} credits`,
+      ...(!taxRates && tax.automaticTax ? { automatic_tax: { enabled: true } } : {}),
+      // `credits` is what the webhook reads to grant them when this is paid — a manual
+      // invoice has `billing_reason: "manual"`, which every other crediting branch ignores.
+      metadata: { org_id: orgId, credits: String(credits) },
+    },
+    { idempotencyKey: `${key}:invoice` },
+  );
+  if (!draft.id) return { status: "refused", reason: "charge_failed", message: "Stripe returned no invoice." };
+  // Finalize THEN send: an unfinalized invoice has no number, no hosted page and nothing to
+  // pay, and `sendInvoice` on a draft is an error rather than a send.
+  const finalized = await stripe.invoices.finalizeInvoice(draft.id);
+  const sent = await stripe.invoices.sendInvoice(finalized.id!);
+  return {
+    status: "invoiced",
+    method: "invoice",
+    credits,
+    invoiceId: sent.id!,
+    hostedInvoiceUrl: sent.hosted_invoice_url ?? null,
+    dueAt: sent.due_date ? sent.due_date * 1000 : null,
+  };
 }
 
 /**

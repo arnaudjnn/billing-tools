@@ -231,3 +231,50 @@ test("an expanded subscription object on parent is read by id", async () => {
 
   assert.equal(recorded[0]?.patch.subscriptionId, "sub_1");
 });
+
+// ── The invoice this library SENDS ───────────────────────────────────────────
+//
+// `purchaseCredits` with `method: "invoice"` asks Stripe to email a payable bill. It comes
+// back as `invoice.paid` with `billing_reason: "manual"` — and every crediting branch in
+// this file and in the webhook route filtered that reason OUT. So the customer paid the
+// invoice Stripe emailed them, and the wallet was credited by nobody.
+
+test("a paid credit invoice credits the wallet, whatever its billing_reason", async () => {
+  const stripe = fakeStripe();
+  __setStripeForTests(stripe);
+  const handle = createStripeEventHandler({ plans: PLANS, currency: "eur" });
+
+  await handle({
+    type: "invoice.paid",
+    data: {
+      object: {
+        id: "in_manual_1",
+        customer: "cus_1",
+        // What Stripe sends for an invoice nobody subscribed to.
+        billing_reason: "manual",
+        metadata: { org_id: "org_1", credits: "2000" },
+      },
+    },
+  });
+
+  assert.equal(stripe.granted.length, 1, "the purchase must credit");
+  assert.equal(stripe.granted[0].amount, -2000);
+  // The same key the synchronous off-session path uses, so a charge already credited
+  // cannot be credited again by the event that follows it.
+  assert.equal(stripe.granted[0].key, "credit:invoice:in_manual_1");
+});
+
+test("an invoice with no credits in its metadata is not a purchase", async () => {
+  // Someone else's manual invoice — a one-off charge raised in the Dashboard, say. Reading
+  // an amount off it would credit a wallet for money that was never a credit purchase.
+  const stripe = fakeStripe();
+  __setStripeForTests(stripe);
+  const handle = createStripeEventHandler({ plans: PLANS, currency: "eur" });
+
+  await handle({
+    type: "invoice.paid",
+    data: { object: { id: "in_manual_2", customer: "cus_1", billing_reason: "manual", metadata: {} } },
+  });
+
+  assert.deepEqual(stripe.granted, []);
+});

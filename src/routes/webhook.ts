@@ -59,6 +59,14 @@ export function createStripeWebhookHandler(opts: WebhookOptions = {}) {
       return Response.json({ error: `Webhook signature verification failed: ${message}` }, { status: 400 });
     }
 
+    /** Credits a library-issued invoice carries, or 0. `metadata.credits` is written by
+     *  `purchaseCredits` and by `tryAutoReload`, and by nothing else. */
+    const creditsOn = (e: Stripe.Event): number => {
+      const inv = e.data.object as Stripe.Invoice;
+      const n = parseInt(inv.metadata?.credits ?? "0", 10);
+      return Number.isFinite(n) && n > 0 ? n : 0;
+    };
+
     // Only a one-time top-up is credited here. A SUBSCRIPTION checkout falls
     // through to onOtherEvent, because fulfilling one is app-specific work
     // (provisioning) that this route can't do — and silently swallowing it, as
@@ -83,6 +91,26 @@ export function createStripeWebhookHandler(opts: WebhookOptions = {}) {
           );
         }
       }
+    } else if (event.type === "invoice.paid" && creditsOn(event)) {
+      // An invoice this library SENT for a credit purchase — `collection_method:
+      // send_invoice`, which arrives with `billing_reason: "manual"`. Every other crediting
+      // branch, here and in `createStripeEventHandler`, filters that reason out, so an
+      // emailed invoice was paid by the customer and credited to nobody.
+      const invoice = event.data.object as Stripe.Invoice & { customer?: string | null };
+      const customerId = customerIdOf(invoice.customer as string | { id: string });
+      const credits = creditsOn(event);
+      if (customerId && credits) {
+        await grantCredits(
+          customerId,
+          credits,
+          `Purchase: ${credits} credits by invoice`,
+          currency,
+          // The same key the off-session path uses, so a charge already credited
+          // synchronously cannot be credited again by its event.
+          `credit:invoice:${invoice.id}`,
+        );
+      }
+      await opts.onOtherEvent?.(event);
     } else if (opts.onOtherEvent) {
       await opts.onOtherEvent(event);
     }

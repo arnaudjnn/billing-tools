@@ -118,15 +118,19 @@ export function registerBillingCommands(program: CommandLike, opts: CliOptions) 
 
   program
     .command("buy <amount>")
-    .description("Buy credits (returns a Stripe Checkout URL)")
+    .description("Buy credits (Checkout URL by default; --method saved_card charges the card on file)")
     // `--quote` rather than a second command: "what would this cost" is the same
     // intent as buying, one step earlier, and it keeps the CLI at parity with the
     // tool surface without adding a verb nobody would guess.
     .option("--quote", "Show credits, tax and total without opening a checkout")
-    .action(async (amount: string, o: { quote?: boolean }) =>
+    // The whole point of the flag: a terminal has no browser. `saved_card` completes the
+    // purchase right here, `invoice` has Stripe email a payable one.
+    .option("--method <method>", "checkout | saved_card | invoice")
+    .action(async (amount: string, o: { quote?: boolean; method?: string }) =>
       print(
         await callTool(requireConfig(), o.quote ? "preview_credit_purchase" : "buy_credits", {
           amount: parseInt(amount, 10),
+          ...(o.method && !o.quote ? { method: o.method } : {}),
         }),
       ),
     );
