@@ -1,3 +1,17 @@
+# [21.0.0](https://github.com/arnaudjnn/billing-tools/compare/v20.1.1...v21.0.0) (2026-08-07)
+
+
+* feat(modularity)!: a catalogue is offered only what it can sell ([8dd974b](https://github.com/arnaudjnn/billing-tools/commit/8dd974b96dbee42d8d5ee11d7c331684e29e3900))
+
+
+### BREAKING CHANGES
+
+* `get_org_usage` renames `average_percent_used` to `percent_used`
+and adds `shared_pool` and per-member `limit_shared`. On a pooled catalogue
+`request_seat_change` is no longer registered.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
 ## [20.1.1](https://github.com/arnaudjnn/billing-tools/compare/v20.1.0...v20.1.1) (2026-08-07)
 
 
