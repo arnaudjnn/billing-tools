@@ -1,3 +1,10 @@
+# [19.2.0](https://github.com/arnaudjnn/billing-tools/compare/v19.1.0...v19.2.0) (2026-08-07)
+
+
+### Features
+
+* **i18n:** the sentence a refused caller reads is translatable ([20cc16f](https://github.com/arnaudjnn/billing-tools/commit/20cc16fd77a5e893b6d5fa06df45f2647f516ee2))
+
 # [19.1.0](https://github.com/arnaudjnn/billing-tools/compare/v19.0.1...v19.1.0) (2026-08-07)
 
 
