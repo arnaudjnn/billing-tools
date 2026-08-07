@@ -165,6 +165,33 @@ test("allowance resolves the caller's SEAT, like every other read of the same fa
   void adapter;
 });
 
+test("seats.defaultType names the seat an unassigned member actually draws", async () => {
+  // Not an absence, and not a fourth option in a picker: a member nobody assigned draws the
+  // plan's cheapest non-shared seat, and that is the seat they should be REPORTED as holding.
+  // A consumer badged them "Predefinito" on one screen while another, reading the same person
+  // through `MemberUsage.seatType`, said "Standard" — two renderings of one fact, only one of
+  // which had asked the library for it.
+  const { api: a } = api({
+    plans: {
+      pro: {
+        ...PLANS.pro,
+        sells: {
+          kind: "seats",
+          seatTypes: {
+            premium: { price: { monthly: 9000 }, includedCredits: 5000 },
+            standard: { price: { monthly: 1800 }, includedCredits: 1000, min: 1 },
+            agent: { price: { monthly: 0 }, includedCredits: 0, shared: true },
+          },
+        },
+      },
+    },
+  });
+
+  // Cheapest NON-SHARED, whatever order the catalogue declares them in — the free shared
+  // agent seat is not what a person falls back to.
+  assert.equal(await a.seats.defaultType("org_1"), "standard");
+});
+
 test("subscription.change binds plans, config and currency", async () => {
   // Not asserting Stripe behaviour — asserting the caller does not have to restate
   // what createBilling already knows. A missing `currency` here silently priced a

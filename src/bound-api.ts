@@ -64,6 +64,7 @@ import {
 import { closeWorkspace, findOrphanedSubscriptions } from "./close-workspace.js";
 import { topUpTargetOf } from "./allowance.js";
 import {
+  defaultSeatOf,
   isSatisfied,
   listPlanRequests,
   nextUsageAsk,
@@ -273,6 +274,20 @@ export function createBoundApi(deps: BoundApiDeps) {
     seats: {
       list: (orgId: string) => listSeatAssignments(adapter, orgId),
       get: (orgId: string, memberId: string) => getSeatType(adapter, orgId, memberId),
+      /**
+       * WHICH seat a member draws when nobody has assigned them one.
+       *
+       * A real seat — the plan's cheapest non-shared type — not an absence, which is why a
+       * picker must not offer "default" as a fourth choice beside the ones the plan sells:
+       * that names a seat type no config declares. Measured on a consumer: a member with no
+       * assignment was badged "Predefinito" on its members page while its usage page, reading
+       * the same person through `MemberUsage.seatType`, said "Standard". Both were rendering
+       * the same fact and only one of them had asked the library for it.
+       */
+      defaultType: async (orgId: string) => {
+        const model = planModel(plans, await planOf(orgId));
+        return model ? defaultSeatOf(model) : null;
+      },
       /** Drop a workspace's entries from these members' own metadata — what `workspace.close`
        *  calls, and what removing a single member should call for that member. */
       clearRecords: (orgId: string, memberIds: readonly string[]) =>
