@@ -1,3 +1,10 @@
+# [15.23.0](https://github.com/arnaudjnn/billing-tools/compare/v15.22.1...v15.23.0) (2026-08-07)
+
+
+### Features
+
+* **seats:** expose the seat an unassigned member actually draws ([a38ebfd](https://github.com/arnaudjnn/billing-tools/commit/a38ebfd0e644b587baf1da93572f93479f77c560))
+
 ## [15.22.1](https://github.com/arnaudjnn/billing-tools/compare/v15.22.0...v15.22.1) (2026-08-06)
 
 
