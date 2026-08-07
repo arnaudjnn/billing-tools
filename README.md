@@ -617,7 +617,7 @@ registerBillingCommands(program, {
   // were never registered and could only answer "Unknown tool". Omit to register all.
   plans: PLANS,
 });
-// acme auth | keys | balance | buy | invoices | usage | plans | plan | spend | cards | …
+// acme auth | keys | balance | buy | invoices | usage | limits | team-usage | plans | plan | spend | cards | …
 ```
 
 Every command hits the same REST endpoint an agent would, so the CLI can never do more

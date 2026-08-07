@@ -76,7 +76,7 @@ Deliberate exceptions — don't "fix" these:
 
 REST and MCP get it structurally (`createDispatcher` monkey-patches `server.tool`, so every registered tool is an endpoint). `tests/surface.test.mjs` asserts `BILLING_TOOL_NAMES` matches what registration produces, **in both directions and by count**. The CLI is hand-written and is the one surface that can silently fall behind, so `tests/conventions.test.mjs` asserts it reaches every tool — and, since it is hand-written, that it is **gated by the same `toolCapabilities`**: pass `plans` to `registerBillingCommands` and a flat/pooled deployment stops shipping `seats` / `assign-seat` / the five `topup` commands, which on that catalogue call tools that were never registered and can only answer "Unknown tool". A dead command is the same false statement as a dead tool. Omitting `plans` registers everything, because undefined is "the caller did not say". Coverage is per tool, not per command: `get_api_key` has no command because `auth` performs that flow, `preview_credit_purchase` is `buy --quote`, `set_spend_controls` is `spend limit` / `spend alerts`.
 
-### The 36 tools
+### The 37 tools
 
 `BILLING_TOOL_NAMES` (`tools/register.ts`) is the canonical list of what the library **can** register. The **needs** column is not documentation: `toolCapabilities(plans)` computes it and `registerBillingTools` reads it, so the table and the code cannot disagree.
 

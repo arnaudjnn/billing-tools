@@ -88,7 +88,7 @@ The 402 challenge ships ready; live settlement is injected via a `settle` functi
 
 ## Tools exposed
 
-`get_api_key`, `list_api_keys`, `revoke_api_key`, `get_credit_balance`, `buy_credits`, `set_auto_reload`, `get_billing_portal`, `list_invoices`, `view_invoice`, `download_invoice`, `get_usage`, `get_usage_limits`, `list_plans`.
+`get_api_key`, `list_api_keys`, `revoke_api_key`, `get_credit_balance`, `buy_credits`, `set_auto_reload`, `get_billing_portal`, `list_invoices`, `view_invoice`, `download_invoice`, `get_usage`, `get_usage_limits`, `get_org_usage`, `list_plans`.
 
 ## Reference
 
