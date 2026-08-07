@@ -1,3 +1,10 @@
+## [19.0.1](https://github.com/arnaudjnn/billing-tools/compare/v19.0.0...v19.0.1) (2026-08-07)
+
+
+### Bug Fixes
+
+* **tax:** place a customer by their VAT number when no address is on file ([562eda9](https://github.com/arnaudjnn/billing-tools/commit/562eda90875ecfc829682b94c212b6862d2e8f9f))
+
 # [19.0.0](https://github.com/arnaudjnn/billing-tools/compare/v18.0.0...v19.0.0) (2026-08-07)
 
 
