@@ -298,8 +298,16 @@ export type Cap =
 // two are on.
 
 export interface Replenish {
-  /** Self-serve credit purchase. */
-  purchase?: { packs?: readonly Money[] };
+  /**
+   * Self-serve credit purchase.
+   *
+   * `min`/`max` are what ONE purchase may be, in currency units — the bounds `buy_credits`
+   * and `preview_credit_purchase` enforce. They were literals in the tool schema (5 and
+   * 200 000) and again in every consumer's buy form, which is two places for one rule and
+   * exactly the kind that drifts silently: a UI that lets someone type 3 gets a 400 from a
+   * tool whose own description promised 5.
+   */
+  purchase?: { packs?: readonly Money[]; min?: Money; max?: Money };
   /**
    * Threshold-triggered card charge. These are the DEFAULTS the plan offers;
    * the live per-customer settings stay on the Stripe customer, because a
@@ -319,8 +327,60 @@ export interface Replenish {
    * `maxPerCycle` caps what one member may accumulate in a cycle, counting what is already
    * granted AND what is already queued.
    */
-  request?: { percent?: number; maxPerCycle?: Money };
+  request?: {
+    percent?: number;
+    maxPerCycle?: Money;
+    /**
+     * The most one grant may be worth, as a share of the member's pack. Default 500.
+     *
+     * A ceiling exists because this is a number an owner types: `percent: 2500` is a typo
+     * that hands out 25× a seat, silently and for free. The consuming app clamped it in its
+     * own server action and again in its number input, and the tool accepted 1000 — three
+     * answers, and the one an agent hit was the loosest.
+     */
+    maxPercent?: number;
+    /** The percentages a UI offers as one-tap choices. Default `[25, 50, 100]`. */
+    presets?: readonly number[];
+    /** Step for a custom percentage input. Default 25. */
+    step?: number;
+  };
 }
+
+/** What one credit purchase may be, for this plan: the bounds the tools enforce and the
+ *  ones a buy form must not contradict. Currency units, not credits. */
+export function purchaseBounds(model: PlanModel | null): { min: number; max: number } {
+  return {
+    min: model?.replenish.purchase?.min ?? DEFAULT_PURCHASE_MIN,
+    max: model?.replenish.purchase?.max ?? DEFAULT_PURCHASE_MAX,
+  };
+}
+
+/** What one grant/ask may be worth, for this plan, plus what a UI should offer. */
+export function requestBounds(model: PlanModel | null): {
+  percent: number;
+  maxPercent: number;
+  presets: readonly number[];
+  step: number;
+} {
+  const r = model?.replenish.request;
+  return {
+    percent: r?.percent ?? DEFAULT_REQUEST_PERCENT,
+    maxPercent: r?.maxPercent ?? DEFAULT_MAX_PERCENT,
+    presets: r?.presets ?? DEFAULT_PERCENT_PRESETS,
+    step: r?.step ?? DEFAULT_PERCENT_STEP,
+  };
+}
+
+/** One purchase, in currency units. Stripe's own floor is well below this; 5 is the point
+ *  where the processing fee stops eating the purchase. */
+export const DEFAULT_PURCHASE_MIN = 5;
+export const DEFAULT_PURCHASE_MAX = 200_000;
+/** What one ask is worth when the plan does not say: a quarter of the member's pack. */
+export const DEFAULT_REQUEST_PERCENT = 25;
+/** And the most any single grant may be, so a mistyped 2500 cannot hand out 25× a seat. */
+export const DEFAULT_MAX_PERCENT = 500;
+export const DEFAULT_PERCENT_PRESETS: readonly number[] = [25, 50, 100];
+export const DEFAULT_PERCENT_STEP = 25;
 
 // ── Axis 5: whether it can be bought ────────────────────────────────────────
 

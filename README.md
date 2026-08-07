@@ -362,7 +362,7 @@ Stripe objects get minted.
 | `sells` | `nothing` \| `seats` \| `flat` | what Stripe charges for |
 | `grant` | `none` \| `purchased_seats` \| `per_member` \| `fixed` | what is CREDITED as money on `invoice.paid` |
 | `cap` | `wallet` \| `per_seat` \| `pool` | what is INCLUDED, as a counted window |
-| `replenish` | `{purchase?, autoReload?, request?}` | how to get more |
+| `replenish` | `{purchase?, autoReload?, request?}` | how to get more. `purchase.min`/`max` bound ONE purchase (default 5 / 200 000 currency units); `request.percent` / `maxPercent` / `presets` / `step` bound and shape one grant (default 25 / 500 / `[25,50,100]` / 25). Read them with `purchaseBounds(model)` / `requestBounds(model)` so a buy form and the tool that refuses it cannot disagree |
 | `sale` | `free` \| `self_serve` \| `quote` \| `legacy` | whether it can be bought. Required, never inferred |
 
 Every example below is typechecked against the published types in CI.

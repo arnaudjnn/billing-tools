@@ -119,7 +119,20 @@ export function registerBillingTools(server: McpServer, opts: RegisterBillingToo
     ...opts.capabilities,
   };
   registerKeyTools(server, opts.adapter, config);
-  registerBillingOnlyTools(server, opts.adapter, config, opts.toolCosts ?? {}, opts.topUp ?? {}, caps);
+  const planFor = async (orgId: string) =>
+    opts.resolvePlan
+      ? await opts.resolvePlan(orgId)
+      : ((await opts.adapter.getSubscription?.(orgId))?.plan ?? opts.defaultPlan ?? null);
+  registerBillingOnlyTools(
+    server,
+    opts.adapter,
+    config,
+    opts.toolCosts ?? {},
+    opts.plans,
+    planFor,
+    opts.topUp ?? {},
+    caps,
+  );
   registerManagementTools(
     server,
     opts.adapter,

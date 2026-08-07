@@ -2,7 +2,16 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { BillingAdapter, ResolvedConfig } from "../types.js";
 import { enforceAccess, enforceAdmin } from "../auth.js";
-import { ALL_TOOL_CAPABILITIES, type ToolCapabilities } from "../plan-model.js";
+import {
+  ALL_TOOL_CAPABILITIES,
+  DEFAULT_PURCHASE_MAX,
+  DEFAULT_PURCHASE_MIN,
+  normalizePlans,
+  planModel,
+  purchaseBounds,
+  type PlanCatalog,
+  type ToolCapabilities,
+} from "../plan-model.js";
 import { taxFor } from "../tax.js";
 import {
   ensureStripeCustomer,
@@ -52,9 +61,31 @@ export function registerBillingOnlyTools(
   adapter: BillingAdapter,
   config: ResolvedConfig,
   toolCosts: Record<string, number>,
+  /** The catalogue and how to find an org's plan — needed because what one purchase may be
+   *  is a PLAN's rule (`replenish.purchase.min`/`max`), not a global constant. */
+  plans: PlanCatalog | undefined,
+  planFor: (orgId: string) => Promise<string | null>,
   topUp: TopUpToolOptions = {},
   caps: ToolCapabilities = ALL_TOOL_CAPABILITIES,
 ) {
+  // What one purchase may be. The tool schema is registered once for every plan, so it takes
+  // the WIDEST bounds any plan allows and the handler enforces the org's own — a schema that
+  // took the narrowest would refuse a purchase the customer's plan permits, and the caller
+  // would have no way to tell which rule refused them.
+  const bounds = normalizePlans(plans ?? {}).map(purchaseBounds);
+  const widest = {
+    min: bounds.length ? Math.min(...bounds.map((b) => b.min)) : DEFAULT_PURCHASE_MIN,
+    max: bounds.length ? Math.max(...bounds.map((b) => b.max)) : DEFAULT_PURCHASE_MAX,
+  };
+  /** The org's OWN limits, checked where the plan is known. */
+  const withinPlan = async (orgId: string, amount: number) => {
+    const model = planModel(plans ?? {}, await planFor(orgId));
+    const { min, max } = purchaseBounds(model);
+    return amount < min || amount > max
+      ? `A single purchase on this plan is between ${min} and ${max}.`
+      : null;
+  };
+
   /** The gate on spending the workspace's money — `config.roles.purchase`, in one place so
    *  the two tools that charge a card cannot answer it differently. */
   const purchaser = (action: string) =>
@@ -118,7 +149,11 @@ export function registerBillingOnlyTools(
       `What a credit purchase will cost, before buying: credits, tax and total.
 Quoted from the same Stripe tax rates buy_credits will charge, so the two agree.`,
       {
-        amount: z.number().min(5).max(200000).describe("Amount in your currency to quote (e.g. 10 = 1000 credits)"),
+        amount: z
+          .number()
+          .min(widest.min)
+          .max(widest.max)
+          .describe("Amount in your currency to quote (e.g. 10 = 1000 credits)"),
       },
       async ({ amount }) => {
         const auth = await enforceAccess(adapter);
@@ -155,7 +190,11 @@ Quoted from the same Stripe tax rates buy_credits will charge, so the two agree.
       `Purchase credits via Stripe Checkout. Returns a payment URL.
 1 unit of currency = 100 credits. Minimum 5, maximum 200,000. Your card is saved for auto-reload.`,
       {
-        amount: z.number().min(5).max(200000).describe("Amount in your currency to purchase (e.g. 10 = 1000 credits)"),
+        amount: z
+          .number()
+          .min(widest.min)
+          .max(widest.max)
+          .describe("Amount in your currency to purchase (e.g. 10 = 1000 credits)"),
       },
       async ({ amount }) => {
         // Spending the workspace's money is an owner action, like every other write that
@@ -167,6 +206,8 @@ Quoted from the same Stripe tax rates buy_credits will charge, so the two agree.
         const auth = await purchaser("buy_credits");
         if ("isError" in auth) return auth;
         if (!stripeConfigured()) return NO_STRIPE;
+        const outside = await withinPlan(auth.orgId, amount);
+        if (outside) return err(outside);
         const cid = await customerId(auth.orgId);
         const url = await createCreditCheckoutSession(cid, auth.orgId, amount, config, {
           ...(await topUpTax(auth.orgId, cid)),

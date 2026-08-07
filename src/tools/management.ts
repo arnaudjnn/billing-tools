@@ -15,6 +15,7 @@ import { currentCycle, resolveAllowance, topUpTargetOf } from "../allowance.js";
 import { assignSeatType, listSeatAssignments, seatAssignable, seatCapacity } from "../seats.js";
 import { defaultSeatOf, isTopSeat, seatLadder, seatTypeExists, usageAction } from "../ladder.js";
 import { normalizePlans, planModel, type PlanCatalog } from "../plans.js";
+import { DEFAULT_MAX_PERCENT, requestBounds } from "../plan-model.js";
 import { ALL_TOOL_CAPABILITIES, type ToolCapabilities } from "../plan-model.js";
 import { callerWithSeat, usageSummary } from "../usage.js";
 import type { UsageLedger } from "../usage-ledger.js";
@@ -125,7 +126,6 @@ per billing cycle), how much of each is used, and when each resets.`,
         const plan = opts.resolvePlan
           ? await opts.resolvePlan(auth.orgId)
           : ((await adapter.getSubscription?.(auth.orgId))?.plan ?? null);
-
         const summary = await usageSummary(adapter, config, {
           orgId: auth.orgId,
           plans: opts.plans,
@@ -311,6 +311,13 @@ the assignment (back to the default seat).`,
   // request landed in org metadata, the approval raised a pack the plan does not
   // have, and the owner was asked to rubber-stamp a no-op.
   if (caps.request) {
+    // The most any plan lets one grant be worth. The schema is registered once for every
+    // plan, so it takes the widest and the handler enforces the org's own — a schema pinned
+    // to the narrowest would refuse a grant the customer's plan allows.
+    const widestPercent = Math.max(
+      ...normalizePlans(opts.plans ?? {}).map((m) => requestBounds(m).maxPercent),
+      DEFAULT_MAX_PERCENT,
+    );
     server.tool(
       "list_top_up_requests",
       `List the workspace's credit top-up requests (pending and handled) — the extra
@@ -468,10 +475,13 @@ request it, as a percentage of their own seat pack (default 25%). Admin action.`
         percent: z
           .number()
           .min(1)
-          .max(1000)
+          // The WIDEST ceiling any plan in the catalogue sets; the org's own is enforced
+          // below, where the plan is known. A literal 1000 here was a third answer to a
+          // question the consuming app clamped at 500 in its server action and again in its
+          // number input — and the loosest of the three was the one an agent hit.
+          .max(widestPercent)
           .optional()
-          .default(25)
-          .describe("Percentage of the member's seat pack to add (25 = +25%)"),
+          .describe("Percentage of the member's seat pack to add (25 = +25%). Plan default when omitted"),
         credits: z
           .number()
           .int()
@@ -492,13 +502,21 @@ request it, as a percentage of their own seat pack (default 25%). Admin action.`
         const plan = opts.resolvePlan
           ? await opts.resolvePlan(auth.orgId)
           : ((await adapter.getSubscription?.(auth.orgId))?.plan ?? null);
+        // The org's OWN ceiling. `percent: 2500` is a typo that hands out 25× a seat, for
+        // free and silently, so the number an owner types is bounded by the plan rather than
+        // by whatever the schema happened to allow.
+        const ceiling = requestBounds(planModel(opts.plans, plan)).maxPercent;
+        if (percent != null && percent > ceiling) {
+          return err(`A single grant on this plan is at most +${ceiling}% of the member's pack.`);
+        }
 
         const res = await grantExtraAllowance(adapter, {
           orgId: auth.orgId,
           plans: opts.plans,
           plan,
           memberId: member_id,
-          // An explicit credit figure wins; otherwise the percentage (default 25).
+          // An explicit credit figure wins; otherwise the percentage — the plan's own
+          // default when the caller named none.
           ...(credits != null ? { amount: credits } : { percent }),
         });
 

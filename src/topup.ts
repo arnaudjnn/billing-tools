@@ -1,5 +1,5 @@
 import type { BillingAdapter } from "./types.js";
-import { cycleWindowFor, packSizeOf, planModel, type PlanCatalog } from "./plan-model.js";
+import { cycleWindowFor, packSizeOf, planModel, requestBounds, type PlanCatalog } from "./plan-model.js";
 import { getSeatType } from "./seats.js";
 
 // Top-up requests, stored entirely in the org's metadata via the adapter (no new
@@ -407,8 +407,10 @@ export async function grantExtraAllowance(
 }
 
 /** What one ask is worth when the plan does not say — the same default `grantExtraAllowance`
- *  applies, so asking for a top-up and being granted one unasked are the same size. */
-export const DEFAULT_REQUEST_PERCENT = 25;
+ *  applies, so asking for a top-up and being granted one unasked are the same size. It lives
+ *  in `plan-model.ts` beside the other replenish bounds; re-exported here because this is
+ *  where it has always been imported from. */
+export { DEFAULT_REQUEST_PERCENT } from "./plan-model.js";
 
 /** The member's own request still waiting on an answer, for `cycle`. */
 export async function pendingTopUpFor(
@@ -493,7 +495,7 @@ export async function requestExtraAllowance(
   const packSize = packSizeOf(model, seatType);
   if (packSize == null) return { ok: false, reason: "not_capped" };
 
-  const percent = input.percent ?? model.replenish.request?.percent ?? DEFAULT_REQUEST_PERCENT;
+  const percent = input.percent ?? requestBounds(model).percent;
   const basis = input.basis ?? packSize;
   const amount = input.amount ?? Math.round((basis * percent) / 100);
   if (!Number.isFinite(amount) || amount <= 0) return { ok: false, reason: "invalid_amount", packSize };
