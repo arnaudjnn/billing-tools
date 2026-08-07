@@ -186,3 +186,59 @@ test("…and lets one through where the deployment says members may purchase", a
     (e) => !/Forbidden/.test(String(e)),
   );
 });
+
+// ── a catalogue with no seats never offers a seat ────────────────────────────
+//
+// The seat rung is the FIRST one the ladder tries, so a consumer selling flat plans over a
+// shared pool — gtm-tools' shape — has to fall past it every time. Asserted rather than
+// assumed, because "it happens not to fire" and "it cannot fire" look identical until a
+// catalogue changes.
+
+const FLAT = {
+  starter: {
+    sells: { kind: "flat", price: { monthly: 3_000, yearly: 30_000 } },
+    grant: { kind: "none" },
+    cap: { kind: "pool", credits: 4_000, onExhausted: "wallet" },
+    replenish: { purchase: { packs: [1_000] }, autoReload: { threshold: 500, reloadTo: 4_000 } },
+    sale: "self_serve",
+  },
+  scale: {
+    sells: { kind: "flat", price: { monthly: 30_000, yearly: 300_000 } },
+    grant: { kind: "none" },
+    cap: { kind: "pool", credits: 60_000, onExhausted: "wallet" },
+    replenish: { purchase: { packs: [20_000] } },
+    sale: "self_serve",
+  },
+};
+
+test("a pooled, seatless plan climbs to credits — never to a seat", () => {
+  const starter = planModel(FLAT, "starter");
+  // The pool is exhausted and it overflows to the wallet, so money is the answer.
+  const out = usageAction(starter, {
+    blocked: { kind: "rate", covers: "included" },
+    plans: FLAT,
+    currentPlan: "starter",
+    actor: { isAdmin: true },
+  });
+  assert.equal(out.rung, "credits");
+  assert.equal(out.action, "buy_credits");
+});
+
+test("and where money cannot help, it climbs to the PLAN, which such a catalogue does have", () => {
+  const noBuying = {
+    ...FLAT,
+    starter: { ...FLAT.starter, replenish: {} },
+  };
+  const out = usageAction(planModel(noBuying, "starter"), {
+    blocked: { kind: "rate", covers: "all" },
+    plans: noBuying,
+    currentPlan: "starter",
+    actor: { isAdmin: false },
+  });
+  assert.deepEqual(out, {
+    rung: "plan",
+    to: "scale",
+    actor: "self",
+    action: "request_plan_change",
+  });
+});

@@ -329,6 +329,16 @@ export interface OrgUsageMember extends MemberUsage {
   /** What caps this member: their seat pack, else the shared pool. 0 when nothing does,
    *  which is how a plan with no included allowance reports. */
   limit: number;
+  /**
+   * Whether that limit is theirs or the WORKSPACE'S.
+   *
+   * On a pooled plan every member is capped by the same pool, so `limit` is the same
+   * number on every row and it is not a number any one of them owns. Without this a
+   * renderer says "800 of 4 000" beside each of five people and invites the reader to add
+   * them up — and the aggregate did exactly that, reporting five times the credits the
+   * workspace has.
+   */
+  shared: boolean;
   /** Against that limit — the pack's own usage where there is one, else what the ledger
    *  says they spent in the cycle. */
   used: number;
@@ -355,11 +365,25 @@ export interface OrgUsage {
    * simply not the denominator of `percent`.
    */
   aggregate: {
+    /**
+     * PER-SEAT: the mean of the members' own percentages, each capped at 100 (see above).
+     * POOLED: the pool's own usage, because there is one number and every member shares
+     * it — a mean of identical fractions is that same fraction dressed as an average.
+     */
     percent: number;
     used: number;
+    /**
+     * PER-SEAT: the packs summed, which is what the workspace bought.
+     * POOLED: the pool, ONCE. It used to be summed per member, so a two-person workspace
+     * reported twice the credits it has and a ten-person one ten times.
+     */
     limit: number;
+    /** The shared pool, when the plan has one — so a caller never has to work out whether
+     *  `limit` above is a sum or a single ceiling. Null on a per-seat plan. */
+    pool: { size: number; used: number; remaining: number } | null;
     /** How many members the average is over — a caption needs it ("media di 3 posti"),
-     *  and a mean without its N is not a statement. */
+     *  and a mean without its N is not a statement. Zero on a pooled plan: the percentage
+     *  there is the pool's, not an average of anything. */
     seats: number;
     /** How many are at or over their cap right now. The answer to "who is at the wall",
      *  which nothing could ask before: `memberUsage` reports one member at a time and
@@ -395,11 +419,15 @@ export async function orgUsage(
   const rows = await memberUsage(adapter, config, input);
 
   const members: OrgUsageMember[] = rows.map((m) => {
+    // Their own pack where the plan gives them one; otherwise the pool, which caps them
+    // just as hard and belongs to everybody.
+    const shared = !m.pack && Boolean(org.pool);
     const limit = m.pack?.size ?? org.pool?.size ?? 0;
     const used = m.pack?.used ?? m.usedInCycle;
     return {
       ...m,
       limit,
+      shared,
       used,
       percent: limit ? Math.min(100, Math.round((used / limit) * 100)) : 0,
       overage: limit > 0 && used >= limit,
@@ -407,16 +435,33 @@ export async function orgUsage(
   });
 
   const measured = members.filter((m) => m.limit > 0);
+  const pool = org.pool
+    ? { size: org.pool.size, used: org.pool.used, remaining: org.pool.remaining }
+    : null;
   return {
     members: members.filter((m) => m.limit > 0 || m.used > 0),
-    aggregate: {
-      percent: measured.length
-        ? Math.round(measured.reduce((n, m) => n + m.percent, 0) / measured.length)
-        : 0,
-      used: measured.reduce((n, m) => n + m.used, 0),
-      limit: measured.reduce((n, m) => n + m.limit, 0),
-      seats: measured.length,
-      overage: members.filter((m) => m.overage).length,
-    },
+    aggregate: pool
+      ? {
+          // ONE pool, read once. Summing a shared ceiling per member is the arithmetic
+          // that made a two-person workspace look like it had twice the credits — and the
+          // more people a customer added, the further from true it got.
+          percent: pool.size ? Math.min(100, Math.round((pool.used / pool.size) * 100)) : 0,
+          used: pool.used,
+          limit: pool.size,
+          pool,
+          // Not a mean of anything, so there is no N to report.
+          seats: 0,
+          overage: members.filter((m) => m.overage).length,
+        }
+      : {
+          percent: measured.length
+            ? Math.round(measured.reduce((n, m) => n + m.percent, 0) / measured.length)
+            : 0,
+          used: measured.reduce((n, m) => n + m.used, 0),
+          limit: measured.reduce((n, m) => n + m.limit, 0),
+          pool: null,
+          seats: measured.length,
+          overage: members.filter((m) => m.overage).length,
+        },
   };
 }

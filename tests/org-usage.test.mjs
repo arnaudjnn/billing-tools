@@ -116,3 +116,67 @@ test("overage never pulls the average past what anyone can spend", async () => {
   assert.equal(out.members.find((m) => m.id === "u_full").percent, 100, "capped at 100");
   assert.equal(out.aggregate.percent, 50, "not 60 — 120% is not a share of an allowance");
 });
+
+// ── a POOLED workspace ───────────────────────────────────────────────────────
+//
+// One shared ceiling, and every member measured against it. The aggregate used to SUM that
+// ceiling per member, so a two-person workspace reported twice the credits it has and a
+// ten-person one ten times — and the more people a customer added, the further from true it
+// got. This is the consumer shape that is not seats (gtm-tools: flat plans, one pool), so
+// it is the case that decides whether the library adapts to a catalogue or to one catalogue.
+
+const POOLED = {
+  starter: {
+    sells: { kind: "flat", price: { monthly: 3_000, yearly: 30_000 } },
+    grant: { kind: "none" },
+    cap: { kind: "pool", credits: 4_000, onExhausted: "wallet" },
+    replenish: { purchase: { packs: [1_000] } },
+    sale: "self_serve",
+  },
+};
+
+test("the pool is the workspace's limit — once, not once per member", async () => {
+  __setStripeForTests(stripe());
+  const a = fakeAdapter({
+    members: ["u1", "u2"],
+    subscription: { plan: "starter", status: "active" },
+  });
+
+  const out = await orgUsage(a, config, {
+    orgId: "org_1",
+    plans: POOLED,
+    plan: "starter",
+    members: [{ id: "u1" }, { id: "u2" }],
+    // 1 000 of the shared 4 000, spent between them.
+    ledger: ledgerFor({ u1: 600, u2: 400 }),
+  });
+
+  assert.equal(out.aggregate.limit, 4_000, "the pool, not 8 000");
+  assert.equal(out.aggregate.used, 1_000);
+  assert.equal(out.aggregate.percent, 25, "the pool's own usage, not a mean of two fractions");
+  assert.deepEqual(out.aggregate.pool, { size: 4_000, used: 1_000, remaining: 3_000 });
+  // No mean was taken, so there is no N to report.
+  assert.equal(out.aggregate.seats, 0);
+});
+
+test("each member is capped by the pool, and says that it is not theirs", async () => {
+  __setStripeForTests(stripe());
+  const a = fakeAdapter({
+    members: ["u1", "u2"],
+    subscription: { plan: "starter", status: "active" },
+  });
+
+  const out = await orgUsage(a, config, {
+    orgId: "org_1",
+    plans: POOLED,
+    plan: "starter",
+    members: [{ id: "u1" }, { id: "u2" }],
+    ledger: ledgerFor({ u1: 600, u2: 400 }),
+  });
+
+  for (const m of out.members) {
+    assert.equal(m.limit, 4_000, "the pool caps them just as hard as a pack would");
+    assert.equal(m.shared, true, "…but it is the workspace's, so nobody may add these up");
+  }
+  assert.equal(out.members.find((m) => m.id === "u1").percent, 15);
+});

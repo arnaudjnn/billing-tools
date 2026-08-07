@@ -135,22 +135,30 @@ of each member's OWN percentage: a summed one is a fraction nobody can spend.`,
           members,
           ledger: opts.usageLedger,
         });
+        const pooled = out.aggregate.pool;
         return json({
           members: out.members.map((m) => ({
             member_id: m.id,
             caller_kind: m.kind,
             seat_type: m.seatType,
             limit: m.limit,
+            // Whether that limit is theirs or the workspace's. On a pooled plan it is the
+            // same number on every row, and adding them up is the mistake this prevents.
+            limit_shared: m.shared,
             used: m.used,
             percent_used: m.percent,
             overage: m.overage,
           })),
-          // Named for what it is. `percent` here is a MEAN of the members' own, and the
-          // totals beside it are not its denominator — printing them as one fraction is
-          // the arithmetic error this shape exists to prevent.
-          average_percent_used: out.aggregate.percent,
+          // Named for what each number IS, because the two plan shapes mean different
+          // things by "the workspace's usage":
+          //   per-seat → a MEAN of the members' own percentages, over `seats` of them,
+          //              with the totals beside it NOT its denominator;
+          //   pooled   → the pool's own usage, read once. It used to be summed per member,
+          //              so a two-person workspace reported twice the credits it has.
+          percent_used: out.aggregate.percent,
           total_used: out.aggregate.used,
           total_limit: out.aggregate.limit,
+          shared_pool: pooled,
           seats: out.aggregate.seats,
           in_overage: out.aggregate.overage,
         });

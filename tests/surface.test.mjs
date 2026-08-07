@@ -75,6 +75,12 @@ const SCARTOFFIE = {
 };
 
 const SEAT_TOOLS = ["list_seats", "assign_seat_type"];
+// The seat ASK is gated on the same capability but lives in the subscription registrar, so
+// it needs a catalogue to be passed at all — which is why it is named apart from the two
+// above rather than folded in with them. It used to register unconditionally, so a
+// catalogue that sells no seat at any price advertised "ask for a bigger one", a tool whose
+// best possible answer there is a refusal.
+const SEAT_ASK = "request_seat_change";
 const TOP_UP_TOOLS = [
   "list_top_up_requests",
   "request_top_up",
@@ -211,7 +217,7 @@ test("plan changes can be left to the app", () => {
 
 test("gtm-tools' shape drops the seat and top-up groups", () => {
   const tools = names({ plans: GTM_TOOLS });
-  for (const gone of [...SEAT_TOOLS, ...TOP_UP_TOOLS]) {
+  for (const gone of [...SEAT_TOOLS, SEAT_ASK, ...TOP_UP_TOOLS]) {
     assert.equal(tools.has(gone), false, `${gone} needs a plan that declares it`);
   }
   // What it DOES sell is all still there.
@@ -245,12 +251,12 @@ test("the two shapes differ by exactly the seven tools", () => {
   const gtm = names({ plans: GTM_TOOLS });
   const scart = names({ plans: SCARTOFFIE });
   const extra = [...scart].filter((n) => !gtm.has(n)).sort();
-  assert.deepEqual(extra, [...SEAT_TOOLS, ...TOP_UP_TOOLS].sort());
-  // 37 − 7. Both numbers are quoted in AGENTS.md, so both are asserted here. The pair that
-  // took them from 33 to 35 is `request_plan_change` / `resolve_plan_request`, which every
-  // catalogue with plans gets: asking to move up is the answer on exactly the plans that
-  // have no per-member allowance to top up.
-  assert.equal(gtm.size, 30);
+  assert.deepEqual(extra, [...SEAT_TOOLS, SEAT_ASK, ...TOP_UP_TOOLS].sort());
+  // 37 − 8. Both numbers are quoted in AGENTS.md, so both are asserted here.
+  // `request_plan_change` / `resolve_plan_request` stay on BOTH sides: asking to move up is
+  // the answer on exactly the plans that have no per-member allowance to top up, which is
+  // the pooled catalogue's only rung.
+  assert.equal(gtm.size, 29);
   assert.equal(scart.size, 37);
 });
 

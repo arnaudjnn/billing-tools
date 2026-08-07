@@ -34,18 +34,25 @@ import type { BillingAdapter, ResolvedConfig } from "../types.js";
 // to the free plan.
 
 function json(obj: unknown) {
-  return { content: [{ type: "text" as const, text: JSON.stringify(obj, null, 2) }] };
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(obj, null, 2) }],
+  };
 }
 function err(text: string) {
   return { isError: true as const, content: [{ type: "text" as const, text }] };
 }
 
 /** Map a PlanChangeError onto a tool error the caller can act on. */
-function toolError(e: unknown): { isError: true; content: Array<{ type: "text"; text: string }> } {
+function toolError(e: unknown): {
+  isError: true;
+  content: Array<{ type: "text"; text: string }>;
+} {
   if (e instanceof PlanChangeError) {
     // `detail` carries the candidate subscription ids for the ambiguous case and
     // the basket problems for an invalid one — both actionable, so pass them on.
-    const detail = Array.isArray(e.detail) ? ` [${e.detail.map(String).join(", ")}]` : "";
+    const detail = Array.isArray(e.detail)
+      ? ` [${e.detail.map(String).join(", ")}]`
+      : "";
     return err(`${e.message} (${e.code})${detail}`);
   }
   return err(e instanceof Error ? e.message : String(e));
@@ -74,9 +81,12 @@ export function registerSubscriptionTools(
   const seatsSchema = z
     .record(z.string(), z.number().int().min(0))
     .optional()
-    .describe('Seats per seat type, e.g. {"standard": 3, "premium": 1}. Defaults to the plan minimum');
+    .describe(
+      'Seats per seat type, e.g. {"standard": 3, "premium": 1}. Defaults to the plan minimum',
+    );
 
-  const rates = async (orgId: string) => (opts.taxRates ? await opts.taxRates(orgId) : undefined);
+  const rates = async (orgId: string) =>
+    opts.taxRates ? await opts.taxRates(orgId) : undefined;
 
   // The three tools that CHANGE a subscription need a plan a customer can move to
   // without a salesperson. On a catalogue that is entirely free + quote-only there
@@ -104,16 +114,21 @@ same arithmetic, so the number shown is the number charged.`,
         timing: z
           .enum(["auto", "now", "period_end"])
           .optional()
-          .describe("Default `auto`: upgrades apply now, downgrades at the period end"),
+          .describe(
+            "Default `auto`: upgrades apply now, downgrades at the period end",
+          ),
         proration: z
           .enum(["next_invoice", "invoice_now", "none"])
           .optional()
-          .describe("Must match what you pass to change_plan — it decides whether the difference is billed today"),
+          .describe(
+            "Must match what you pass to change_plan — it decides whether the difference is billed today",
+          ),
       },
       async ({ plan, interval, seats, timing, proration }) => {
         const auth = await enforceAdmin(adapter, "preview_plan_change");
         if ("isError" in auth) return auth;
-        if (!stripeConfigured()) return err("Billing is not configured (STRIPE_SECRET_KEY unset).");
+        if (!stripeConfigured())
+          return err("Billing is not configured (STRIPE_SECRET_KEY unset).");
         try {
           const p = await previewPlanChange(adapter, auth.orgId, {
             plans: opts.plans,
@@ -154,16 +169,21 @@ is pending resumes it. Preview the cost first with preview_plan_change.`,
         timing: z
           .enum(["auto", "now", "period_end"])
           .optional()
-          .describe("Default `auto`: upgrades now, downgrades at the period end"),
+          .describe(
+            "Default `auto`: upgrades now, downgrades at the period end",
+          ),
         proration: z
           .enum(["next_invoice", "invoice_now", "none"])
           .optional()
-          .describe("Default `next_invoice`: the prorated difference lands on the next invoice"),
+          .describe(
+            "Default `next_invoice`: the prorated difference lands on the next invoice",
+          ),
       },
       async ({ plan, interval, seats, timing, proration }) => {
         const auth = await enforceAdmin(adapter, "change_plan");
         if ("isError" in auth) return auth;
-        if (!stripeConfigured()) return err("Billing is not configured (STRIPE_SECRET_KEY unset).");
+        if (!stripeConfigured())
+          return err("Billing is not configured (STRIPE_SECRET_KEY unset).");
         try {
           const r = await changePlan(adapter, auth.orgId, {
             plans: opts.plans,
@@ -189,7 +209,10 @@ is pending resumes it. Preview the cost first with preview_plan_change.`,
             // Only on the first-purchase path: there is nothing to change yet, so
             // the caller has to send someone through Checkout.
             ...(r.kind === "checkout"
-              ? { checkout_url: r.checkoutUrl, checkout_session_id: r.sessionId }
+              ? {
+                  checkout_url: r.checkoutUrl,
+                  checkout_session_id: r.sessionId,
+                }
               : {}),
           });
         } catch (e) {
@@ -207,10 +230,19 @@ period ends. Reverse it before then with change_plan back to the current plan.`,
       async () => {
         const auth = await enforceAdmin(adapter, "cancel_plan");
         if ("isError" in auth) return auth;
-        if (!stripeConfigured()) return err("Billing is not configured (STRIPE_SECRET_KEY unset).");
+        if (!stripeConfigured())
+          return err("Billing is not configured (STRIPE_SECRET_KEY unset).");
         try {
-          const r = await cancelPlan(adapter, auth.orgId, { plans: opts.plans, currency: config.currency });
-          return json({ outcome: r.kind, plan: r.plan, status: r.status, effective_at: r.effectiveAt });
+          const r = await cancelPlan(adapter, auth.orgId, {
+            plans: opts.plans,
+            currency: config.currency,
+          });
+          return json({
+            outcome: r.kind,
+            plan: r.plan,
+            status: r.status,
+            effective_at: r.effectiveAt,
+          });
         } catch (e) {
           return toolError(e);
         }
@@ -225,17 +257,19 @@ scheduled, and which moves are available (the plan above, the plan below, whethe
 can be cancelled) — the same set the billing screen offers.`,
     {},
     async () => {
-        // A READ, so `enforceAccess` — any member may see which plan their workspace is
-        // on. It was `enforceAdmin`, copied from the three tools that CHANGE a plan
-        // beside it, which meant a member could not answer "what am I paying for".
-        const auth = await enforceAccess(adapter);
+      // A READ, so `enforceAccess` — any member may see which plan their workspace is
+      // on. It was `enforceAdmin`, copied from the three tools that CHANGE a plan
+      // beside it, which meant a member could not answer "what am I paying for".
+      const auth = await enforceAccess(adapter);
       if ("isError" in auth) return auth;
       const sub = (await adapter.getSubscription?.(auth.orgId)) ?? null;
       const md = (await adapter.getOrgMetadata?.(auth.orgId)) ?? {};
       const current = sub?.plan ?? null;
       const actions = planActions(opts.plans, current);
       const named = (key: string | null) =>
-        key ? (normalizePlans(opts.plans).find((m) => m.key === key)?.key ?? key) : null;
+        key
+          ? (normalizePlans(opts.plans).find((m) => m.key === key)?.key ?? key)
+          : null;
       return json({
         plan: current,
         status: sub?.status ?? null,
@@ -259,7 +293,9 @@ can be cancelled) — the same set the billing screen offers.`,
           // reading one per row would be a query per request on a page that already reads
           // plenty. Plan requests are filtered here; a seat one is filtered by the caller,
           // which is holding the seat map anyway (`list_seats`).
-          .filter((r) => r.kind === "seat" || !isSatisfied(r, opts.plans, current))
+          .filter(
+            (r) => r.kind === "seat" || !isSatisfied(r, opts.plans, current),
+          )
           .map((r) => ({
             id: r.id,
             member_id: r.memberId,
@@ -285,8 +321,15 @@ can be cancelled) — the same set the billing screen offers.`,
 has no per-seat allowance to top up. Does NOT change the plan or take a payment — it queues
 the ask for whoever can. The plan defaults to the next one up.`,
     {
-      plan: z.string().optional().describe("Plan key to ask for. Defaults to the next one up"),
-      note: z.string().max(140).optional().describe("A line for the owner, e.g. why"),
+      plan: z
+        .string()
+        .optional()
+        .describe("Plan key to ask for. Defaults to the next one up"),
+      note: z
+        .string()
+        .max(140)
+        .optional()
+        .describe("A line for the owner, e.g. why"),
     },
     async ({ plan, note }) => {
       const auth = await enforceAccess(adapter);
@@ -295,7 +338,8 @@ the ask for whoever can. The plan defaults to the next one up.`,
       // argument, so there is nothing to name someone else with.
       const principal = currentPrincipal();
       const memberId = principal?.userId ?? auth.orgId;
-      const current = (await adapter.getSubscription?.(auth.orgId))?.plan ?? null;
+      const current =
+        (await adapter.getSubscription?.(auth.orgId))?.plan ?? null;
 
       const res = await requestPlanChange(adapter, auth.orgId, {
         memberId,
@@ -309,7 +353,8 @@ the ask for whoever can. The plan defaults to the next one up.`,
           return json({
             status: "already_pending",
             pending: res.pending,
-            message: "Somebody has already asked to move this workspace up; it is waiting on an owner.",
+            message:
+              "Somebody has already asked to move this workspace up; it is waiting on an owner.",
           });
         }
         return err(
@@ -320,54 +365,79 @@ the ask for whoever can. The plan defaults to the next one up.`,
               : "Unknown plan.",
         );
       }
-      return json({ status: "requested", id: res.id, plan: res.plan, from: current });
+      return json({
+        status: "requested",
+        id: res.id,
+        plan: res.plan,
+        from: current,
+      });
     },
   );
 
-  server.tool(
-    "request_seat_change",
-    `Ask an owner to move you to a bigger seat. Use when a seat's per-cycle pack is exhausted
+  // A SEAT ask needs a catalogue with seats in it. This registered unconditionally, so a
+  // flat or pooled catalogue — one that sells no seat at any price — advertised a tool for
+  // asking to be moved to a bigger one. `nextSeatUp` has nothing to return there, so the
+  // best case was a refusal and the honest case is not offering it: the same gate
+  // `list_seats` and `assign_seat_type` have always used.
+  if (caps.seats) {
+    server.tool(
+      "request_seat_change",
+      `Ask an owner to move you to a bigger seat. Use when a seat's per-cycle pack is exhausted
 and a better seat exists — that is the answer, not a top-up, because a bigger seat raises the
 pack permanently while a top-up buys a few days. Does NOT change the seat or take a payment.`,
-    {
-      seat_type: z.string().optional().describe("Seat type to ask for. Defaults to the next one up"),
-      note: z.string().max(140).optional().describe("A line for the owner, e.g. why"),
-    },
-    async ({ seat_type, note }) => {
-      const auth = await enforceAccess(adapter);
-      if ("isError" in auth) return auth;
-      const principal = currentPrincipal();
-      const memberId = principal?.userId ?? auth.orgId;
-      const current = (await adapter.getSubscription?.(auth.orgId))?.plan ?? null;
-      const seat = await getSeatType(adapter, auth.orgId, memberId);
+      {
+        seat_type: z
+          .string()
+          .optional()
+          .describe("Seat type to ask for. Defaults to the next one up"),
+        note: z
+          .string()
+          .max(140)
+          .optional()
+          .describe("A line for the owner, e.g. why"),
+      },
+      async ({ seat_type, note }) => {
+        const auth = await enforceAccess(adapter);
+        if ("isError" in auth) return auth;
+        const principal = currentPrincipal();
+        const memberId = principal?.userId ?? auth.orgId;
+        const current =
+          (await adapter.getSubscription?.(auth.orgId))?.plan ?? null;
+        const seat = await getSeatType(adapter, auth.orgId, memberId);
 
-      const res = await requestSeatChange(adapter, auth.orgId, {
-        memberId,
-        plans: opts.plans,
-        currentPlan: current,
-        currentSeatType: seat,
-        ...(seat_type ? { seatType: seat_type } : {}),
-        ...(note ? { note } : {}),
-      });
-      if (!res.ok) {
-        if (res.reason === "already_pending") {
-          return json({
-            status: "already_pending",
-            pending: res.pending,
-            message: "You already have a request waiting on an owner.",
-          });
+        const res = await requestSeatChange(adapter, auth.orgId, {
+          memberId,
+          plans: opts.plans,
+          currentPlan: current,
+          currentSeatType: seat,
+          ...(seat_type ? { seatType: seat_type } : {}),
+          ...(note ? { note } : {}),
+        });
+        if (!res.ok) {
+          if (res.reason === "already_pending") {
+            return json({
+              status: "already_pending",
+              pending: res.pending,
+              message: "You already have a request waiting on an owner.",
+            });
+          }
+          return err(
+            res.reason === "no_upgrade"
+              ? "There is no better seat to ask for on this plan."
+              : res.reason === "already_on_it"
+                ? `You are already on ${res.seatType} or better.`
+                : "Unknown seat type.",
+          );
         }
-        return err(
-          res.reason === "no_upgrade"
-            ? "There is no better seat to ask for on this plan."
-            : res.reason === "already_on_it"
-              ? `You are already on ${res.seatType} or better.`
-              : "Unknown seat type.",
-        );
-      }
-      return json({ status: "requested", id: res.id, seat_type: res.seatType, from: seat });
-    },
-  );
+        return json({
+          status: "requested",
+          id: res.id,
+          seat_type: res.seatType,
+          from: seat,
+        });
+      },
+    );
+  }
 
   server.tool(
     "resolve_plan_request",
@@ -376,12 +446,19 @@ does NOT move anything — use change_plan or assign_seat_type for that, and cha
 a payment.`,
     {
       request_id: z.string().describe("The id from get_plan's plan_requests"),
-      decision: z.enum(["done", "denied"]).describe("`done` once you have acted on it"),
+      decision: z
+        .enum(["done", "denied"])
+        .describe("`done` once you have acted on it"),
     },
     async ({ request_id, decision }) => {
       const auth = await enforceAdmin(adapter, "resolve_plan_request");
       if ("isError" in auth) return auth;
-      const r = await resolvePlanRequest(adapter, auth.orgId, request_id, decision);
+      const r = await resolvePlanRequest(
+        adapter,
+        auth.orgId,
+        request_id,
+        decision,
+      );
       if (!r) return err(`Request not found or already handled: ${request_id}`);
       return json({ status: r.status, request_id, plan: r.plan });
     },
