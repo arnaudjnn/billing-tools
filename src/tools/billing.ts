@@ -55,6 +55,11 @@ export function registerBillingOnlyTools(
   topUp: TopUpToolOptions = {},
   caps: ToolCapabilities = ALL_TOOL_CAPABILITIES,
 ) {
+  /** The gate on spending the workspace's money — `config.roles.purchase`, in one place so
+   *  the two tools that charge a card cannot answer it differently. */
+  const purchaser = (action: string) =>
+    config.roles.purchase === "member" ? enforceAccess(adapter) : enforceAdmin(adapter, action);
+
   // Resolve (or lazily create) the org's Stripe customer.
   const customerId = async (orgId: string): Promise<string> => {
     const existing = await getBillingCustomerId(adapter, orgId);
@@ -153,7 +158,13 @@ Quoted from the same Stripe tax rates buy_credits will charge, so the two agree.
         amount: z.number().min(5).max(200000).describe("Amount in your currency to purchase (e.g. 10 = 1000 credits)"),
       },
       async ({ amount }) => {
-        const auth = await enforceAccess(adapter);
+        // Spending the workspace's money is an owner action, like every other write that
+        // costs something (`change_plan`, `assign_seat_type`, `grant_top_up`). This was the
+        // one that was not: any member holding an org key could charge the card the owner
+        // saved, while the consuming app's own buy button refused them — a rule the frontend
+        // enforced and the API did not. `config.roles.purchase: "member"` restores that for
+        // a deployment where members hold their own cards.
+        const auth = await purchaser("buy_credits");
         if ("isError" in auth) return auth;
         if (!stripeConfigured()) return NO_STRIPE;
         const cid = await customerId(auth.orgId);
@@ -198,7 +209,9 @@ Requires a saved card (use buy_credits first).`,
         reload_to: z.number().min(1).describe("Target balance after reload"),
       },
       async ({ enabled, threshold, reload_to }) => {
-        const auth = await enforceAccess(adapter);
+        // Arming a charge that repeats without anybody present is the same act as making
+        // one, so it answers to the same rule.
+        const auth = await purchaser("set_auto_reload");
         if ("isError" in auth) return auth;
         if (!stripeConfigured()) return NO_STRIPE;
         if (reload_to <= threshold) {

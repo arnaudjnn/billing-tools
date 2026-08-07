@@ -13,7 +13,7 @@ import {
 } from "../topup.js";
 import { currentCycle, resolveAllowance, topUpTargetOf } from "../allowance.js";
 import { assignSeatType, listSeatAssignments, seatAssignable, seatCapacity } from "../seats.js";
-import { defaultSeatOf, isTopSeat, seatLadder, seatTypeExists } from "../ladder.js";
+import { defaultSeatOf, isTopSeat, seatLadder, seatTypeExists, usageAction } from "../ladder.js";
 import { normalizePlans, planModel, type PlanCatalog } from "../plans.js";
 import { ALL_TOOL_CAPABILITIES, type ToolCapabilities } from "../plan-model.js";
 import { callerWithSeat, usageSummary } from "../usage.js";
@@ -153,12 +153,41 @@ per billing cycle), how much of each is used, and when each resets.`,
           resets_at: w.resetsAt ? new Date(w.resetsAt).toISOString() : null,
         }));
 
+        // WHAT TO DO ABOUT IT, on the same answer that says you are blocked. A caller who
+        // has just been refused needs the next call, and working it out from the windows
+        // means re-deriving the ladder — which is what every consumer did, in a UI, where an
+        // agent could not see it. `null` when nothing is refusing them: there is no next
+        // step to take at 40%.
+        const state = await resolveAllowance(adapter, config, {
+          orgId: auth.orgId,
+          plans: opts.plans,
+          plan,
+          ledger: opts.usageLedger,
+          caller: { kind: caller_kind ?? "api", id: caller_id ?? auth.orgId },
+        });
+        const blocked = topUpTargetOf(state);
+        const next = usageAction(planModel(opts.plans, plan), {
+          blocked: blocked
+            ? blocked.kind === "rate"
+              ? { kind: "rate" as const, covers: blocked.covers }
+              : { kind: "pack" as const }
+            : null,
+          seatType: summary.seat?.type ?? null,
+          plans: opts.plans,
+          currentPlan: plan,
+          // An org key with no principal behind it is the org itself, hence owner-level —
+          // the same reading `enforceAdmin` applies.
+          actor: { isAdmin: currentPrincipal()?.isAdmin ?? true },
+          purchase: config.roles.purchase,
+        });
+
         return json({
           plan: summary.plan,
           windows,
           wallet_balance: summary.wallet,
           cycle: { start: new Date(summary.cycle.start).toISOString(), key: summary.cycle.key },
           checked_at: new Date(summary.at).toISOString(),
+          next_step: next,
         });
       },
     );

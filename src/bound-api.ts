@@ -70,6 +70,7 @@ import {
   isSatisfied,
   listPlanRequests,
   nextUsageAsk,
+  usageAction,
   pendingPlanRequest,
   requestPlanChange,
   requestSeatChange,
@@ -241,7 +242,13 @@ export function createBoundApi(deps: BoundApiDeps) {
          * top-up gets a few days and is in the same place next week, which is the mistake
          * this exists to prevent.
          */
-        next: async (orgId: string, memberId: string) => {
+        next: async (
+          orgId: string,
+          memberId: string,
+          /** Who is asking. Omit and the answer is owner-level, the reading an org API key
+           *  with no principal behind it already gets from `enforceAdmin`. */
+          actor?: { isAdmin?: boolean },
+        ) => {
           const plan = await planOf(orgId);
           const model = planModel(plans, plan);
           // The same resolved caller the usage SCREEN uses, so the ladder and the bars cannot
@@ -252,14 +259,23 @@ export function createBoundApi(deps: BoundApiDeps) {
             caller: { kind: "user" as const, id: memberId, seatType: undefined as string | undefined },
           });
           const state = await resolveAllowance(adapter, config, { orgId, plans, plan, ledger, caller });
-          return nextUsageAsk(model, {
+          const input = {
             blocked: topUpTargetOf(state),
             // The RESOLVED seat, not the raw assignment: an unassigned member draws the
             // default seat, so the rung above is measured from there.
             seatType: caller?.seatType ?? null,
             plans,
             currentPlan: plan,
-          });
+          };
+          const ask = nextUsageAsk(model, input);
+          // The rung AND who may act on it. The second half used to be the consumer's, and
+          // every consumer worked it out again in the component that draws the button — so
+          // an agent hitting the same wall got the rung and no idea whether buying was its
+          // call. `action` names the next tool, which is the whole answer for a headless
+          // caller and one branch for a UI.
+          return ask
+            ? { ...ask, ...usageAction(model, { ...input, actor, purchase: config.roles.purchase })! }
+            : null;
         },
         resolve: (orgId: string, requestId: string, decision: "done" | "denied") =>
           resolvePlanRequest(adapter, orgId, requestId, decision),

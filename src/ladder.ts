@@ -100,9 +100,15 @@ export function seatTypeExists(model: PlanModel, seatType: string): boolean {
  *  A quote-only plan ranks above everything priced, because nothing self-serve exceeds it. */
 export function planRank(model: PlanModel): number {
   if (model.sale === "quote") return Number.MAX_SAFE_INTEGER;
-  const basket = defaultBasket(model);
   if (model.sells.kind === "flat") return model.sells.price.monthly;
-  return model.seatTypes.reduce((sum, s) => sum + (basket[s.key] ?? 0) * s.price.monthly, 0);
+  const basket = defaultBasket(model);
+  const priced = model.seatTypes.reduce((sum, s) => sum + (basket[s.key] ?? 0) * s.price.monthly, 0);
+  // A seat plan whose types declare no `min` has an EMPTY default basket, which priced the
+  // plan at zero — so it tied with the free tier and `planActions` reported no upgrade
+  // above it. "There is nothing better than free" is not something a catalogue should be
+  // able to say by omission, so an empty basket falls back to one seat at the entry price.
+  if (priced > 0) return priced;
+  return seatLadder(model)[0]?.price.monthly ?? 0;
 }
 
 export interface PlanActions {
@@ -260,4 +266,87 @@ export function nextUsageAsk(
   // product — and if there is nothing above them, there is nothing to offer at all.
   const up = planActions(input.plans, input.currentPlan ?? null).upgradeTo;
   return up ? { ask: "plan", to: up } : null;
+}
+
+/** Which tool carries out (or asks for) a rung. Tool names, deliberately: the answer to
+ *  "I am blocked, now what" should name the next call, not a UI concept a headless caller
+ *  has to translate. */
+export type UsageActionTool =
+  | "assign_seat_type"
+  | "buy_credits"
+  | "grant_top_up"
+  | "change_plan"
+  | "request_seat_change"
+  | "request_top_up"
+  | "request_plan_change";
+
+export interface UsageAction {
+  /** The rung, from `nextUsageAsk`. */
+  rung: "seat" | "credits" | "usage" | "plan";
+  /** What the rung points at: a seat type, or a plan key. Absent for `credits`/`usage`. */
+  to?: string;
+  /** Whether the person looking at this can carry it out, or has to ask an admin. */
+  actor: "self" | "admin";
+  /** The call that does it — the action itself when `actor` is "self", the request when not. */
+  action: UsageActionTool;
+}
+
+/**
+ * The rung, and WHO may act on it. `nextUsageAsk` answers the first half; this answers both.
+ *
+ * The second half used to be the consumer's, and the note here said so. It came back as a
+ * gap: every act on a rung is an owner action — `change_plan`, `assign_seat_type` (a seat is
+ * a price), `grant_top_up` — so a member's only route is a request, and each app worked that
+ * out again in a React component. Scartoffie's lived in the component that renders the
+ * button, which meant an agent hitting the same wall through the API got the rung and no
+ * idea that buying was not its call.
+ *
+ * `purchase` is the one part that is genuinely a deployment's choice (`config.roles.purchase`),
+ * because a product whose members hold their own cards is a real arrangement. Everything else
+ * follows from gates this library already enforces, so it is read rather than configured
+ * twice — and `buy_credits` enforces the same value, which is what makes this answer true
+ * rather than advisory.
+ */
+export function usageAction(
+  model: PlanModel | null,
+  input: {
+    blocked: { kind: "rate" | "pack"; covers?: "all" | "included" } | null;
+    seatType?: string | null;
+    plans: PlanCatalog;
+    currentPlan?: string | null;
+    /** The person asking. An org API key with no principal behind it IS the org, so it is
+     *  owner-level — the same reading `enforceAdmin` applies. */
+    actor?: { isAdmin?: boolean };
+    /** `config.roles.purchase`. Defaults to the config default, not to permissive. */
+    purchase?: "admin" | "member";
+  },
+): UsageAction | null {
+  const ask = nextUsageAsk(model, input);
+  if (!ask) return null;
+
+  const isAdmin = input.actor?.isAdmin ?? true;
+  const mayBuy = isAdmin || (input.purchase ?? "admin") === "member";
+
+  switch (ask.ask) {
+    case "seat":
+      return isAdmin
+        ? { rung: "seat", to: ask.to, actor: "admin", action: "assign_seat_type" }
+        : { rung: "seat", to: ask.to, actor: "self", action: "request_seat_change" };
+    case "credits":
+      // The one rung where the answer is money rather than permission, so it is the one
+      // rung `roles.purchase` can move.
+      return mayBuy
+        ? { rung: "credits", actor: "admin", action: "buy_credits" }
+        : { rung: "credits", actor: "self", action: "request_top_up" };
+    case "usage":
+      // Nothing to buy: this window is the product's own pace, and only an exception lifts
+      // it. The member asks, an admin grants.
+      return isAdmin
+        ? { rung: "usage", actor: "admin", action: "grant_top_up" }
+        : { rung: "usage", actor: "self", action: "request_top_up" };
+    case "plan":
+      return isAdmin
+        ? { rung: "plan", to: ask.to, actor: "admin", action: "change_plan" }
+        : { rung: "plan", to: ask.to, actor: "self", action: "request_plan_change" };
+  }
 }

@@ -21,7 +21,9 @@ export {
   seatLadder,
   seatRank,
   seatTypeExists,
+  usageAction,
   type PlanRequest,
+  type UsageAction,
 } from "./ladder.js";
 
 // "Can we move up a plan?" — the ask a member makes when extra allowance is not the answer.

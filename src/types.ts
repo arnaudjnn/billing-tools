@@ -186,6 +186,28 @@ export interface BillingConfig {
    * simply no single place that said what the account does.
    */
   tax?: TaxConfig;
+  /**
+   * WHO, inside a workspace, may spend its money.
+   *
+   * Every other write that costs something is already an owner action, enforced in one
+   * place: `change_plan`, `cancel_plan`, `assign_seat_type` (a seat is a price),
+   * `grant_top_up`, `set_spend_controls`. Buying credits and arming auto-reload were not,
+   * so an org API key held by any member could charge the card the owner saved — while the
+   * consuming app's own UI refused exactly that. A rule the frontend enforces and the API
+   * does not is the gap this library exists to close, so it moves here.
+   *
+   * `"admin"` (the default) means `buy_credits` and `set_auto_reload` require an admin
+   * principal, the same way the rest of the money surface does. `"member"` restores the old
+   * behaviour for a deployment where anyone may top up — say a per-seat product whose
+   * members hold their own cards.
+   *
+   * This is also what `usageAction` reads to answer "do I buy this, or ask someone": a
+   * member on a blocked window is offered a REQUEST precisely because the purchase is not
+   * theirs to make.
+   */
+  roles?: {
+    purchase?: "admin" | "member";
+  };
   /** What the payment forms offer. See `defaultPaymentMethodConfig`. */
   paymentMethods?: {
     /**
@@ -328,8 +350,8 @@ export type TaxConfig = TaxConfigCommon &
       }
   );
 
-export type ResolvedConfig = Required<Omit<BillingConfig, "tax" | "paymentMethods">> &
-  Pick<BillingConfig, "tax" | "paymentMethods">;
+export type ResolvedConfig = Required<Omit<BillingConfig, "tax" | "paymentMethods" | "roles">> &
+  Pick<BillingConfig, "tax" | "paymentMethods"> & { roles: Required<NonNullable<BillingConfig["roles"]>> };
 
 
 /** `taxModeOf` without importing tax.ts, which imports this file. Same precedence. */
@@ -369,6 +391,9 @@ export function resolveConfig(c: BillingConfig): ResolvedConfig {
     defaultLocale: c.defaultLocale ?? "",
     tax: c.tax,
     paymentMethods: c.paymentMethods,
+    // Spending the workspace's money is an owner action unless a deployment says otherwise
+    // — the same default the rest of the money surface already had, now stated once.
+    roles: { purchase: c.roles?.purchase ?? "admin" },
   };
 }
 
