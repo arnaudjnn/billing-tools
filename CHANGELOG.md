@@ -1,3 +1,10 @@
+# [19.1.0](https://github.com/arnaudjnn/billing-tools/compare/v19.0.1...v19.1.0) (2026-08-07)
+
+
+### Features
+
+* **usage:** the workspace reading, and who is at the wall ([5950e07](https://github.com/arnaudjnn/billing-tools/commit/5950e07a64d02ffc5255f8d376e9b49ff54c24b0))
+
 ## [19.0.1](https://github.com/arnaudjnn/billing-tools/compare/v19.0.0...v19.0.1) (2026-08-07)
 
 
