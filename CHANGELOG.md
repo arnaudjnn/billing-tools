@@ -1,3 +1,16 @@
+# [17.0.0](https://github.com/arnaudjnn/billing-tools/compare/v16.0.0...v17.0.0) (2026-08-07)
+
+
+* feat(ladder)!: who may act on a rung, and the tool that does it ([ca46f0d](https://github.com/arnaudjnn/billing-tools/commit/ca46f0df18cd480d25dcbe9455e6613955569a65))
+
+
+### BREAKING CHANGES
+
+* `buy_credits` and `set_auto_reload` require an admin principal by
+default. Set `roles.purchase: "member"` to restore the previous behaviour.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
 # [16.0.0](https://github.com/arnaudjnn/billing-tools/compare/v15.24.0...v16.0.0) (2026-08-07)
 
 
