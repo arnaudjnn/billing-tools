@@ -21,6 +21,9 @@ export {
   type Principal,
   enforceCredits,
   enforceMember,
+  // Is this org one of ours (an `internalDomains` match)? The metering gate asks it on
+  // every call; a consumer deciding whether to show a paywall could not ask it at all.
+  isInternalOrg,
 } from "./auth.js";
 
 // The two SDK clients. Both are memoised singletons that read the env lazily,
@@ -107,8 +110,6 @@ export {
 export {
   changePlan,
   cancelPlan,
-  planActions,
-  planRank,
   // The READ side of the same arithmetic, and it was missing from this barrel:
   // `preview_plan_change` used it internally, so an agent could quote a change and
   // a server action could not. That is the parity rule inverted — a confirm dialog
@@ -122,7 +123,6 @@ export {
   type PlanChangeTiming,
   type PlanChangeErrorCode,
   type ProrationPolicy,
-  type PlanActions,
 } from "./subscription.js";
 
 // Pricing view models: the plan config turned into what a surface renders. Also
@@ -184,6 +184,9 @@ export {
   usageSummary,
   memberUsage,
   resolveSeat,
+  // Which seat a caller draws, resolved the way the METER resolves it — the answer an
+  // allowance read and a badge must agree on. Reachable only through `api.usage.*` before.
+  callerWithSeat,
   type UsageSummary,
   type UsageSummaryInput,
   type UsageWindow,
@@ -282,7 +285,26 @@ export {
   assignSeatType,
   listSeatAssignments,
   getSeatType,
+  // The ceiling: is this seat purchased, and is the type at its own max. It gates
+  // `assign_seat_type` and `api.seats.assign`, and until now a consumer could not ask the
+  // question before offering the control — so a picker offered seats the write refused.
+  seatAssignable,
+  // Everything this member holds in one org, cleared when they leave it.
+  clearMemberRecords,
 } from "./seats.js";
+
+// The queued ask for a bigger seat or a higher plan. The RUNGS (`nextUsageAsk`,
+// `nextSeatUp`, `isSatisfied`, …) arrive from the pure `/plans` leaf; these five need the
+// adapter because they read and write the queue. The whole module was reachable only as a
+// method on `createBoundApi(...)` — so a consumer holding an adapter could not list, raise
+// or resolve a request without going through the bound API it may not have built.
+export {
+  listPlanRequests,
+  pendingPlanRequest,
+  requestPlanChange,
+  requestSeatChange,
+  resolvePlanRequest,
+} from "./plan-request.js";
 
 // WorkOS magic-auth
 export { sendMagicAuth, verifyMagicAuth } from "./magic-auth.js";
@@ -415,6 +437,10 @@ export {
   type TaxRegistration,
   type TaxNotes,
   noteFor,
+  // Thrown when a charge would carry a rate the library knows to be wrong. A
+  // consumer has to be able to CATCH it — an error class reachable from no entry
+  // point can only be caught by matching its message, which is not a contract.
+  ApproximateTaxError,
 } from "./tax.js";
 // Stripe Tax configuration as code (origin address, defaults, registrations).
 export {

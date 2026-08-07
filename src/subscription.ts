@@ -122,51 +122,11 @@ function periodEndOf(sub: Stripe.Subscription): string | null {
   return ends.length ? new Date(Math.max(...ends) * 1000).toISOString() : null;
 }
 
-/** What a plan costs per month for its default basket — the ordering a UI means
- *  by "higher" and "lower". A quoted plan sorts above every priced one. */
-export function planRank(model: PlanModel): number {
-  if (model.sale === "quote") return Number.MAX_SAFE_INTEGER;
-  const basket = defaultBasket(model);
-  if (model.sells.kind === "flat") return model.sells.price.monthly;
-  return model.seatTypes.reduce((sum, s) => sum + (basket[s.key] ?? 0) * s.price.monthly, 0);
-}
-
-export interface PlanActions {
-  /** The next plan up, or null when already at the top. */
-  upgradeTo: string | null;
-  /** The next plan down, or null when already at the bottom. */
-  downgradeTo: string | null;
-  /** Whether there is a paid subscription to end. False on a free plan — there
-   *  is nothing to cancel, so the action shouldn't be offered. */
-  canCancel: boolean;
-  /** The plan a cancellation lands on. */
-  cancelTo: string | null;
-}
-
-/**
- * Which of upgrade / downgrade / cancel apply to an org on `currentPlan`.
- *
- * Pure, so a UI can hide what doesn't apply instead of offering an action that
- * will be refused: no "upgrade" on the top plan, no "cancel" on a free one.
- */
-export function planActions(plans: PlanCatalog, currentPlan: string | null): PlanActions {
-  const models = normalizePlans(plans)
-    .filter((m) => m.sale !== "legacy" && !m.display?.hidden)
-    .sort((a, b) => planRank(a) - planRank(b));
-  const free = models.find((m) => m.sale === "free") ?? null;
-  const current = currentPlan ? models.find((m) => m.key === currentPlan) : null;
-  // No recorded plan behaves as the free tier: nothing is being billed.
-  const rank = current ? planRank(current) : (free ? planRank(free) : 0);
-  const above = models.filter((m) => planRank(m) > rank);
-  const below = models.filter((m) => planRank(m) < rank);
-  const isPaid = current ? current.sells.kind !== "nothing" && current.sale !== "free" : false;
-  return {
-    upgradeTo: above[0]?.key ?? null,
-    downgradeTo: below[below.length - 1]?.key ?? null,
-    canCancel: isPaid,
-    cancelTo: free?.key ?? null,
-  };
-}
+// `planRank` / `planActions` are pure catalogue arithmetic and now live in `ladder.ts`
+// beside the seat rungs, so a pricing page can order plans without importing Stripe.
+// Re-exported here because this is where every consumer has always imported them from.
+export { planActions, planRank, type PlanActions } from "./ladder.js";
+import { planRank } from "./ladder.js";
 
 async function liveSubscriptions(customerId: string): Promise<Stripe.Subscription[]> {
   const out: Stripe.Subscription[] = [];

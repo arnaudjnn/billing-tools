@@ -237,6 +237,75 @@ test("the entry points resolve to files that exist", () => {
   }
 });
 
+test("nothing compiled is reachable from no entry point", async () => {
+  // A function can be written, tested, documented and SHIPPED, and still be
+  // impossible to import. `defaultSeatOf` was: it sat in `dist/plan-request.js`
+  // with the rest of that module — `nextUsageAsk`, `seatRank`, `nextSeatUp`,
+  // `isSatisfied`, the queue writers — and no entry point named any of them. A
+  // consumer that needed "which seat does an unassigned member draw" got
+  // `TS2305: has no exported member`, and re-implemented the ordering rule in its
+  // own UI. That is the failure mode this test exists for: not a missing feature,
+  // a feature nobody can reach, which looks identical to the consumer and is far
+  // more expensive, because their copy then disagrees with the meter.
+  //
+  // The rule is deliberately about RUNTIME names. Types are checked by tsc at the
+  // consumer's build, and a few (`ToolErrorResult`, the adapter internals) are
+  // genuinely implementation detail.
+  // The React entries are out of scope, in both directions: they cannot be imported
+  // here (they reach `next/cache`, which resolves only inside a Next build) and their
+  // exports are components, whose reachability a consumer discovers the moment they
+  // render one. Everything else — the whole engine — is in.
+  const isReact = (p) => p.includes("/ui/");
+  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+  const entries = new Set(
+    Object.values(pkg.exports)
+      .flatMap((map) => Object.values(map))
+      .filter((t) => t.endsWith(".js") && !isReact(t)),
+  );
+  const reachable = new Set();
+  for (const target of entries) {
+    for (const name of Object.keys(await import(join(ROOT, target)))) reachable.add(name);
+  }
+
+  // Every `export declare function|const|class` in dist, minus the deliberate
+  // exceptions. Test seams and per-registrar internals are the only ones.
+  const EXEMPT = new Set([
+    // Test seams: the suite reaches them by path, a consumer never should.
+    "__setStripeForTests",
+    "__setWorkOSForTests",
+    "__setPlanPricesForTests",
+    "__setVatValidatorForTests",
+    // The five tool registrars. `registerBillingTools` composes them and is
+    // exported; registering one group alone is not a supported arrangement.
+    "registerKeyTools",
+    "registerBillingOnlyTools",
+    "registerManagementTools",
+    "registerProfileTools",
+    "registerSubscriptionTools",
+    // Internal helpers that are exported only so a sibling module can use them.
+    // Each is one half of something whose OTHER half is public, which is the test
+    // for "internal": a consumer reaching for it has already been given the answer.
+    "retrieveBillingCustomer", //   shared Stripe read behind the balance + controls
+    "usageSinceWindows", //         the ledger walk behind `usageSummary`
+    "meterIdFor", //                the meter id behind `stripeMeterUsageLedger`
+    "reportUsageFault", //          the EMITTER; consumers subscribe via `onUsageFault`
+    "webhookUrlFromArgv", //        argv parsing for `runBillingDoctor`
+    "workosEnvironmentOf", //       ditto
+    "environmentMismatch", //       ditto
+  ]);
+
+  const orphans = [];
+  for (const file of sources(join(ROOT, "dist")).filter((f) => f.endsWith(".d.ts") && !isReact(f))) {
+    const text = readFileSync(file, "utf8");
+    for (const m of text.matchAll(/^export declare (?:async )?(?:function|const|class) (\w+)/gm)) {
+      const name = m[1];
+      if (EXEMPT.has(name) || reachable.has(name)) continue;
+      orphans.push(`${name} (${file.slice(ROOT.length)})`);
+    }
+  }
+  assert.deepEqual(orphans, [], "compiled but exported from no entry point");
+});
+
 // ── The CLI half of the parity rule ──────────────────────────────────────────
 //
 // REST and MCP get parity structurally, because `createDispatcher` captures every

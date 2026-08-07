@@ -455,7 +455,7 @@ The root re-exports 45 modules, so `import { planModel } from "@arnaudjnn/billin
 
 | entry | for | reaches |
 |---|---|---|
-| `/plans` | the catalogue + its arithmetic + the adapter/config types | **nothing** |
+| `/plans` | the catalogue + its arithmetic + **the rungs** (`ladder.ts`) + the adapter/config types | **nothing** |
 | `/pricing` | `derivePlanViews`, `deriveCompareTable`, the markdown renderers | **nothing** |
 | `/agent-auth` | auth.md, MPP, the OAuth proxy | WorkOS, Stripe, eu-vat-rates-data |
 | `/routes` | the three Next route factories + `ensureWebhookEndpoint` | MCP SDK, mcp-handler, Stripe, zod |
@@ -470,6 +470,8 @@ The root re-exports 45 modules, so `import { planModel } from "@arnaudjnn/billin
 Two things that look like dependencies and are not. **`commander` is nowhere**, including the root: `cli/commands.ts` imports `Command` as a *type*, which tsc erases. **`pg` is nowhere** either, and nothing could want it — the package touches no database at all.
 
 `createBilling` stays at the root deliberately: it composes the tools, all three routes, agent-auth and MPP, so it needs the whole graph, and being one module guarantees the single instance its shared AsyncLocalStorage depends on. Same for `checkPlansConfig`, which reads Stripe from `doctor.ts` — a deploy-time call, not one a page makes.
+
+**Nothing compiled may be reachable from no entry point**, and `tests/conventions.test.mjs` fails on it by name. A function can be written, tested, documented and published and still be impossible to import — `defaultSeatOf` was, along with the whole of `plan-request.ts`: `nextUsageAsk`, `seatRank`, `nextSeatUp`, `isSatisfied`, the queue writers. A consumer that needed "which seat does an unassigned member draw" got `TS2305: has no exported member` and re-implemented the ordering rule in its own UI, where it then disagreed with the meter. That is worse than a missing feature, because from the outside it looks identical to one and the workaround ships. The rungs now live in `src/ladder.ts` — pure arithmetic, on the `/plans` leaf, so a seat picker or a pricing table can reach one without loading Stripe — and `plan-request.ts` / `subscription.ts` re-export from it so no existing import moved. The same test caught `dist` never being cleaned before a build: modules deleted from `src` stayed in the tarball, so `build` is now `clean && tsc`.
 
 The root DERIVES its pure half (`export * from "./entries/plans.js"`) rather than hand-listing names, because a hand-maintained list drifts. **The hazard `export *` introduces is the mirror image:** TypeScript silently drops any name two `export *`s both provide. `plan-model` and `checkout` each export a `Quantities` — the barrel keeps checkout's under its own name and plan-model's as `PlanQuantities`, which works only because an explicit export beats `export *`. `tests/conventions.test.mjs` asserts every runtime name the leaf provides is reachable from the barrel, and that both `Quantities` survive.
 

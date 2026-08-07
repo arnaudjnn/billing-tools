@@ -26,6 +26,16 @@
 // rateLimitsOf, cycleWindowFor, validateBasket, toolCapabilities, …
 export * from "../plan-model.js";
 
+// The RUNGS: which seat is better, which plan is better, and which ask to offer a member
+// who is blocked (`seatLadder`, `defaultSeatOf`, `nextSeatUp`, `isTopSeat`, `planRank`,
+// `planActions`, `nextUsageAsk`). Pure arithmetic over the catalogue, and it belongs on
+// this leaf for the reason the leaf exists: the screens that need it most — a seat picker,
+// a pricing table, the "you are blocked, here is the answer" control — are client
+// components, and reaching a rung through the root barrel loads Stripe and the MCP SDK to
+// compare two numbers. Half of this was unreachable from ANY entry point until now, which
+// is exactly why consumers re-implemented the ordering rule per screen.
+export * from "../ladder.js";
+
 // Localisation of app-authored strings (`Localized`, `resolveLocalized`) and the
 // library's own English defaults (`DEFAULT_MESSAGES`). A plan's display copy is
 // localised, so the plan model cannot be read without these.
