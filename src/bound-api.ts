@@ -42,11 +42,15 @@ import {
 import { getBillingProfile, updateBillingProfile } from "./billing-profile.js";
 import { listCustomerTaxIds, setCustomerTaxId } from "./tax-ids.js";
 import {
+  attachedPaymentMethod,
   createCardSetupCheckoutSession,
   createCardSetupIntent,
   detachPaymentMethod,
   listPaymentMethods,
+  prunePaymentMethods,
   setDefaultPaymentMethod,
+  touchPaymentMethod,
+  DEFAULT_MAX_CARDS,
 } from "./payment-methods.js";
 import { assignSeatType, clearMemberRecords, getSeatType, listSeatAssignments, seatAssignable, seatCapacity } from "./seats.js";
 import { cancelPlan, changePlan, previewPlanChange } from "./subscription.js";
@@ -189,6 +193,22 @@ export function createBoundApi(deps: BoundApiDeps) {
         orgId: string,
         opts: Parameters<typeof createCardSetupCheckoutSession>[2],
       ) => createCardSetupCheckoutSession(adapter, orgId, opts),
+      /**
+       * Finish a save: the FIRST card becomes the default, asked for or not.
+       *
+       * A customer with one card and no default has a card on file and nothing chargeable —
+       * every invoice and every auto-reload reads the default — so this is not a
+       * convenience. Consumers were doing it themselves in whatever callback their checkout
+       * returned to, which is one place per flow.
+       */
+      attached: (orgId: string, paymentMethodId: string, opts?: { setDefault?: boolean }) =>
+        attachedPaymentMethod(adapter, orgId, paymentMethodId, opts),
+      /** Least-recently-used eviction down to `config.paymentMethods.maxCards`, never
+       *  touching the default. Call after attaching. */
+      prune: (orgId: string, max?: number) =>
+        prunePaymentMethods(adapter, orgId, max ?? config.paymentMethods?.maxCards ?? DEFAULT_MAX_CARDS),
+      /** Stamp a card as just-charged, so the prune above can be LRU rather than oldest. */
+      touch: (paymentMethodId: string) => touchPaymentMethod(paymentMethodId),
     },
 
     invoices: {
@@ -274,7 +294,7 @@ export function createBoundApi(deps: BoundApiDeps) {
           // call. `action` names the next tool, which is the whole answer for a headless
           // caller and one branch for a UI.
           return ask
-            ? { ...ask, ...usageAction(model, { ...input, actor, purchase: config.roles.purchase })! }
+            ? { ...ask, ...usageAction(model, { ...input, actor, purchase: config.roles?.purchase })! }
             : null;
         },
         resolve: (orgId: string, requestId: string, decision: "done" | "denied") =>

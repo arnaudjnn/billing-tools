@@ -634,6 +634,9 @@ parameter is typed structurally (`CommandLike`).
 | `currency` | `"usd"` | Stripe currency |
 | `freeCredits` | `100` | Welcome credit on first customer creation |
 | `internalDomains` | `[]` | Orgs with these **verified** WorkOS domains are unmetered (see `internalDomainsFromEnv`) |
+| `spendLimit.defaultCredits` | `null` | The monthly ceiling a customer who set none is held to. The METER reads it, so it is a real limit and not a placeholder a settings page shows |
+| `spendLimit.required` | `false` | Refuse `set_spend_controls` clearing the ceiling |
+| `paymentMethods.maxCards` | `3` | How many cards a customer keeps; `prunePaymentMethods` evicts least-recently-used, never the default |
 | `roles.purchase` | `"admin"` | Who may spend the workspace's money (`buy_credits`, `set_auto_reload`). `"member"` for a product whose members hold their own cards. Also what `usageAction` reads to decide "buy this" vs "ask an owner" |
 | `tax.origin` | unset | Where you're established (`"IT"`). Decides domestic vs cross-border, which is the whole question a VAT rate turns on. Unset falls back to the Stripe account's country — `mode: "none"` is how you opt out of tax entirely |
 | `tax.mode` | derived | `"local"` \| `"stripe"` \| `"none"`. Overrides what `origin` implies |

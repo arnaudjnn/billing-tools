@@ -257,8 +257,15 @@ test("get_spend_controls / set_spend_controls round-trip through the tools", asy
   const call = (name, args) => runWithAuth("Bearer sk_x", () => d.dispatchTool(name, args));
 
   // No plans passed at all: the ceiling still works, because it funds nothing.
+  //
+  // `limit_source` says WHOSE ceiling is in force. It reads "default" here and the limit is
+  // null, because this deployment declares no default — the two together are how a settings
+  // screen tells "nobody has set one" from "the deployment sets one for you", which it could
+  // not do while the tool answered with a bare number the meter might not be using.
   assert.deepEqual(await call("get_spend_controls", {}), {
     limit_credits: null,
+    limit_source: "default",
+    limit_required: false,
     alert_credits: [],
     window: "calendar_month",
     currency: "eur",
@@ -296,4 +303,40 @@ test("get_spend_controls / set_spend_controls round-trip through the tools", asy
     /nothing to change/,
     "null is stripped by dispatch, so it must be loud rather than a silent no-op",
   );
+});
+
+// ── the deployment's default ─────────────────────────────────────────────────
+//
+// The consuming app wanted every workspace capped whether or not anybody had set a
+// ceiling. It got there by PERSISTING the default the first time its billing page read
+// the controls — which means the ceiling existed only for a workspace somebody had
+// opened that page for. Every API-only workspace was uncapped, and nothing said so.
+
+test("a configured default is a real ceiling, with nothing written to the customer", async () => {
+  __setStripeForTests(fakeStripe({ limit: "" })); // the customer has none
+  const withDefault = { ...config, spendLimit: { defaultCredits: 20_000, required: true } };
+
+  const state = await resolveAllowance(adapter, withDefault, {
+    orgId: "org_1",
+    plans: {},
+    ledger: fakeLedger(20_000), // exactly at it
+  });
+
+  const spend = state.limits.find((l) => l.kind === "spend");
+  assert.equal(spend.size, 20_000, "the default is the window's size");
+  assert.equal(spend.remaining, 0);
+
+  const funding = fundingFor(state, null, 1);
+  assert.equal(funding.ok, false);
+  assert.equal(funding.reason, "spend_limit_reached");
+});
+
+test("and the customer's own still wins over it", async () => {
+  __setStripeForTests(fakeStripe({ limit: "5000" }));
+  const state = await resolveAllowance(
+    adapter,
+    { ...config, spendLimit: { defaultCredits: 20_000, required: true } },
+    { orgId: "org_1", plans: {}, ledger: fakeLedger(0) },
+  );
+  assert.equal(state.limits.find((l) => l.kind === "spend").size, 5_000);
 });

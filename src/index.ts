@@ -559,6 +559,14 @@ export {
   createCardSetupIntent,
   createCardSetupCheckoutSession,
   savedCardFromCheckoutSession,
+  // The card POLICY, which every consumer was re-implementing: the first card saved
+  // becomes the default (a customer with one card and no default has nothing chargeable),
+  // a last-used stamp so eviction can be least-recently-used rather than oldest, and the
+  // prune itself, which never evicts the default at any count.
+  attachedPaymentMethod,
+  touchPaymentMethod,
+  prunePaymentMethods,
+  DEFAULT_MAX_CARDS,
   setDefaultPaymentMethod,
   detachPaymentMethod,
 } from "./payment-methods.js";

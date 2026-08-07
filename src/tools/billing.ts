@@ -89,7 +89,7 @@ export function registerBillingOnlyTools(
   /** The gate on spending the workspace's money — `config.roles.purchase`, in one place so
    *  the two tools that charge a card cannot answer it differently. */
   const purchaser = (action: string) =>
-    config.roles.purchase === "member" ? enforceAccess(adapter) : enforceAdmin(adapter, action);
+    config.roles?.purchase === "member" ? enforceAccess(adapter) : enforceAdmin(adapter, action);
 
   // Resolve (or lazily create) the org's Stripe customer.
   const customerId = async (orgId: string): Promise<string> => {
@@ -310,6 +310,10 @@ there as a window with kind "spend").`,
       if ("isError" in auth) return auth;
       if (!stripeConfigured()) return NO_STRIPE;
       const controls = await getSpendControls(await customerId(auth.orgId));
+      // The EFFECTIVE ceiling, which is what the meter enforces: the customer's own, else
+      // the deployment's default. Reporting `null` while `resolveAllowance` applies a
+      // default would be a settings screen contradicting the gate.
+      const effective = controls.limitCredits ?? config.spendLimit?.defaultCredits ?? null;
       return {
         content: [
           {
@@ -319,7 +323,11 @@ there as a window with kind "spend").`,
                 // Named `_credits` like the metadata keys they come from, because a
                 // bare `limit` next to `buy_credits` (which takes CURRENCY) is the
                 // one ambiguity worth spending two words to remove.
-                limit_credits: controls.limitCredits,
+                limit_credits: effective,
+                /** Whose ceiling this is — the customer set one, or the deployment's
+                 *  default applies. A UI shows the second differently. */
+                limit_source: controls.limitCredits != null ? "customer" : "default",
+                limit_required: config.spendLimit?.required,
                 alert_credits: controls.alertCredits,
                 window: "calendar_month",
                 currency: config.currency,
@@ -378,6 +386,18 @@ every threshold. The window is the calendar month, even on an annual plan.`,
       if (limit_credits !== undefined) input.limitCredits = limit_credits;
       if (alert_credits !== undefined) input.alertCredits = alert_credits;
 
+      // A required ceiling cannot be removed, only changed. Without this the tool could
+      // clear what the meter then re-applies from config on the next call — the customer
+      // reads "no limit" and is refused at the old one, which is the worst of both.
+      if (
+        config.spendLimit?.required &&
+        "limitCredits" in input &&
+        !(input.limitCredits && input.limitCredits > 0)
+      ) {
+        return err(
+          `This deployment requires a monthly ceiling: set limit_credits above 0 (the default is ${config.spendLimit?.defaultCredits}).`,
+        );
+      }
       const cid = await customerId(auth.orgId);
       await setSpendControls(cid, input);
       // Read back rather than echoing the request: 0 is stored as a cleared key and

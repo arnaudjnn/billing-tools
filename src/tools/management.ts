@@ -178,7 +178,7 @@ per billing cycle), how much of each is used, and when each resets.`,
           // An org key with no principal behind it is the org itself, hence owner-level —
           // the same reading `enforceAdmin` applies.
           actor: { isAdmin: currentPrincipal()?.isAdmin ?? true },
-          purchase: config.roles.purchase,
+          purchase: config.roles?.purchase,
         });
 
         return json({

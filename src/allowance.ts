@@ -275,7 +275,12 @@ export async function resolveAllowance(
     : customerPromise
         .then((c) => getSpendControls(customerId, c))
         .then(({ limitCredits }) => {
-        if (!limitCredits) return [];
+        // The deployment's default when the customer named none. This is what makes a
+        // configured ceiling a REAL one: the previous arrangement had a consumer persist
+        // the default on first read of its billing page, so a workspace nobody had opened
+        // that page for — every API-only one — was uncapped.
+        const ceiling = limitCredits ?? config.spendLimit?.defaultCredits ?? null;
+        if (!ceiling) return [];
         // A CALENDAR month, deliberately, and not the plan cycle: the customer set
         // a "monthly" ceiling, and an annual subscriber's cycle would make that one
         // window a year wide.
@@ -292,9 +297,9 @@ export async function resolveAllowance(
               every: "month" as Every,
               scope: "org" as const,
               label: null,
-              size: limitCredits,
+              size: ceiling,
               used,
-              remaining: Math.max(0, limitCredits - used),
+              remaining: Math.max(0, ceiling - used),
               window,
               kind: "spend" as const,
             },

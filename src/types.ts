@@ -208,6 +208,24 @@ export interface BillingConfig {
   roles?: {
     purchase?: "admin" | "member";
   };
+  /**
+   * The monthly spend ceiling every customer has whether or not they set one.
+   *
+   * `defaultCredits` is what applies when the customer's own record names no limit.
+   * The meter reads it (`resolveAllowance`), so it is a real ceiling and not a
+   * placeholder a settings page shows — which is exactly what it was in the one
+   * consumer that had this: the app's read persisted the default on first access, so
+   * the ceiling existed only for a workspace whose billing page somebody had opened.
+   * An API-only workspace had none at all.
+   *
+   * `required: true` also refuses `set_spend_controls` clearing it. A deployment that
+   * wants an uncapped default leaves both alone: null and not required is the shape
+   * this library has always had.
+   */
+  spendLimit?: {
+    defaultCredits?: number | null;
+    required?: boolean;
+  };
   /** What the payment forms offer. See `defaultPaymentMethodConfig`. */
   paymentMethods?: {
     /**
@@ -221,6 +239,14 @@ export interface BillingConfig {
      * Set `true` to keep Stripe's behaviour (no configuration is imposed).
      */
     link?: boolean;
+    /**
+     * How many cards a customer keeps. Default 3 (`DEFAULT_MAX_CARDS`).
+     *
+     * Not a Stripe limit — a product rule, and one a consumer was enforcing on its own
+     * while the tools attached cards without it, so the same account could hold 3 cards
+     * through the UI and any number through the API.
+     */
+    maxCards?: number;
   };
 }
 
@@ -350,8 +376,13 @@ export type TaxConfig = TaxConfigCommon &
       }
   );
 
-export type ResolvedConfig = Required<Omit<BillingConfig, "tax" | "paymentMethods" | "roles">> &
-  Pick<BillingConfig, "tax" | "paymentMethods"> & { roles: Required<NonNullable<BillingConfig["roles"]>> };
+export type ResolvedConfig = Required<
+  Omit<BillingConfig, "tax" | "paymentMethods" | "roles" | "spendLimit">
+> &
+  Pick<BillingConfig, "tax" | "paymentMethods"> & {
+    roles: Required<NonNullable<BillingConfig["roles"]>>;
+    spendLimit: Required<NonNullable<BillingConfig["spendLimit"]>>;
+  };
 
 
 /** `taxModeOf` without importing tax.ts, which imports this file. Same precedence. */
@@ -394,6 +425,12 @@ export function resolveConfig(c: BillingConfig): ResolvedConfig {
     // Spending the workspace's money is an owner action unless a deployment says otherwise
     // — the same default the rest of the money surface already had, now stated once.
     roles: { purchase: c.roles?.purchase ?? "admin" },
+    // No ceiling unless a deployment declares one — a library that started capping
+    // existing customers on upgrade would be the worst kind of surprise.
+    spendLimit: {
+      defaultCredits: c.spendLimit?.defaultCredits ?? null,
+      required: c.spendLimit?.required ?? false,
+    },
   };
 }
 

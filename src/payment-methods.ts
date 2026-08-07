@@ -270,3 +270,98 @@ export async function detachPaymentMethod(
   }
   await getStripe().paymentMethods.detach(paymentMethodId);
 }
+
+/** Our own last-used stamp on the PaymentMethod. Stripe carries `created` and no usage
+ *  field at all, so nothing records this unless we do. */
+const LAST_USED_KEY = "last_used_at";
+
+/**
+ * Record that a card was just charged.
+ *
+ * Written to the PaymentMethod's own metadata rather than a table: it is a fact about the
+ * card, it survives every path that charges one (an app, the dashboard, a future service),
+ * and it cannot drift from the card's lifetime — a detached card takes its stamp with it.
+ */
+export async function touchPaymentMethod(paymentMethodId: string): Promise<void> {
+  await getStripe().paymentMethods.update(paymentMethodId, {
+    metadata: { [LAST_USED_KEY]: new Date().toISOString() },
+  });
+}
+
+/**
+ * How many cards a customer keeps, by default.
+ *
+ * Not a Stripe limit — measured: 105 cards attached to one customer with no error. It is a
+ * product rule, to keep the list a list, and Stripe's own list call pages at 100, so an
+ * unbounded list would need pagination to stay honest. Override per deployment with
+ * `config.paymentMethods.maxCards`.
+ */
+export const DEFAULT_MAX_CARDS = 3;
+
+/**
+ * Keep the newest cards and drop the stalest, so paying with a new card does not need the
+ * customer to go and delete an old one first.
+ *
+ * WHICH card goes: the LEAST recently used one that is not the default. Least recently used,
+ * not most — the point is to evict the card nobody reaches for. Ranked by the `last_used_at`
+ * stamp `touchPaymentMethod` writes, falling back to Stripe's `created` for a card never
+ * charged, so a never-used card is always evicted before a used one.
+ *
+ * The DEFAULT is never evicted at any count: it is what every invoice and every auto-reload
+ * charges, and dropping it would leave a customer with cards on file and no way to bill them.
+ *
+ * Returns the ids actually detached — the caller decides whether to mention it.
+ */
+export async function prunePaymentMethods(
+  adapter: BillingAdapter,
+  orgId: string,
+  max: number = DEFAULT_MAX_CARDS,
+): Promise<string[]> {
+  const cards = await listPaymentMethods(adapter, orgId);
+  if (cards.length <= max) return [];
+
+  const stripe = getStripe();
+  // The full objects, for the timestamps `SavedCard` does not carry.
+  const detailed = await Promise.all(
+    cards.map(async (c) => {
+      const pm = await stripe.paymentMethods.retrieve(c.id);
+      const stamp = pm.metadata?.[LAST_USED_KEY];
+      const usedAt = stamp ? Date.parse(stamp) : NaN;
+      return {
+        id: c.id,
+        isDefault: c.isDefault,
+        // Never-used cards sort oldest via `created`, which is always < now.
+        rank: Number.isFinite(usedAt) ? usedAt : pm.created * 1000,
+      };
+    }),
+  );
+
+  const doomed = detailed
+    .filter((c) => !c.isDefault)
+    .sort((a, b) => a.rank - b.rank) // stalest first
+    .slice(0, cards.length - max);
+
+  for (const c of doomed) await detachPaymentMethod(adapter, orgId, c.id);
+  return doomed.map((c) => c.id);
+}
+
+/**
+ * The FIRST card a customer saves becomes the default, asked for or not.
+ *
+ * Not a convenience: a customer with exactly one card and no default has a card on file
+ * and nothing to charge — every invoice and every auto-reload reads the default, so the
+ * quiet failure is a payment that never happens. Saving a second card changes nothing
+ * unless `setDefault` says so.
+ */
+export async function attachedPaymentMethod(
+  adapter: BillingAdapter,
+  orgId: string,
+  paymentMethodId: string,
+  opts: { setDefault?: boolean } = {},
+): Promise<{ madeDefault: boolean }> {
+  const existing = await listPaymentMethods(adapter, orgId);
+  const isOnlyCard = existing.filter((c) => c.id !== paymentMethodId).length === 0;
+  const madeDefault = opts.setDefault === true || isOnlyCard;
+  if (madeDefault) await setDefaultPaymentMethod(adapter, orgId, paymentMethodId);
+  return { madeDefault };
+}
