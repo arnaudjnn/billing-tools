@@ -705,14 +705,28 @@ export async function taxFor(
         registrations: tax?.registrations,
         notes: tax?.notes,
         originCountry,
-        // No address on file → treat it as a domestic sale (see above).
-        country: where?.country ?? originCountry,
+        // No address on file → the VAT NUMBER's own country, then domestic.
+        //
+        // An EU VAT number carries its country in the first two characters, and it is a
+        // better source than the domestic fallback: a German business that entered
+        // "DE811907980" and skipped the address was read as domestic and charged the
+        // seller's rate, when it should have been reverse-charged. The number is only
+        // trusted for this when it looks like an EU VAT id — a US EIN says nothing about
+        // where a customer is.
+        country: where?.country ?? euVatCountry(where?.taxNumber) ?? originCountry,
         state: where?.state,
         taxNumber: where?.taxNumber,
       });
       return rateIds.length ? { taxRates: rateIds } : {};
     }
   }
+}
+
+/** The country an EU VAT number declares, or null for anything that is not one. Two
+ *  letters plus at least two more characters, and the prefix has to be an EU member. */
+function euVatCountry(taxNumber?: string | null): string | null {
+  const prefix = taxNumber?.trim().slice(0, 2).toUpperCase();
+  return prefix && isEUMember(prefix) && (taxNumber?.trim().length ?? 0) > 3 ? prefix : null;
 }
 
 /** Country/state/VAT number as Stripe holds them for this customer. */

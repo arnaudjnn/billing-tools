@@ -613,3 +613,37 @@ test("oss: false moves nothing else", async () => {
   assert.equal(export_.outOfScope, true);
   assert.equal(export_.percent, 0);
 });
+
+test("a VAT number with no address places the customer by its own country", async () => {
+  // A German business that entered "DE811907980" and skipped the address was read as
+  // domestic and charged the seller's rate. An EU VAT number carries its country in the
+  // first two characters, which is a better source than the domestic fallback — and it is
+  // only trusted when it looks like one, since a US EIN says nothing about where anybody is.
+  const { taxFor, __setVatValidatorForTests } = await import("../dist/tax.js");
+  // The number is real (it is SAP's); the suite is offline, so VIES is stubbed.
+  __setVatValidatorForTests(async () => true);
+  __setStripeForTests({
+    customers: {
+      async retrieve() {
+        return {
+          deleted: false,
+          address: null, // nothing on file
+          tax_ids: { data: [{ type: "eu_vat", value: "DE811907980" }] },
+        };
+      },
+    },
+    taxRates: {
+      list() {
+        return stripeList([]);
+      },
+      async create(input) {
+        return { id: `txr_${input.country ?? "x"}_${input.percentage}`, ...input };
+      },
+    },
+  });
+
+  const out = await taxFor("cus_1", { origin: "IT", mode: "local" });
+  // Placed in DE and reverse-charged: a 0% German rate carrying the Art. 44/196 wording,
+  // not the seller's 22%. The fake encodes country and percentage in the id it mints.
+  assert.deepEqual(out.taxRates, ["txr_DE_0"]);
+});
