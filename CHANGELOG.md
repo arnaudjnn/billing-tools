@@ -1,3 +1,10 @@
+# [19.3.0](https://github.com/arnaudjnn/billing-tools/compare/v19.2.0...v19.3.0) (2026-08-07)
+
+
+### Features
+
+* **portal:** land the link where the customer was sent, not on a menu ([ff373b0](https://github.com/arnaudjnn/billing-tools/commit/ff373b085d3ac4c3bdbd67b475e185803495da4d))
+
 # [19.2.0](https://github.com/arnaudjnn/billing-tools/compare/v19.1.0...v19.2.0) (2026-08-07)
 
 
