@@ -1,3 +1,17 @@
+# [19.0.0](https://github.com/arnaudjnn/billing-tools/compare/v18.0.0...v19.0.0) (2026-08-07)
+
+
+* feat(money)!: the spend ceiling and the card policy are the library's ([7713f9c](https://github.com/arnaudjnn/billing-tools/commit/7713f9c46f4347d2c5bd1a16a9b4472e06d889b8))
+
+
+### BREAKING CHANGES
+
+* `get_spend_controls` returns `limit_source` and `limit_required`
+beside `limit_credits`, and `limit_credits` is now the effective ceiling rather
+than only the customer's own.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
 # [18.0.0](https://github.com/arnaudjnn/billing-tools/compare/v17.0.0...v18.0.0) (2026-08-07)
 
 
