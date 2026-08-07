@@ -1,3 +1,16 @@
+# [16.0.0](https://github.com/arnaudjnn/billing-tools/compare/v15.24.0...v16.0.0) (2026-08-07)
+
+
+* feat(seats)!: the ladder, the capacity, and the plan that actually sells the seat ([caeefc9](https://github.com/arnaudjnn/billing-tools/commit/caeefc91f1b0e56fe065b26856e07cb497d85843))
+
+
+### BREAKING CHANGES
+
+* `list_seats` returns the workspace plan's seat types, not the
+catalogue-wide union, and gains `ladder`, `default_seat`, `members` and `capacity`.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
 # [15.24.0](https://github.com/arnaudjnn/billing-tools/compare/v15.23.0...v15.24.0) (2026-08-07)
 
 
