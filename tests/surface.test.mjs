@@ -110,6 +110,12 @@ const adapter = {
     return {};
   },
   async setOrgMetadata() {},
+  // `get_org_usage` reports on the members, so it registers only where the adapter can
+  // enumerate them — the same shape as the seat and metadata gates above. This fake is
+  // the FULL-surface one, so it can.
+  async listMemberIds() {
+    return ["u1"];
+  },
 };
 
 const config = { baseUrl: "https://example.test", currency: "eur" };
@@ -143,6 +149,7 @@ test("every capability the billing UI has is also a tool", () => {
     "get_billing_portal",
     "get_usage",
     "get_usage_limits",
+    "get_org_usage",
     "list_seats",
     "assign_seat_type",
     "request_top_up",
@@ -239,12 +246,12 @@ test("the two shapes differ by exactly the seven tools", () => {
   const scart = names({ plans: SCARTOFFIE });
   const extra = [...scart].filter((n) => !gtm.has(n)).sort();
   assert.deepEqual(extra, [...SEAT_TOOLS, ...TOP_UP_TOOLS].sort());
-  // 36 − 7. Both numbers are quoted in AGENTS.md, so both are asserted here. The pair that
+  // 37 − 7. Both numbers are quoted in AGENTS.md, so both are asserted here. The pair that
   // took them from 33 to 35 is `request_plan_change` / `resolve_plan_request`, which every
   // catalogue with plans gets: asking to move up is the answer on exactly the plans that
   // have no per-member allowance to top up.
-  assert.equal(gtm.size, 29);
-  assert.equal(scart.size, 36);
+  assert.equal(gtm.size, 30);
+  assert.equal(scart.size, 37);
 });
 
 test("no catalogue means no declaration to read, so every group registers", () => {

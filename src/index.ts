@@ -183,6 +183,12 @@ export {
 export {
   usageSummary,
   memberUsage,
+  // The WORKSPACE reading: every member measured against whatever caps them, who is at
+  // the wall, and the team's average — an average of the members' own percentages, since
+  // a summed one is a fraction nobody can spend.
+  orgUsage,
+  type OrgUsage,
+  type OrgUsageMember,
   resolveSeat,
   // Which seat a caller draws, resolved the way the METER resolves it — the answer an
   // allowance read and a badge must agree on. Reachable only through `api.usage.*` before.

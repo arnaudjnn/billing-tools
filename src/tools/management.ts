@@ -17,7 +17,7 @@ import { defaultSeatOf, isTopSeat, seatLadder, seatTypeExists, usageAction } fro
 import { normalizePlans, planModel, type PlanCatalog } from "../plans.js";
 import { DEFAULT_MAX_PERCENT, requestBounds } from "../plan-model.js";
 import { ALL_TOOL_CAPABILITIES, type ToolCapabilities } from "../plan-model.js";
-import { callerWithSeat, usageSummary } from "../usage.js";
+import { callerWithSeat, orgUsage, usageSummary } from "../usage.js";
 import type { UsageLedger } from "../usage-ledger.js";
 
 function json(obj: unknown) {
@@ -97,6 +97,66 @@ number of days instead of the calendar month.`,
       return json({ usage, since, cycle: cycle.key, filter: filter ?? null });
     },
   );
+
+  // WHO in the workspace is at the wall. `get_usage` answers for one caller and
+  // `list_seats` says who holds what; neither could answer "which of my people is blocked
+  // right now", which is the question an owner opens a usage screen to ask. It needs the
+  // member list, so it registers only where the adapter can enumerate one.
+  if (adapter.listMemberIds) {
+    server.tool(
+      "get_org_usage",
+      `Every member of the workspace measured against whatever caps them — their seat pack,
+else the shared pool — plus who is at or over it, and the team's average. The average is
+of each member's OWN percentage: a summed one is a fraction nobody can spend.`,
+      {
+        include_api: z
+          .boolean()
+          .optional()
+          .describe("Also report the shared API caller. Default false — it holds no seat"),
+      },
+      async ({ include_api }) => {
+        const auth = await enforceAccess(adapter);
+        if ("isError" in auth) return auth;
+        if (!stripeConfigured()) return err("Billing is not configured (STRIPE_SECRET_KEY unset).");
+        if (!opts.plans) return json({ members: [], note: "No plans configured." });
+
+        const ids = (await adapter.listMemberIds!(auth.orgId).catch((): string[] => [])).map(
+          (id) => ({ id, kind: "user" as const }),
+        );
+        const members = include_api ? [...ids, { id: auth.orgId, kind: "api" as const }] : ids;
+        const plan = opts.resolvePlan
+          ? await opts.resolvePlan(auth.orgId)
+          : ((await adapter.getSubscription?.(auth.orgId))?.plan ?? null);
+
+        const out = await orgUsage(adapter, config, {
+          orgId: auth.orgId,
+          plans: opts.plans,
+          plan,
+          members,
+          ledger: opts.usageLedger,
+        });
+        return json({
+          members: out.members.map((m) => ({
+            member_id: m.id,
+            caller_kind: m.kind,
+            seat_type: m.seatType,
+            limit: m.limit,
+            used: m.used,
+            percent_used: m.percent,
+            overage: m.overage,
+          })),
+          // Named for what it is. `percent` here is a MEAN of the members' own, and the
+          // totals beside it are not its denominator — printing them as one fraction is
+          // the arithmetic error this shape exists to prevent.
+          average_percent_used: out.aggregate.percent,
+          total_used: out.aggregate.used,
+          total_limit: out.aggregate.limit,
+          seats: out.aggregate.seats,
+          in_overage: out.aggregate.overage,
+        });
+      },
+    );
+  }
 
   // Only where a plan HAS a window to report: an included cap, or a rate limit.
   // `get_usage` above stays unconditional — it is the historical spend read, and

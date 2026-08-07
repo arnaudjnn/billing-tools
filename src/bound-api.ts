@@ -81,7 +81,7 @@ import {
   resolvePlanRequest,
 } from "./plan-request.js";
 import { currentCycle, resolveAllowance } from "./allowance.js";
-import { callerWithSeat, memberUsage, usageSummary } from "./usage.js";
+import { callerWithSeat, memberUsage, orgUsage, usageSummary } from "./usage.js";
 import { planModel, type PlanCatalog } from "./plans.js";
 import type { UsageLedger } from "./usage-ledger.js";
 import type { BillingAdapter, ResolvedConfig } from "./types.js";
@@ -383,6 +383,16 @@ export function createBoundApi(deps: BoundApiDeps) {
     },
 
     usage: {
+      /** The whole workspace: each member against their own cap, who is over it, and the
+       *  team average. `plan` and `ledger` bound. */
+      org: (
+        orgId: string,
+        members: readonly { id: string; kind?: "user" | "api" }[],
+        opts: { now?: number } = {},
+      ) =>
+        planOf(orgId).then((plan) =>
+          orgUsage(adapter, config, { ...opts, orgId, members, plans, plan, ledger }),
+        ),
       /** Every window that applies, plus pool/pack/wallet. `plan` and `ledger` bound. */
       summary: (
         orgId: string,

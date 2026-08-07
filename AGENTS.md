@@ -97,6 +97,7 @@ REST and MCP get it structurally (`createDispatcher` monkey-patches `server.tool
 | `get_billing_portal` | invoices | Short-lived Stripe Billing Portal URL | Stripe customer |
 | `get_usage` | usage | Credits spent this cycle, filterable by caller or a day window | — |
 | `get_usage_limits` | usage | Every window that applies now: used, remaining, `resets_at` | a `cap` or a `limits.rate` |
+| `get_org_usage` | usage | Every member against their own cap, who is over it, the team average | `listMemberIds` |
 | `list_seats` | seats | Per-member seat-type assignments + the types on offer | `sells: seats` **+** org metadata |
 | `assign_seat_type` | seats | Puts a member on a seat type (admin) | `sells: seats` **+** org metadata |
 | `list_top_up_requests` | top-ups | The queue, pending and settled | `replenish.request` **+** org metadata |
@@ -566,7 +567,7 @@ Windows are **fixed and UTC-aligned** (top of the hour, midnight, **Monday**, th
 
 ### Reading usage (`src/usage.ts`)
 
-`usageSummary(adapter, config, {orgId, plans, plan, caller?})` → every window with `used`/`remaining`/`percent`/`resetsAt` plus pool, pack and wallet; `memberUsage(...)` → the per-member breakdown an admin view needs. Both go through `resolveAllowance` **deliberately** — a screen computing its own numbers would eventually disagree with the gate, and the disagreement would be invisible until a customer was refused at 60%. Agents get the same from `get_usage_limits`.
+`usageSummary(adapter, config, {orgId, plans, plan, caller?})` → every window with `used`/`remaining`/`percent`/`resetsAt` plus pool, pack and wallet; `memberUsage(...)` → the per-member breakdown an admin view needs; **`orgUsage(...)`** → that breakdown with the three lines every consumer wrote after it: which limit applies to each person (their pack, else the pool), whether they are AT it, and what the team looks like together. Its `aggregate.percent` is the **mean of the members' own percentages, each capped at 100** — a summed one is the workspace's totals expressed as a fraction nobody can spend, so two members (one blocked, one idle) read as "83% used" while half the team is stuck and the other half has not started. `overage` counts who is at the wall, which is the question an owner opens the screen to ask and the one the library could not answer at all. Both go through `resolveAllowance` **deliberately** — a screen computing its own numbers would eventually disagree with the gate, and the disagreement would be invisible until a customer was refused at 60%. Agents get the same from `get_usage_limits`.
 
 A summary with a caller also reports **`seat: {type, label}`** — the plan's own word for the seat (`SeatTypeDisplay.badge`, else `label`, resolved for `locale`). It is independent of `pack`, because a pooled or free plan has none and every member of one was reported as `standard`, a seat type such a plan does not declare. A plan that sells no seats names the seat it gives with `seat: { key, display }`; `resolveSeat(model, type, locale)` is the same lookup for other surfaces.
 

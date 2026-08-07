@@ -339,6 +339,22 @@ function registerPlanCommands(
       print(await callTool(requireConfig(), "get_usage_limits", args));
     });
 
+  // The owner's view of the same question `limits` answers for one caller: who in the
+  // workspace is at their cap. A command exists here if and only if a tool exists there.
+  program
+    .command("team-usage")
+    .description("Every member measured against their own cap, and who is at or over it")
+    .option("--include-api", "Also report the shared API caller")
+    .action(async (o: { includeApi?: boolean }) =>
+      print(
+        await callTool(
+          requireConfig(),
+          "get_org_usage",
+          o.includeApi ? { include_api: true } : {},
+        ),
+      ),
+    );
+
   program
     .command("portal")
     .description("Open the Stripe billing portal (manage subscription, cards, invoices)")

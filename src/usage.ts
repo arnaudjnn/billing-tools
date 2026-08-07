@@ -323,3 +323,100 @@ export async function memberUsage(
 
 /** Re-exported so a consumer can type a state it passes around. */
 export type { AllowanceState, LimitState };
+
+/** One member, measured against whatever actually caps them. */
+export interface OrgUsageMember extends MemberUsage {
+  /** What caps this member: their seat pack, else the shared pool. 0 when nothing does,
+   *  which is how a plan with no included allowance reports. */
+  limit: number;
+  /** Against that limit — the pack's own usage where there is one, else what the ledger
+   *  says they spent in the cycle. */
+  used: number;
+  /** Capped at 100. Somebody 20% into wallet-funded overage is not at 120% of an
+   *  allowance, and letting that through pulls an average up past what anyone can spend. */
+  percent: number;
+  /** At or over their cap: refused until the window resets, or until somebody grants
+   *  extra. This is what an "in overage" list is. */
+  overage: boolean;
+}
+
+export interface OrgUsage {
+  members: OrgUsageMember[];
+  /**
+   * The workspace reading, and it is an AVERAGE of the members' own percentages, not the
+   * total over the total.
+   *
+   * Nothing here is a ceiling: each member is capped by their OWN seat, so a summed 96%
+   * was the workspace's totals expressed as a fraction nobody can spend — two members, one
+   * blocked at 100% and one who has not started, read as "almost out" when half the team is
+   * idle and the other half is stuck. Neither fact is the one that number implied.
+   *
+   * `used` and `limit` are still the honest totals for anything that wants them; they are
+   * simply not the denominator of `percent`.
+   */
+  aggregate: {
+    percent: number;
+    used: number;
+    limit: number;
+    /** How many members the average is over — a caption needs it ("media di 3 posti"),
+     *  and a mean without its N is not a statement. */
+    seats: number;
+    /** How many are at or over their cap right now. The answer to "who is at the wall",
+     *  which nothing could ask before: `memberUsage` reports one member at a time and
+     *  flags nothing. */
+    overage: number;
+  };
+}
+
+/**
+ * The whole workspace's usage, as an admin screen needs it.
+ *
+ * `memberUsage` answers per member and stops there, so every consumer wrote the same three
+ * lines after it: which limit applies to this person, are they over it, and what does the
+ * team look like taken together. That arithmetic decides what an owner is shown about money
+ * — and it lived in a page, where no API, CLI or MCP caller could reach it. "Who is blocked
+ * right now" was a question the library could not answer at all.
+ *
+ * Members with no limit AND no usage are dropped: on a plan that caps nothing they are rows
+ * of zeroes, and a list of them says nothing about anybody.
+ */
+export async function orgUsage(
+  adapter: BillingAdapter,
+  config: ResolvedConfig,
+  input: Parameters<typeof memberUsage>[2],
+): Promise<OrgUsage> {
+  const org = await usageSummary(adapter, config, {
+    orgId: input.orgId,
+    plans: input.plans,
+    plan: input.plan,
+    ledger: input.ledger,
+    now: input.now,
+  });
+  const rows = await memberUsage(adapter, config, input);
+
+  const members: OrgUsageMember[] = rows.map((m) => {
+    const limit = m.pack?.size ?? org.pool?.size ?? 0;
+    const used = m.pack?.used ?? m.usedInCycle;
+    return {
+      ...m,
+      limit,
+      used,
+      percent: limit ? Math.min(100, Math.round((used / limit) * 100)) : 0,
+      overage: limit > 0 && used >= limit,
+    };
+  });
+
+  const measured = members.filter((m) => m.limit > 0);
+  return {
+    members: members.filter((m) => m.limit > 0 || m.used > 0),
+    aggregate: {
+      percent: measured.length
+        ? Math.round(measured.reduce((n, m) => n + m.percent, 0) / measured.length)
+        : 0,
+      used: measured.reduce((n, m) => n + m.used, 0),
+      limit: measured.reduce((n, m) => n + m.limit, 0),
+      seats: measured.length,
+      overage: members.filter((m) => m.overage).length,
+    },
+  };
+}
