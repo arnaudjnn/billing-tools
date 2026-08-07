@@ -1,3 +1,10 @@
+## [20.1.1](https://github.com/arnaudjnn/billing-tools/compare/v20.1.0...v20.1.1) (2026-08-07)
+
+
+### Bug Fixes
+
+* **purchase:** an invoice that cannot be EMAILED is still a payable invoice ([6754091](https://github.com/arnaudjnn/billing-tools/commit/675409148b96d6be9fe6a3f9038cd91cd72b4e72))
+
 # [20.1.0](https://github.com/arnaudjnn/billing-tools/compare/v20.0.0...v20.1.0) (2026-08-07)
 
 
