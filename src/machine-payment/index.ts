@@ -51,6 +51,20 @@ export interface MachinePaymentOptions {
   settle?: SettleFn;
   /** Called after a successful settle; use to record the payment / grant access. */
   onPaid?: (challenge: PaymentChallenge, receipt: string, request: Request) => Promise<void> | void;
+  /**
+   * Credit the paying org's wallet with the amount settled.
+   *
+   * Without this the protocol was complete and pointless: a request could be challenged,
+   * paid and verified, and the payer got nothing — `onPaid` was a callback the consumer had
+   * to write, so "the agent paid" and "the agent has credits" were unrelated events. The
+   * org is resolved from the request's API key (`Authorization: Bearer` or `X-Api-Key`,
+   * since the retry's Authorization header carries the payment credential instead), which
+   * is the caller that hit 402 on an empty wallet in the first place. An anonymous payer
+   * credits nothing — there is no wallet to credit.
+   *
+   * Only meaningful through `createBilling`, which is what holds the adapter.
+   */
+  creditWallet?: boolean;
 }
 
 const PROBLEM_TYPE = "https://paymentauth.org/problems/payment-required";

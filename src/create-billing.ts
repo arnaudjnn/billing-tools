@@ -5,6 +5,7 @@ import { registerBillingTools, type RegisterBillingToolsOptions } from "./tools/
 import { createDispatcher } from "./dispatch.js";
 import { createToolListHandler, createToolDispatchHandler } from "./routes/rest.js";
 import { createMcpTransport } from "./routes/mcp.js";
+import { getBillingCustomerId, grantCredits } from "./billing.js";
 import { createStripeWebhookHandler, type WebhookOptions } from "./routes/webhook.js";
 import {
   CLAIM_GRANT_TYPE,
@@ -214,9 +215,52 @@ export function createBilling(opts: CreateBillingOptions) {
           currency: opts.webhook?.currency ?? resolved.currency,
         });
 
+  /**
+   * WHICH org just paid an MPP charge.
+   *
+   * An MPP retry puts the payment credential in `Authorization: Payment …`, so the API key
+   * — if the caller has one — travels in `X-Api-Key` on that request. Both are read, and a
+   * caller with neither is anonymous: the payment still settles (that is between the agent
+   * and Stripe), it simply credits no wallet, because there is no wallet to credit.
+   */
+  const orgForRequest = async (request: Request): Promise<string | null> => {
+    const auth = request.headers.get("authorization") ?? "";
+    const bearer = auth.startsWith("Bearer ") ? auth.slice(7).trim() : null;
+    const token = bearer ?? request.headers.get("x-api-key")?.trim() ?? null;
+    if (!token) return null;
+    return (await opts.adapter.validateApiKey(token).catch(() => null))?.orgId ?? null;
+  };
+
   // MPP machine payments (pay-per-request) + its /payment.md discovery doc.
+  //
+  // `creditWallet` is what makes a paid MPP request MEAN something. The module implements
+  // the protocol — 402 challenge, retry, settle — and then handed the consumer an `onPaid`
+  // callback to write, so a request that was genuinely paid for granted nothing unless the
+  // app remembered to credit it. The caller here is an agent that hit 402 on an empty
+  // wallet, which is to say a caller holding an API key: the org is resolvable from the
+  // request, and the money it just paid belongs in that org's wallet.
   const machinePayment = opts.machinePayment
-    ? createMachinePaymentHandler(opts.machinePayment)
+    ? createMachinePaymentHandler({
+        ...opts.machinePayment,
+        onPaid: async (challenge, receipt, request) => {
+          if (opts.machinePayment?.creditWallet) {
+            const orgId = await orgForRequest(request);
+            const customerId = orgId ? await getBillingCustomerId(opts.adapter, orgId) : null;
+            if (customerId) {
+              await grantCredits(
+                customerId,
+                challenge.amount,
+                `Machine payment: ${challenge.amount} credits (${challenge.method})`,
+                challenge.currency,
+                // The challenge id is single-use and server-issued, so a replayed retry
+                // credits once — the same discipline every other credit path follows.
+                `credit:mpp:${challenge.id}`,
+              );
+            }
+          }
+          await opts.machinePayment?.onPaid?.(challenge, receipt, request);
+        },
+      })
     : undefined;
   const paymentMd = opts.machinePayment
     ? createPaymentMd({
