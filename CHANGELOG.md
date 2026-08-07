@@ -1,3 +1,10 @@
+# [15.24.0](https://github.com/arnaudjnn/billing-tools/compare/v15.23.0...v15.24.0) (2026-08-07)
+
+
+### Features
+
+* **entitlement:** the rungs are reachable, and nothing compiled is unreachable ([6676b91](https://github.com/arnaudjnn/billing-tools/commit/6676b9153bd4d5c91da42686d822f86d0a2cf6d1))
+
 # [15.23.0](https://github.com/arnaudjnn/billing-tools/compare/v15.22.1...v15.23.0) (2026-08-07)
 
 
