@@ -127,6 +127,11 @@ export interface Messages {
   poolExhausted: string;
   seatAllowanceReached: string;
   insufficientBalance: string;
+  /** The two refusals that had no key at all, so `describeDenial` could not be
+   *  translated even in part. `{name}` is the window's own label or its `every`;
+   *  `{size}` its ceiling; `{resets}` an ISO instant, already formatted or "". */
+  rateLimitReached: string;
+  spendLimitReached: string;
   /** Payment-form fallbacks, used only when Stripe returns an error with no
    *  message of its own (Stripe's own messages are already localized by the
    *  Elements locale, so these are the rare path, not the usual one). */
@@ -170,6 +175,9 @@ export const DEFAULT_MESSAGES: Messages = {
   seatAllowanceReached:
     "Seat credit allowance reached for this cycle. Ask an owner for a top-up, or buy credits.",
   insufficientBalance: "Insufficient credits (balance {balance}). Buy credits to continue.",
+  rateLimitReached: "Usage limit reached for this {name} ({size}).{resets}",
+  spendLimitReached:
+    "Monthly spend limit reached ({size} credits). Raise the limit to continue.{resets}",
   paymentDetailsInvalid: "Invalid payment details",
   cardNotSaved: "Card not saved",
   paymentFailed: "Payment failed",

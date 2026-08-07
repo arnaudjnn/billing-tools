@@ -1,4 +1,5 @@
 import { isLocalTaxOrigin, type LocalTaxOrigin } from "./tax-origins.js";
+import type { PartialMessages } from "./i18n.js";
 
 // The storage seam. `orgId` is an opaque string — a WorkOS org id, a Postgres
 // workspace id ("ws_…"), whatever the host uses. Implement this and the rest of
@@ -209,6 +210,17 @@ export interface BillingConfig {
     purchase?: "admin" | "member";
   };
   /**
+   * The library's own strings, overridden.
+   *
+   * Everything this package emits reads `Messages` — a refusal, a basket problem, a plan
+   * table. `DEFAULT_MESSAGES` is English and always will be; a deployment selling in one
+   * language passes its own here ONCE, and the sentence a refused caller reads comes back
+   * in it through the API and the CLI as well as the UI. Before this the app translated
+   * refusals by mapping reason codes on its own screens, so the same customer got Italian
+   * in the browser and English from a tool call.
+   */
+  messages?: PartialMessages;
+  /**
    * The monthly spend ceiling every customer has whether or not they set one.
    *
    * `defaultCredits` is what applies when the customer's own record names no limit.
@@ -377,9 +389,9 @@ export type TaxConfig = TaxConfigCommon &
   );
 
 export type ResolvedConfig = Required<
-  Omit<BillingConfig, "tax" | "paymentMethods" | "roles" | "spendLimit">
+  Omit<BillingConfig, "tax" | "paymentMethods" | "roles" | "spendLimit" | "messages">
 > &
-  Pick<BillingConfig, "tax" | "paymentMethods"> & {
+  Pick<BillingConfig, "tax" | "paymentMethods" | "messages"> & {
     roles: Required<NonNullable<BillingConfig["roles"]>>;
     spendLimit: Required<NonNullable<BillingConfig["spendLimit"]>>;
   };
@@ -422,6 +434,7 @@ export function resolveConfig(c: BillingConfig): ResolvedConfig {
     defaultLocale: c.defaultLocale ?? "",
     tax: c.tax,
     paymentMethods: c.paymentMethods,
+    messages: c.messages,
     // Spending the workspace's money is an owner action unless a deployment says otherwise
     // — the same default the rest of the money surface already had, now stated once.
     roles: { purchase: c.roles?.purchase ?? "admin" },

@@ -377,7 +377,12 @@ export async function changePlan(
     }
     const problems = validateBasket(opts.plans, { plan: target.key, interval, seats: opts.to.seats });
     if (problems.length) {
-      throw new PlanChangeError("invalid_basket", problems.map((problem) => describeBasketProblem(problem)).join("; "), problems);
+      throw new PlanChangeError(
+        "invalid_basket",
+        // The deployment's own words, like every other string the library emits.
+        problems.map((problem) => describeBasketProblem(problem, opts.config?.messages)).join("; "),
+        problems,
+      );
     }
     if (!opts.returnUrl) {
       throw new PlanChangeError("needs_return_url", "No live subscription, so a Checkout Session is needed — pass returnUrl");

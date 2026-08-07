@@ -634,6 +634,7 @@ parameter is typed structurally (`CommandLike`).
 | `currency` | `"usd"` | Stripe currency |
 | `freeCredits` | `100` | Welcome credit on first customer creation |
 | `internalDomains` | `[]` | Orgs with these **verified** WorkOS domains are unmetered (see `internalDomainsFromEnv`) |
+| `messages` | `DEFAULT_MESSAGES` | Override the library's own strings (refusals, basket problems, plan tables) once, for the whole deployment. What a REFUSED caller reads comes back in them through the API and CLI too |
 | `spendLimit.defaultCredits` | `null` | The monthly ceiling a customer who set none is held to. The METER reads it, so it is a real limit and not a placeholder a settings page shows |
 | `spendLimit.required` | `false` | Refuse `set_spend_controls` clearing the ceiling |
 | `paymentMethods.maxCards` | `3` | How many cards a customer keeps; `prunePaymentMethods` evicts least-recently-used, never the default |

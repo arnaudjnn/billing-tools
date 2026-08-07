@@ -603,31 +603,48 @@ const WINDOW_NAMES: Record<Every, string> = {
   cycle: "billing cycle",
 };
 
-/** Human-readable, for a 402 body or a tool result. */
+/**
+ * Human-readable, for a 402 body or a tool result.
+ *
+ * Through `Messages`, like every other string this package emits. It used to hardcode its
+ * own English and skip the message table entirely — while three keys in that table
+ * (`poolExhausted`, `seatAllowanceReached`, `insufficientBalance`) said nearly the same
+ * thing and were read by nobody, and the two refusals a customer meets most had no key at
+ * all. So the one part of the library a REFUSED caller actually reads was the one part a
+ * deployment could not translate.
+ *
+ * The `reason` is still the contract for anything branching on it; this is the sentence.
+ */
 export function describeDenial(
   reason: DenialReason,
   state: AllowanceState,
   limit?: LimitState,
+  messages?: PartialMessages,
 ): string {
+  const m = resolveMessages(messages);
   switch (reason) {
     case "rate_limit_reached": {
       const l = limit ?? (state.limits ?? []).find((x) => x.remaining <= 0);
-      const name = l?.label ?? (l ? WINDOW_NAMES[l.every] : "window");
-      const resets = l?.window.end ? ` Resets ${new Date(l.window.end).toISOString()}.` : "";
-      return `Usage limit reached for this ${name} (${l?.size ?? 0}).${resets}`;
+      return formatMessage(m.rateLimitReached, {
+        name: l?.label ?? (l ? WINDOW_NAMES[l.every] : "window"),
+        size: l?.size ?? 0,
+        resets: l?.window.end ? ` Resets ${new Date(l.window.end).toISOString()}.` : "",
+      });
     }
     case "spend_limit_reached": {
       const l = limit ?? (state.limits ?? []).find((x) => x.kind === "spend");
-      const resets = l?.window.end ? ` Resets ${new Date(l.window.end).toISOString()}.` : "";
       // Names the customer's own action, because this is the one limit they can
       // lift without asking anyone.
-      return `Monthly spend limit reached (${l?.size ?? 0} credits). Raise the limit to continue.${resets}`;
+      return formatMessage(m.spendLimitReached, {
+        size: l?.size ?? 0,
+        resets: l?.window.end ? ` Resets ${new Date(l.window.end).toISOString()}.` : "",
+      });
     }
     case "pool_exhausted":
-      return `Plan allowance used up for this cycle (${state.pool?.size ?? 0} credits). Contact us to extend the package.`;
+      return formatMessage(m.poolExhausted, { size: state.pool?.size ?? 0 });
     case "seat_allowance_reached":
-      return "Seat credit allowance reached for this cycle. Ask an owner for a top-up, or buy credits.";
+      return m.seatAllowanceReached;
     case "insufficient_balance":
-      return `Insufficient credits (balance ${state.wallet}). Buy credits to continue.`;
+      return formatMessage(m.insufficientBalance, { balance: state.wallet });
   }
 }

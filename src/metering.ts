@@ -113,7 +113,9 @@ export async function meterUsage(
     return {
       ok: false,
       reason,
-      message: describeDenial(reason, state, funding.limit),
+      // The deployment's own words when it declared any: this sentence is what a refused
+      // caller reads, through the API and the CLI as much as through a screen.
+      message: describeDenial(reason, state, funding.limit, config.messages),
       // A rate limit is the one denial that fixes itself, so say when.
       ...(funding.limit?.window.end ? { retryAt: funding.limit.window.end } : {}),
     }
