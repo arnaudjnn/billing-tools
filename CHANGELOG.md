@@ -1,3 +1,17 @@
+# [18.0.0](https://github.com/arnaudjnn/billing-tools/compare/v17.0.0...v18.0.0) (2026-08-07)
+
+
+* feat(replenish)!: what a purchase and a grant may be is the plan's rule ([7ef2786](https://github.com/arnaudjnn/billing-tools/commit/7ef2786ed3ff626f298b50c292038dae0d3b974e))
+
+
+### BREAKING CHANGES
+
+* `grant_top_up` no longer defaults `percent` in the schema — the
+plan's `replenish.request.percent` supplies it — and refuses a percentage above the
+plan's `maxPercent` (default 500, where the schema previously allowed 1000).
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
 # [17.0.0](https://github.com/arnaudjnn/billing-tools/compare/v16.0.0...v17.0.0) (2026-08-07)
 
 
