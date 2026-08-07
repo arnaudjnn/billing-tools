@@ -110,6 +110,7 @@ test("invoice gets finalized and SENT, and carries the credits for the webhook",
   const out = await purchaseCredits("cus_1", "org_1", 20, config, { method: "invoice", tax: noTax });
 
   assert.equal(out.status, "invoiced");
+  assert.equal(out.emailed, true);
   assert.equal(out.hostedInvoiceUrl, "https://invoice.stripe.com/i/x");
   assert.equal(s.calls.invoices[0].collection_method, "send_invoice");
   assert.equal(s.calls.invoices[0].days_until_due, 7);
@@ -142,4 +143,27 @@ test("checkout returns a URL, embedded a secret — and both return the session 
   // The id used to be recoverable only by splitting the client secret on "_secret_" —
   // a consumer really did that, in production, with a comment apologising for it.
   assert.equal(embedded.sessionId, "cs_1");
+});
+
+test("an account that cannot EMAIL still hands back a payable invoice", async () => {
+  // Stripe answers "This invoice cannot be sent right now" on an account not yet activated
+  // for invoice emails. The invoice is finalized and payable regardless, so throwing there
+  // would lose its hosted URL to a failure that is Stripe's and not the customer's — a real
+  // bill would exist and the caller would know only that something went wrong. Found by
+  // running this against a live test account.
+  const s = fakeStripe();
+  s.invoices.sendInvoice = async () => {
+    throw new Error("This invoice cannot be sent right now.");
+  };
+  s.invoices.finalizeInvoice = async (id) => ({
+    id,
+    status: "open",
+    hosted_invoice_url: "https://invoice.stripe.com/i/finalized",
+  });
+  __setStripeForTests(s);
+
+  const out = await purchaseCredits("cus_1", "org_1", 20, config, { method: "invoice", tax: noTax });
+  assert.equal(out.status, "invoiced");
+  assert.equal(out.emailed, false, "and it says so, rather than claiming an email was sent");
+  assert.equal(out.hostedInvoiceUrl, "https://invoice.stripe.com/i/finalized");
 });

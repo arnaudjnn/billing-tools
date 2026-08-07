@@ -646,7 +646,17 @@ export type PurchaseMethod = "checkout" | "embedded" | "saved_card" | "invoice";
 export type PurchaseResult =
   | { status: "checkout"; method: PurchaseMethod; credits: number; url: string | null; clientSecret: string | null; sessionId: string }
   | { status: "charged"; method: "saved_card"; credits: number; invoiceId: string }
-  | { status: "invoiced"; method: "invoice"; credits: number; invoiceId: string; hostedInvoiceUrl: string | null; dueAt: number | null }
+  | {
+      status: "invoiced";
+      method: "invoice";
+      credits: number;
+      invoiceId: string;
+      hostedInvoiceUrl: string | null;
+      dueAt: number | null;
+      /** Whether Stripe actually SENT the email. False means the invoice exists and is
+       *  payable at `hostedInvoiceUrl` — the account just cannot email it yet. */
+      emailed: boolean;
+    }
   | { status: "refused"; reason: "no_card" | "no_email" | "charge_failed"; message: string };
 
 /**
@@ -798,14 +808,26 @@ export async function purchaseCredits(
   // Finalize THEN send: an unfinalized invoice has no number, no hosted page and nothing to
   // pay, and `sendInvoice` on a draft is an error rather than a send.
   const finalized = await stripe.invoices.finalizeInvoice(draft.id);
-  const sent = await stripe.invoices.sendInvoice(finalized.id!);
+  // The SEND can fail on its own — an account not yet activated for invoice emails answers
+  // "This invoice cannot be sent right now", which is Stripe's, not the customer's fault.
+  // The invoice is finalized and payable either way, so losing its hosted URL to that error
+  // would be the worst outcome: a real bill exists, and the caller was told only that
+  // something went wrong. Measured against a live test account, which is how it was found.
+  let emailed = true;
+  let sent = finalized;
+  try {
+    sent = await stripe.invoices.sendInvoice(finalized.id!);
+  } catch {
+    emailed = false;
+  }
   return {
     status: "invoiced",
     method: "invoice",
     credits,
     invoiceId: sent.id!,
-    hostedInvoiceUrl: sent.hosted_invoice_url ?? null,
+    hostedInvoiceUrl: sent.hosted_invoice_url ?? finalized.hosted_invoice_url ?? null,
     dueAt: sent.due_date ? sent.due_date * 1000 : null,
+    emailed,
   };
 }
 

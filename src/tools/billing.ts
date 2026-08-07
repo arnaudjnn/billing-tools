@@ -256,7 +256,10 @@ HOW it is paid for is \`method\`, and one of them needs no browser at all:
                   invoice_id: out.invoiceId,
                   invoice_url: out.hostedInvoiceUrl,
                   due_at: out.dueAt ? new Date(out.dueAt).toISOString() : null,
-                  message: `Stripe emailed the invoice. ${out.credits} credits are added when it is paid.`,
+                  emailed: out.emailed,
+                  message: out.emailed
+                    ? `Stripe emailed the invoice. ${out.credits} credits are added when it is paid.`
+                    : `The invoice is payable at invoice_url — Stripe could not email it from this account. ${out.credits} credits are added when it is paid.`,
                 }
               : {
                   status: "checkout_created",
