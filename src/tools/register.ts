@@ -4,6 +4,7 @@ import { resolveConfig } from "../types.js";
 import { registerKeyTools } from "./keys.js";
 import { registerBillingOnlyTools, type TopUpToolOptions } from "./billing.js";
 import { registerManagementTools } from "./management.js";
+import { registerMemberTools, type MemberToolOptions } from "./members.js";
 import { registerProfileTools } from "./profile.js";
 import { registerSubscriptionTools, type SubscriptionToolOptions } from "./subscription.js";
 import { ensurePlans, normalizePlans, poolSizeOf, type PlanCatalog } from "../plans.js";
@@ -101,6 +102,14 @@ export interface RegisterBillingToolsOptions {
    * composite — self-consistent, but not necessarily what the app's own meter counts with.
    */
   usageLedger?: UsageLedger;
+  /**
+   * Membership: the invitation service, and which roles this deployment invites into.
+   *
+   * Absent still registers what the ADAPTER can answer (`list_members`, and the role/remove
+   * pair when it implements them) — the three invitation tools are the ones with nowhere to
+   * put a record without a service.
+   */
+  members?: MemberToolOptions;
 }
 
 // Register the billing-tools surface (auth/key management + credit billing) on
@@ -140,6 +149,11 @@ export function registerBillingTools(server: McpServer, opts: RegisterBillingToo
     { plans: opts.plans, resolvePlan: opts.resolvePlan, usageLedger: opts.usageLedger },
     caps,
   );
+  registerMemberTools(server, opts.adapter, {
+    plans: opts.plans,
+    resolvePlan: opts.resolvePlan,
+    ...opts.members,
+  });
   if (opts.profileTools !== false) registerProfileTools(server, opts.adapter);
   if (opts.plans) {
     // `list_plans` and `get_plan` are READS and always register: "what is on offer"
@@ -232,6 +246,16 @@ export const BILLING_TOOL_NAMES = [
   // surface test only checked that everything advertised was registered. It now
   // checks both directions.
   "list_plans",
+  // WHO is in the workspace (registerMemberTools). The group that reached no surface at
+  // all: a workspace could be billed, metered, capped and closed headlessly and could not
+  // be given a second person. Each is gated on the adapter being able to answer — and the
+  // three invitation tools on an invitation service being wired.
+  "list_members",
+  "invite_member",
+  "list_invitations",
+  "revoke_invitation",
+  "change_member_role",
+  "remove_member",
   // Workspace-management tools (registerManagementTools).
   "get_usage",
   "get_usage_limits",

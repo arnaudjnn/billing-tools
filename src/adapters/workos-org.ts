@@ -1,5 +1,5 @@
 import { DomainDataState, OrganizationDomainState, type WorkOS } from "@workos-inc/node";
-import type { BillingAdapter, BillingUser, ApiKeyInfo } from "../types.js";
+import type { BillingAdapter, BillingUser, ApiKeyInfo, OrgMember } from "../types.js";
 import { getWorkOS } from "../workos.js";
 import { ADMIN_ROLE_SLUG } from "../workos-setup.js";
 
@@ -273,6 +273,70 @@ export class WorkOSOrgAdapter implements BillingAdapter {
     });
     const members = await paginatable.autoPagination();
     return members.map((m) => m.userId);
+  }
+
+  /**
+   * Members WITH their roles, in two paginated reads rather than N+1.
+   *
+   * `listOrganizationMemberships` carries the role and nothing else about the person;
+   * `listUsers({ organizationId })` carries the email and the name and nothing about the
+   * role. So both, joined on the user id — a `getUser` per member would be one HTTP request
+   * per person on a screen that exists to show all of them.
+   *
+   * Every status, not just active: an invited-but-not-accepted membership is a seat already
+   * promised, and a members list that hides them makes an owner wonder where the invitation
+   * went. `status` is on each row so a caller can tell them apart.
+   */
+  async listMembers(orgId: string): Promise<OrgMember[]> {
+    const wid = await this.wid(orgId);
+    const [memberships, users] = await Promise.all([
+      this.workos.userManagement
+        .listOrganizationMemberships({ organizationId: wid })
+        .then((p) => p.autoPagination()),
+      this.workos.userManagement
+        .listUsers({ organizationId: wid })
+        .then((p) => p.autoPagination())
+        .catch((): never[] => []), // a members list is still useful without the emails
+    ]);
+    const byId = new Map(users.map((u) => [u.id, u]));
+    return memberships.map((m) => {
+      const u = byId.get(m.userId);
+      const name = [u?.firstName, u?.lastName].filter(Boolean).join(" ");
+      return {
+        userId: m.userId,
+        email: u?.email ?? null,
+        name: name || null,
+        roleSlug: m.role?.slug ?? null,
+        status: m.status as OrgMember["status"],
+        createdAt: m.createdAt,
+      };
+    });
+  }
+
+  /** Move a member between roles. The last-admin rule is NOT here — it is in `members.ts`,
+   *  so a consumer's own screen and a tool refuse identically. */
+  async setMemberRole(orgId: string, userId: string, roleSlug: string): Promise<void> {
+    const id = await this.membershipId(orgId, userId);
+    if (!id) throw new Error(`${userId} is not a member of ${orgId}`);
+    await this.workos.userManagement.updateOrganizationMembership(id, { roleSlug });
+  }
+
+  /** Drop a membership. The USER survives — they may belong to other workspaces, and
+   *  deleting a person because they left one team is not this call's business. */
+  async removeMember(orgId: string, userId: string): Promise<void> {
+    const id = await this.membershipId(orgId, userId);
+    // Already gone is the outcome the caller asked for.
+    if (id) await this.workos.userManagement.deleteOrganizationMembership(id);
+  }
+
+  /** The membership row id, which is what WorkOS's role/delete calls take. */
+  private async membershipId(orgId: string, userId: string): Promise<string | null> {
+    const r = await this.workos.userManagement.listOrganizationMemberships({
+      organizationId: await this.wid(orgId),
+      userId,
+      limit: 1,
+    });
+    return r.data[0]?.id ?? null;
   }
 
   async getSubscription(orgId: string): Promise<{

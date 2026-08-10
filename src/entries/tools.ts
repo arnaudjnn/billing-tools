@@ -18,6 +18,7 @@ export {
   BILLING_TOOL_NAMES,
   type RegisterBillingToolsOptions,
 } from "../tools/register.js";
+export { registerMemberTools, type MemberToolOptions } from "../tools/members.js";
 export type { TopUpToolOptions } from "../tools/billing.js";
 export type { SubscriptionToolOptions } from "../tools/subscription.js";
 

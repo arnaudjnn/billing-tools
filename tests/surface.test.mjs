@@ -122,13 +122,55 @@ const adapter = {
   async listMemberIds() {
     return ["u1"];
   },
+  // Membership: the member tools are gated on the ADAPTER, not on the catalogue — a
+  // workspace has people whatever it sells. This fake is the full-surface one, so it can
+  // describe them and change them.
+  async listMembers() {
+    return [{ userId: "u1", email: "u1@example.test", name: "U One", roleSlug: "admin", status: "active" }];
+  },
+  async setMemberRole() {},
+  async removeMember() {},
+};
+
+/** The invitation service, which is what the three invitation tools need somewhere to put a
+ *  record. A deployment without one keeps `list_members` and the role/remove pair. */
+const invitations = {
+  async send(orgId, email, roleSlug) {
+    return {
+      id: "inv_1",
+      email,
+      roleSlug,
+      orgId,
+      organizationId: "org_1",
+      state: "pending",
+      createdAt: "2026-08-01T00:00:00.000Z",
+      expiresAt: "2026-08-08T00:00:00.000Z",
+    };
+  },
+  async list() {
+    return [];
+  },
+  async get() {
+    return null;
+  },
+  async accept() {
+    return { orgId: "org_1" };
+  },
+  async revoke() {},
 };
 
 const config = { baseUrl: "https://example.test", currency: "eur" };
 
 function names({ plans, ...rest } = {}) {
   const d = createDispatcher((server) => {
-    registerBillingTools(server, { adapter, config, plans, installLogging: false, ...rest });
+    registerBillingTools(server, {
+      adapter,
+      config,
+      plans,
+      installLogging: false,
+      members: { invitations },
+      ...rest,
+    });
   });
   return new Set(d.getToolNames());
 }
@@ -252,12 +294,14 @@ test("the two shapes differ by exactly the seven tools", () => {
   const scart = names({ plans: SCARTOFFIE });
   const extra = [...scart].filter((n) => !gtm.has(n)).sort();
   assert.deepEqual(extra, [...SEAT_TOOLS, SEAT_ASK, ...TOP_UP_TOOLS].sort());
-  // 37 − 8. Both numbers are quoted in AGENTS.md, so both are asserted here.
+  // 43 − 8. Both numbers are quoted in AGENTS.md, so both are asserted here. The six member
+  // tools are on both sides on purpose: who is in a workspace is not something a CATALOGUE
+  // can decide, so they are gated on the adapter and the invitation service instead.
   // `request_plan_change` / `resolve_plan_request` stay on BOTH sides: asking to move up is
   // the answer on exactly the plans that have no per-member allowance to top up, which is
   // the pooled catalogue's only rung.
-  assert.equal(gtm.size, 29);
-  assert.equal(scart.size, 37);
+  assert.equal(gtm.size, 35);
+  assert.equal(scart.size, 43);
 });
 
 test("no catalogue means no declaration to read, so every group registers", () => {

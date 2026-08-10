@@ -66,6 +66,15 @@ import {
   requestTopUp,
 } from "./topup.js";
 import { closeWorkspace, findOrphanedSubscriptions } from "./close-workspace.js";
+import {
+  changeMemberRole,
+  inviteMember,
+  isLastAdmin,
+  listMembers,
+  memberSeats,
+  removeMember,
+} from "./members.js";
+import type { InvitationService } from "./invitations.js";
 import { topUpTargetOf } from "./allowance.js";
 import {
   defaultSeatOf,
@@ -95,6 +104,9 @@ export interface BoundApiDeps {
   /** How to find the org's current plan key. The meter's resolver, so a usage read
    *  and the gate that refused a call agree about which plan is in force. */
   resolvePlan?: (orgId: string) => Promise<string | null>;
+  /** The invitation service (`createWorkOSInvitations`). Without it `members.invite` and the
+   *  two invitation reads throw rather than pretending — there is nowhere to put the record. */
+  invitations?: InvitationService;
 }
 
 type Caller = { kind: "user" | "api"; id?: string; seatType?: string };
@@ -531,6 +543,59 @@ export function createBoundApi(deps: BoundApiDeps) {
       /** Extra already granted to a member for a cycle. */
       granted: (orgId: string, memberId: string, cycle: string) =>
         extraAllowance(adapter, orgId, memberId, cycle),
+    },
+
+    /**
+     * WHO is in the workspace. The two rules — the plan's member limit and the last admin —
+     * are in `members.ts`, so a consumer's own server action refuses exactly as the tool does.
+     * That is the whole reason this group exists rather than each app calling WorkOS: both
+     * consumers wrote the counting and the admin check themselves, which means both of them
+     * owned a rule the library advertises.
+     */
+    members: {
+      list: (orgId: string) => listMembers(adapter, orgId),
+      /** Seats taken and left, counting PENDING invitations — a promise is a seat. */
+      seats: async (orgId: string) =>
+        memberSeats(adapter, orgId, {
+          plans,
+          plan: await planOf(orgId),
+          invitations: deps.invitations,
+        }),
+      /** `null` when it cannot be answered, which callers must treat as "refuse" — see
+       *  `isLastAdmin`. */
+      isLastAdmin: (orgId: string, userId: string) => isLastAdmin(adapter, orgId, userId),
+      invite: async (
+        orgId: string,
+        input: { email: string; roleSlug?: string; inviterUserId?: string },
+      ) => {
+        if (!deps.invitations) throw new Error("No invitation service configured.");
+        return inviteMember(adapter, orgId, {
+          ...input,
+          invitations: deps.invitations,
+          plans,
+          plan: await planOf(orgId),
+        });
+      },
+      invitations: {
+        list: (orgId: string) => {
+          if (!deps.invitations) throw new Error("No invitation service configured.");
+          return deps.invitations.list(orgId);
+        },
+        revoke: (orgId: string, invitationId: string) => {
+          if (!deps.invitations) throw new Error("No invitation service configured.");
+          return deps.invitations.revoke(orgId, invitationId);
+        },
+        /** Accepting needs the invited person's verified identity, which an org key does not
+         *  carry — which is why this is here and is NOT an MCP tool. */
+        accept: (invitationId: string, user: Parameters<InvitationService["accept"]>[1]) => {
+          if (!deps.invitations) throw new Error("No invitation service configured.");
+          return deps.invitations.accept(invitationId, user);
+        },
+      },
+      setRole: (orgId: string, userId: string, roleSlug: string) =>
+        changeMemberRole(adapter, orgId, userId, roleSlug),
+      /** Clears their records for this workspace BEFORE the membership — see `removeMember`. */
+      remove: (orgId: string, userId: string) => removeMember(adapter, orgId, userId),
     },
 
     workspace: {

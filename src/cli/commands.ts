@@ -155,6 +155,53 @@ export function registerBillingCommands(program: CommandLike, opts: CliOptions) 
     .description("Revoke an API key by id")
     .action(async (id: string) => print(await callTool(requireConfig(), "revoke_api_key", { api_key_id: id })));
 
+  // ── Members ───────────────────────────────────────────────────────────────
+  // NOT gated by the catalogue. Who is in a workspace is not something a plan decides, so
+  // unlike `seats` and `topup` below these are always offered; a deployment whose adapter or
+  // invitation service cannot serve one gets "Unknown tool", which is the honest answer for a
+  // capability that genuinely is not wired.
+  const members = program.command("members").description("Who is in the workspace, and invitations");
+  members
+    .command("list")
+    .description("List members with their roles, plus how many seats the plan has left")
+    .action(async () => print(await callTool(requireConfig(), "list_members")));
+  members
+    .command("invite <email>")
+    .description("Invite somebody by email")
+    .option("--role <slug>", "Role to grant (default: member)")
+    .action(async (email: string, o: { role?: string }) =>
+      print(
+        await callTool(requireConfig(), "invite_member", {
+          email,
+          ...(o.role ? { role: o.role } : {}),
+        }),
+      ),
+    );
+  members
+    .command("role <member_id> <role>")
+    .description("Change a member's role (refuses the last admin)")
+    .action(async (memberId: string, role: string) =>
+      print(await callTool(requireConfig(), "change_member_role", { member_id: memberId, role })),
+    );
+  members
+    .command("remove <member_id>")
+    .description("Remove a member, clearing their seat and granted allowance first")
+    .action(async (memberId: string) =>
+      print(await callTool(requireConfig(), "remove_member", { member_id: memberId })),
+    );
+
+  const invites = program.command("invitations").description("Pending invitations");
+  invites
+    .command("list")
+    .description("List invitations and their state")
+    .action(async () => print(await callTool(requireConfig(), "list_invitations")));
+  invites
+    .command("revoke <invitation_id>")
+    .description("Cancel a pending invitation, freeing the seat it holds")
+    .action(async (id: string) =>
+      print(await callTool(requireConfig(), "revoke_invitation", { invitation_id: id })),
+    );
+
   // ── Usage & seats ─────────────────────────────────────────────────────────
   program
     .command("usage")

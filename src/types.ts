@@ -145,11 +145,45 @@ export interface BillingAdapter {
   listMemberIds?(orgId: string): Promise<string[]>;
   /** Whether a user is an admin/owner of the org (gates auto-top-up + approvals). */
   isAdmin?(orgId: string, userId: string): Promise<boolean>;
+  /**
+   * Everyone in the workspace WITH their role — what `listMemberIds` cannot answer.
+   *
+   * The role is what the two membership rules turn on: a plan's member limit counts them,
+   * and "is this the last admin" cannot be asked at all without it. An adapter that
+   * implements this gets the member tools; one that does not keeps the seat tools and loses
+   * nothing else, because a tool that could only ever fail is worse than an absent one.
+   */
+  listMembers?(orgId: string): Promise<OrgMember[]>;
+  /** Move a member between roles. The last-admin rule is enforced above this, in
+   *  `members.ts`, so every surface refuses identically. */
+  setMemberRole?(orgId: string, userId: string, roleSlug: string): Promise<void>;
+  /** Drop a membership. Called AFTER the member's own records are cleared — see
+   *  `removeMember`, where the ordering and its reason live. */
+  removeMember?(orgId: string, userId: string): Promise<void>;
   /** Remove the workspace. Called LAST by `closeWorkspace`, never before its billing has
    *  been stopped — the org holds the Stripe pointer, so deleting it first orphans the
    *  subscription. Absent means the caller removes the org itself. */
   deleteOrg?(orgId: string): Promise<void>;
 
+}
+
+/**
+ * One person in a workspace, as the seam describes them.
+ *
+ * SDK-independent like every other DTO here (`BillingAdapter`, `ApiKeyInfo`): a non-WorkOS
+ * adapter has to be able to satisfy it. `roleSlug` is nullable because an adapter may be able
+ * to enumerate members without describing them — and a null role is what makes the last-admin
+ * rule refuse rather than guess.
+ */
+export interface OrgMember {
+  userId: string;
+  email: string | null;
+  name: string | null;
+  /** `admin` gates the management tools. Null when the adapter cannot report it. */
+  roleSlug: string | null;
+  status: "active" | "inactive" | "pending";
+  /** ISO 8601, when the adapter knows it. */
+  createdAt?: string;
 }
 
 export interface BillingConfig {

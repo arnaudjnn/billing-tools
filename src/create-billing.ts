@@ -51,6 +51,14 @@ export interface CreateBillingOptions {
   /** Lifecycle tools (`change_plan`, `preview_plan_change`, …). Default on when
    *  `plans` is set; pass false to keep plan changes in the app's own UI. */
   subscriptionTools?: RegisterBillingToolsOptions["subscriptionTools"];
+  /**
+   * Membership: the invitation service, and the roles this deployment invites into.
+   *
+   * Passing it is what turns on `invite_member` / `list_invitations` / `revoke_invitation` and
+   * `api.members.invite` — there is nowhere to put an invitation record without one. The other
+   * three member tools need only an adapter that can describe and change a membership.
+   */
+  members?: RegisterBillingToolsOptions["members"];
   /** Register your app's own product tools alongside the billing tools. */
   registerTools?: (server: McpServer) => void;
   /** Enable auth.md agent self-registration. Omit to leave it off. */
@@ -201,6 +209,7 @@ export function createBilling(opts: CreateBillingOptions) {
       // would be refused for. It is resolved below as `ledger`; hoisting is not possible
       // (this closure runs per request, long after), which is why it reads it there.
       usageLedger: ledger,
+      members: opts.members,
     });
     opts.registerTools?.(server);
   };
@@ -354,6 +363,7 @@ export function createBilling(opts: CreateBillingOptions) {
     plans: opts.plans,
     ledger,
     resolvePlan: opts.resolvePlan ?? opts.meter?.resolvePlan,
+    invitations: opts.members?.invitations,
   });
 
   return {

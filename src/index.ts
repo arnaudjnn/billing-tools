@@ -612,3 +612,18 @@ export {
   type CloseWorkspaceOptions,
   type CloseWorkspaceResult,
 } from "./close-workspace.js";
+
+// WHO is in a workspace, and the two rules about it — the member limit a plan advertises and
+// the last admin nothing used to protect. Exported for a consumer's own screen: the point of
+// putting them here is that its refusal and the tool's are the same refusal.
+export {
+  changeMemberRole,
+  inviteMember,
+  isLastAdmin,
+  listMembers,
+  memberSeats,
+  removeMember,
+  type MemberRefusal,
+  type MemberSeats,
+} from "./members.js";
+export type { OrgMember } from "./types.js";

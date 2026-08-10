@@ -39,6 +39,8 @@ export interface BillingAdapter {
 }
 ```
 
+Optional members, and each one is a GATE: `listMembers` (with roles) registers `list_members`, `setMemberRole` registers `change_member_role`, `removeMember` registers `remove_member`. An adapter without them keeps everything else and advertises none of those — a tool that could only ever answer "not supported" is the false statement this file keeps deleting.
+
 **The rule: WorkOS is the source of truth.** `orgId` is always the app's own org handle; the adapter maps it to WorkOS internally. Two patterns:
 
 - **Pattern A — WorkOS-only** (shipped `WorkOSOrgAdapter`, used by **gtm-tools**): `orgId` *is* the WorkOS org id. An app whose identity provider mints JWTs attaches `resolveOauthOrg` to the adapter (`Object.assign(new WorkOSOrgAdapter(…), { resolveOauthOrg })`) rather than verifying them in a route body — that member is where the MCP transport looks, so wiring it there is what lets the transport own the gate. Verification stays in the consumer: it needs a JWT library, and this package has no business growing one for one provider. Orgs, org API keys and `stripeCustomerId` live in WorkOS; no other storage. Import from `@arnaudjnn/billing-tools/adapters/workos-org`.
@@ -76,7 +78,7 @@ Deliberate exceptions — don't "fix" these:
 
 REST and MCP get it structurally (`createDispatcher` monkey-patches `server.tool`, so every registered tool is an endpoint). `tests/surface.test.mjs` asserts `BILLING_TOOL_NAMES` matches what registration produces, **in both directions and by count**. The CLI is hand-written and is the one surface that can silently fall behind, so `tests/conventions.test.mjs` asserts it reaches every tool — and, since it is hand-written, that it is **gated by the same `toolCapabilities`**: pass `plans` to `registerBillingCommands` and a flat/pooled deployment stops shipping `seats` / `assign-seat` / the five `topup` commands, which on that catalogue call tools that were never registered and can only answer "Unknown tool". A dead command is the same false statement as a dead tool. Omitting `plans` registers everything, because undefined is "the caller did not say". Coverage is per tool, not per command: `get_api_key` has no command because `auth` performs that flow, `preview_credit_purchase` is `buy --quote`, `set_spend_controls` is `spend limit` / `spend alerts`.
 
-### The 37 tools
+### The 43 tools
 
 `BILLING_TOOL_NAMES` (`tools/register.ts`) is the canonical list of what the library **can** register. The **needs** column is not documentation: `toolCapabilities(plans)` computes it and `registerBillingTools` reads it, so the table and the code cannot disagree.
 
@@ -98,6 +100,12 @@ REST and MCP get it structurally (`createDispatcher` monkey-patches `server.tool
 | `get_usage` | usage | Credits spent this cycle, filterable by caller or a day window | — |
 | `get_usage_limits` | usage | Every window that applies now: used, remaining, `resets_at` | a `cap` or a `limits.rate` |
 | `get_org_usage` | usage | Every member against whatever caps them, who is over it, and the workspace reading — a mean of the seats, or the POOL read once | `listMemberIds` |
+| `list_members` | members | Everyone in the workspace with their role, plus seats used / left | `listMemberIds` |
+| `invite_member` | members | Invites by email, refusing past `limits.members` (admin) | `invitations` |
+| `list_invitations` | members | Invitations and their state | `invitations` |
+| `revoke_invitation` | members | Cancels a pending one, freeing its seat (admin) | `invitations` |
+| `change_member_role` | members | Moves a member between roles; refuses the last admin (admin) | `setMemberRole` |
+| `remove_member` | members | Removes them, clearing their records FIRST; refuses the last admin (admin) | `removeMember` |
 | `list_seats` | seats | Per-member seat-type assignments + the types on offer | `sells: seats` **+** org metadata |
 | `assign_seat_type` | seats | Puts a member on a seat type (admin) | `sells: seats` **+** org metadata |
 | `list_top_up_requests` | top-ups | The queue, pending and settled | `replenish.request` **+** org metadata |
@@ -200,7 +208,7 @@ Two deliberate fallbacks, both "allow": no principal (the org-key case), and an 
 
 **Every read is member-visible; that is the rule, not an oversight.** Balance, usage, limits, spend controls, plan, seats, invoices, payment methods, profile, portal — and the top-up queue, which is workspace-wide, so a member sees colleagues' requests. Pinned in `scripts/live/09-roles-and-isolation.mjs`, because "what a member can SEE" is a decision no refusal governs and nothing had ever asserted.
 
-**Nothing prevents demoting the LAST admin**, and a UI offering that control must guard it itself. Measured: WorkOS accepts the write, `isAdmin` then returns false for everyone, and every admin-gated tool answers 403 to every human. An org API key still gets through — which is why this survives a headless test suite and only bites a real person, and why it is the way back in.
+**The LAST admin cannot be demoted or removed**, and this is the one place the library refuses on "I cannot tell". Measured before it was guarded: WorkOS accepts the write, `isAdmin` then returns false for everyone, and every admin-gated tool answers 403 to every human — an org API key still gets through, which is why it survives a headless test suite and only bites a real person, and why it is the way back in. `isLastAdmin` returns `null` when no role can be read (an adapter with `listMemberIds` but no `listMembers`), and callers treat that as REFUSE — the opposite of the "unknown allows" trade-off `enforceMember`, `seatAssignable` and the top-up gate all make, because here the thing being prevented IS the stranding. Promoting is never refused: it can only add an admin.
 
 **A role change takes effect on the next call.** `isAdmin` reads WorkOS every time and is cached nowhere, so a promotion works immediately and — the half that matters — a demotion bites immediately.
 
@@ -219,7 +227,7 @@ Deleting a workspace was one call (`deleteOrg`) that removed the WorkOS organiza
 
 **WorkOS organization deletion is eventually consistent** — measured at ~3–6s: `deleteOrganization` returns success and `getOrganization` still answers with the org. A UI that deletes then re-lists will show it, and a delete-then-verify check reads as a failed delete.
 
-**`limits.members` is DISPLAYED and not enforced.** `list_plans` reports it and nothing refuses a membership beyond it, so a plan advertising ten seats admits a hundred. Left as-is deliberately — membership creation is the app's own flow, not this library's — but it is a promise the code does not keep, so an app that sells on it must check `planMemberLimit(plans, plan)` itself.
+**`limits.members` is ENFORCED at the invitation, and PENDING INVITATIONS COUNT.** `list_plans` advertised it on every plan and nothing refused a membership beyond it, so a plan selling ten seats admitted a hundred — left to each app, which means each app wrote the counting and the count that matters existed per consumer. `memberSeats` / `inviteMember` (`src/members.ts`) own it now. Counting active members alone is not a limit: a three-seat workspace with one member can send two invitations and the third has nowhere to land, and the refusal — if it ever comes — arrives when the last person ACCEPTS, addressed to the one person who cannot do anything about it. A revoked invitation gives the seat back. **Membership creation is still the app's flow** (Pattern B needs its own row first); what the library owns is who may be added.
 
 ## Metadata is a budget, and a per-member record does not fit in it
 
