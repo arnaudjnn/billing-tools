@@ -519,8 +519,31 @@ consumer's inbound route most likely already verifies. `webhookNotifier` retries
 network failures, and does **not** retry a 4xx: the receiver understood and refused, and
 repeating it only doubles the refusals.
 
+**Usage alerts (`src/alerts.ts`) are the one kind only the hot path can notice.** Nothing
+else knows the moment a call took somebody from 79% to 81%, and `meterUsage` already holds
+the whole `AllowanceState` — pack, pool, and the customer's own ceiling — because it had to,
+to decide the call was allowed. So the check is free: no extra read, no cron re-walking every
+workspace. Fired after the charge, fire-and-forget, beside the auto-reload.
+
+Two kinds, one event. **Percent** thresholds on an allowance the PLAN gives (default
+`[80, 100]`, `meter.alertThresholds`), and **credits** on the customer's own spend alerts
+(`setSpendControls`'s `alertCredits` — collected by a billing page since forever and read by
+nothing until now; it comes off the customer object `resolveAllowance` already retrieves, so
+carrying it costs nothing). Rate limits are deliberately never alerted on: they reset within
+days and the customer cannot act on one.
+
+Said ONCE, which is the whole difficulty. The store holds the HIGHEST threshold announced per
+subject per cycle — that single number answers both "again?" (no) and "the next one up?"
+(yes) — in ORG metadata for a pool or a ceiling and in the MEMBER's own store for a seat
+pack, bounded to three workspaces the way the grants store is. A new cycle replaces the
+record rather than appending, which is also what makes the alerts fire again next month. The
+read-modify-write is deliberately not transactional: two concurrent calls can both decide to
+send, and the derived id (`alert:<org>:<cycle>:<key>:<threshold>`) turns that race into one
+email at the receiver. Locking a metered call to avoid a rare duplicate would be the wrong
+trade by a wide margin.
+
 Events today: `invitation.created`, `topup.requested`, `topup.resolved`,
-`upgrade.requested`. They fire from the choke points every path funnels through —
+`upgrade.requested`, `usage.threshold`. They fire from the choke points every path funnels through —
 `requestTopUp` (the raw tool, the derived `requestExtraAllowance`, and `api.topUps.request`
 all reach it), `approveTopUp` / `denyTopUp` / `grantTopUp`, `requestSeatChange` /
 `requestPlanChange`, and the invitation service, which `createBilling` **wraps** so the event

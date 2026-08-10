@@ -155,6 +155,15 @@ export interface CreateBillingOptions {
      * need it, and `createMeter` warns at boot.
      */
     ledger?: UsageLedger;
+    /**
+     * Percentages of an included allowance worth telling somebody about. Default `[80, 100]`.
+     *
+     * Only meaningful with `notifications` configured, and only for allowances the plan
+     * GIVES (a seat pack, the shared pool). Rate limits are deliberately never alerted on:
+     * they reset within days and the customer cannot act on one. The customer's own spend
+     * alerts are theirs, set through `set_spend_controls`, and are not a deployment default.
+     */
+    alertThresholds?: readonly number[];
   };
 }
 
@@ -411,6 +420,11 @@ export function createBilling(opts: CreateBillingOptions) {
         cycleStart: opts.meter.cycleStart,
         cycleKey: opts.meter.cycleKey,
         ledger,
+        // The alerts ride the same emitter as everything else, and they are the one kind
+        // this library can only notice on the hot path: nothing else knows the moment a
+        // call took somebody from 79% to 81%.
+        notify,
+        ...(opts.meter.alertThresholds ? { alertThresholds: opts.meter.alertThresholds } : {}),
       })
     : undefined;
   const meterRequest = meter

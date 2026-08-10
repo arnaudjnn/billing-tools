@@ -60,6 +60,15 @@ export interface LimitState {
    * why this is a field on one shape rather than a second kind of limit.
    */
   kind?: "rate" | "spend";
+  /**
+   * The credit figures the CUSTOMER asked to be warned at (`setSpendControls`).
+   *
+   * Only on the `spend` limit, because only that one is theirs. It comes off the customer
+   * object this read already retrieves, so carrying it costs nothing — and it was being
+   * dropped, which is why a billing page could offer "warn me at 10 000" and nothing
+   * anywhere ever looked at the answer.
+   */
+  alertsAt?: number[];
 }
 
 export interface AllowanceState {
@@ -274,7 +283,7 @@ export async function resolveAllowance(
     ? Promise.resolve([])
     : customerPromise
         .then((c) => getSpendControls(customerId, c))
-        .then(({ limitCredits }) => {
+        .then(({ limitCredits, alertCredits }) => {
         // The deployment's default when the customer named none. This is what makes a
         // configured ceiling a REAL one: the previous arrangement had a consumer persist
         // the default on first read of its billing page, so a workspace nobody had opened
@@ -302,6 +311,7 @@ export async function resolveAllowance(
               remaining: Math.max(0, ceiling - used),
               window,
               kind: "spend" as const,
+              ...(alertCredits?.length ? { alertsAt: alertCredits } : {}),
             },
           ]);
       });

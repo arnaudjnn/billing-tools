@@ -4,6 +4,8 @@ import { describeDenial, fundingFor, resolveAllowance, type DenialReason } from 
 import { getSeatType } from "./seats.js";
 import { cycleWindowFor, planModel, type CycleWindow, type PlanCatalog } from "./plan-model.js";
 import { defaultUsageLedger, warnLedgerGaps, type UsageLedger } from "./usage-ledger.js";
+import { maybeAlert } from "./alerts.js";
+import type { Notify } from "./notifications/index.js";
 import type { BillingAdapter, ResolvedConfig } from "./types.js";
 
 export interface MeterCaller {
@@ -36,6 +38,10 @@ export interface MeterInput {
    *  the same default `createBilling` and `createMeter` apply. */
   ledger?: UsageLedger;
   caller?: MeterCaller;
+  /** Say "you are nearly out" when this call crosses a threshold. See `alerts.ts`. */
+  notify?: Notify;
+  /** Percentages of an included allowance worth an email. Default `[80, 100]`. */
+  alertThresholds?: readonly number[];
 }
 
 export type MeterResult =
@@ -144,6 +150,21 @@ export async function meterUsage(
     )
     autoReloadFor(customerId, config).catch(() => {})
   }
+
+  // "You are nearly out", from the state this call already loaded to decide it was allowed.
+  //
+  // Here rather than anywhere else because here is the only place the numbers are current
+  // AND free: `state` holds the pack, the pool and the customer's own ceiling, and the
+  // alternative is a cron re-reading every workspace to learn what one metered call just
+  // found out. Fire-and-forget, after the charge, for the same reason as the auto-reload
+  // above — an email must not delay or fail the call it is about.
+  maybeAlert(adapter, input.notify, {
+    orgId,
+    memberId: caller?.kind === "user" ? caller.id : null,
+    cycleKey: state.cycle.key,
+    state,
+    thresholds: input.alertThresholds,
+  })
   return { ok: true, funded: funding.source }
 }
 
@@ -168,6 +189,10 @@ export interface MeterConfig<R extends Record<string, number> = Record<string, n
   resolvePlan: (orgId: string) => Promise<string | null>
   /** Seat-type keys a caller maps to by identity. Default standard / api. */
   seatDefaults?: { user?: string; api?: string }
+  /** Say "you are nearly out" — `createBilling` passes its emitter. See `alerts.ts`. */
+  notify?: Notify
+  /** Percentages of an included allowance worth an email. Default `[80, 100]`. */
+  alertThresholds?: readonly number[]
   /** Plan-cache TTL (ms). Default 60_000. The plan changes rarely; a brief stale
    *  read only affects which allowance mode applies, never the debit. */
   planCacheTtlMs?: number
@@ -290,6 +315,8 @@ export function createMeter<R extends Record<string, number> = Record<string, nu
       cycle: cycleOverride?.(),
       ledger,
       caller,
+      notify: meterCfg.notify,
+      ...(meterCfg.alertThresholds ? { alertThresholds: meterCfg.alertThresholds } : {}),
     })
   }
 }

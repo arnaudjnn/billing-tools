@@ -652,3 +652,14 @@ export {
   type WebhookNotifierOptions,
 } from "./notifications/index.js";
 export { createEmitter } from "./notifications/emit.js";
+
+// "You are nearly out", noticed on the one call that can see it for free. `crossings` is
+// pure — a consumer's own screen can ask the same question of a usage summary without
+// sending anything.
+export {
+  claimCrossings,
+  crossings,
+  maybeAlert,
+  DEFAULT_ALERT_THRESHOLDS,
+  type AlertCrossing,
+} from "./alerts.js";

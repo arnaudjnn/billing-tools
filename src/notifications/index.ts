@@ -111,8 +111,15 @@ export type BillingNotification =
         scope: "member" | "org";
         member: NotifiedMember | null;
         window: NotifiedWindow;
-        /** The threshold crossed (80, 100, …), not the exact percentage. */
+        /**
+         * The threshold crossed, not the exact percentage.
+         *
+         * `percent` when it is a share of an allowance the plan gives (80, 100). `credits`
+         * when it is the customer's OWN monthly spend alert, where they chose an absolute
+         * figure and a percentage of it would be a number they never typed.
+         */
         threshold: number;
+        unit: "percent" | "credits";
       };
     };
 

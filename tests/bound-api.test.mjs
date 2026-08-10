@@ -238,7 +238,13 @@ test("every adapter-first function is wired into the bound API", async () => {
   // `meterUsage` is the one exception: consumers get the richer BOUND meter from
   // `createBilling({ meter })` (`billing.meter` / `billing.meterRequest`), which also
   // owns the rate card, so duplicating it here would give two ways to meter a call.
-  const EXEMPT = new Set(["meterUsage"]);
+  //
+  // The two alert functions are exempt for the same reason read the other way: they are
+  // not a capability anybody CALLS. `maybeAlert` is a side effect of a metered call — the
+  // one moment the numbers are both current and free — and `claimCrossings` is its dedupe.
+  // A bound `api.alerts.maybe(...)` would be a button for "pretend a call just happened",
+  // which answers no question a customer, an agent or an operator has.
+  const EXEMPT = new Set(["meterUsage", "maybeAlert", "claimCrossings"]);
 
   const unwired = [...adapterFirst.keys()]
     .filter((n) => !EXEMPT.has(n))
