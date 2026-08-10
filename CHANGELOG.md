@@ -1,3 +1,10 @@
+# [21.4.0](https://github.com/arnaudjnn/billing-tools/compare/v21.3.0...v21.4.0) (2026-08-10)
+
+
+### Features
+
+* **surface:** a named key, and the workspace's own name and end ([2fb3475](https://github.com/arnaudjnn/billing-tools/commit/2fb3475f8d3941b41bdb48ee77f0a4dfc4409063))
+
 # [21.3.0](https://github.com/arnaudjnn/billing-tools/compare/v21.2.0...v21.3.0) (2026-08-10)
 
 
