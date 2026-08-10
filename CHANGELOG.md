@@ -1,3 +1,10 @@
+# [21.6.0](https://github.com/arnaudjnn/billing-tools/compare/v21.5.0...v21.6.0) (2026-08-10)
+
+
+### Features
+
+* **usage:** a seat's three names, so nobody reconstructs one ([fb20ac2](https://github.com/arnaudjnn/billing-tools/commit/fb20ac2939104697757da3df3bd83ef21ed6f533))
+
 # [21.5.0](https://github.com/arnaudjnn/billing-tools/compare/v21.4.0...v21.5.0) (2026-08-10)
 
 
