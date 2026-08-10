@@ -1,3 +1,10 @@
+# [21.3.0](https://github.com/arnaudjnn/billing-tools/compare/v21.2.0...v21.3.0) (2026-08-10)
+
+
+### Features
+
+* **members:** who is in a workspace, and the two rules about it ([52eb85c](https://github.com/arnaudjnn/billing-tools/commit/52eb85c052718f256bf9512141eded7533971012))
+
 # [21.2.0](https://github.com/arnaudjnn/billing-tools/compare/v21.1.0...v21.2.0) (2026-08-10)
 
 
