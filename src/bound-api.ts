@@ -66,6 +66,7 @@ import {
   requestTopUp,
 } from "./topup.js";
 import { closeWorkspace, findOrphanedSubscriptions } from "./close-workspace.js";
+import { completeCheckout } from "./complete-checkout.js";
 import {
   changeMemberRole,
   inviteMember,
@@ -510,6 +511,19 @@ export function createBoundApi(deps: BoundApiDeps) {
           memberId,
         });
       },
+      /**
+       * CAN this plan take a grant at all, and if not, why.
+       *
+       * `grantExtraAllowance` answers `not_capped` for a plan with no per-seat pack — a pool
+       * has nothing per-member to raise and the meter would ignore one. A screen needs that
+       * BEFORE it renders the control, and both consumers re-derived it from
+       * `cap.kind === "per_seat"`: a second reading of the same rule, in the place least
+       * likely to be updated when the rule moves.
+       */
+      grantable: async (orgId: string): Promise<{ ok: boolean; reason?: "not_capped" }> => {
+        const model = planModel(plans, await planOf(orgId));
+        return model?.cap.kind === "per_seat" ? { ok: true } : { ok: false, reason: "not_capped" };
+      },
       /** That member's own ask still waiting on an answer, or null. */
       pending: (orgId: string, memberId: string, cycle: string) =>
         pendingTopUpFor(adapter, orgId, memberId, cycle),
@@ -596,6 +610,21 @@ export function createBoundApi(deps: BoundApiDeps) {
         changeMemberRole(adapter, orgId, userId, roleSlug),
       /** Clears their records for this workspace BEFORE the membership — see `removeMember`. */
       remove: (orgId: string, userId: string) => removeMember(adapter, orgId, userId),
+    },
+
+    checkout: {
+      /**
+       * AFTER the payment — verify, attach the customer, stamp `org_id`, mirror the plan, and
+       * restore the billing address Checkout overwrote with the payer's.
+       *
+       * Opening a session was always the library's and finishing one was every consumer's, so
+       * the first app to do it wrote this three times (signup, plan change, top-up), each copy
+       * a different subset. Idempotent, because a return URL is a page a browser reloads.
+       */
+      complete: (
+        sessionId: string,
+        opts?: Parameters<typeof completeCheckout>[2],
+      ) => completeCheckout(adapter, sessionId, opts),
     },
 
     workspace: {

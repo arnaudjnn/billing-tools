@@ -33,6 +33,30 @@ export interface UsageWindow extends LimitState {
   resetsAt: number | null;
 }
 
+/**
+ * The windows one scope's card should SHOW, with the duplicates of the included package
+ * dropped.
+ *
+ * A monthly rate limit and a monthly package are the same period read twice with different
+ * denominators, so a card that listed both showed "Mese 40%", "Questo mese 62%" and
+ * "Pacchetto incluso 62%" — three rows that read as a mistake rather than as three genuinely
+ * different caps. Shorter windows stay: a week says something the package cannot.
+ *
+ * It lives here rather than in a consumer because it is a rule about the plan model, not about
+ * anybody's language — and it was written twice already, once per usage screen, which is
+ * exactly how two pages come to disagree about what a plan sells.
+ */
+export function visibleWindows(
+  windows: readonly UsageWindow[],
+  scope: "org" | "caller",
+  included: UsageWindow | null,
+): UsageWindow[] {
+  const rows = windows.filter(
+    (w) => w.scope === scope && !(included && (w.every === "month" || w.every === "cycle")),
+  );
+  return included ? [...rows, included] : rows;
+}
+
 /** Which seat the caller holds, and the plan's own word for it. */
 export interface UsageSeat {
   /** Seat type key: a sold seat type, the plan's implicit seat, or `api`. */
@@ -43,6 +67,15 @@ export interface UsageSeat {
    * because this is the pill on a usage screen, not a pricing card.
    */
   label: string | null;
+  /**
+   * The SHORT form on its own — `display.badge`, null when the config gave none.
+   *
+   * `label` collapses the two, which is right for a pill and wrong for everything else: a
+   * consumer needing the short word where the long one already carries a noun ("Posto
+   * Premium" in a row that says "posto") was reduced to stripping the noun with a regex, in
+   * two files. Both forms are the config's, so both are reported and the caller picks.
+   */
+  badge: string | null;
 }
 
 export interface UsageSummary {
@@ -128,6 +161,7 @@ export function resolveSeat(
   return {
     type,
     label: display ? (resolveLocalized(display.badge ?? display.label, locale) ?? null) : null,
+    badge: display?.badge ? (resolveLocalized(display.badge, locale) ?? null) : null,
   };
 }
 

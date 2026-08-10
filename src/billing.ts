@@ -464,11 +464,35 @@ const taxRatePercent = new Map<string, Promise<{ percentage: number; inclusive: 
  * amount asked for — that is what "inclusive" means, and adding them on top would
  * overstate the charge.
  */
+/**
+ * Credits per unit of currency — 100, i.e. one credit per cent.
+ *
+ * Exported because it is the library's arithmetic and consumers were keeping their own copy of
+ * it (`CREDITS_PER_UNIT = 100` in an app constants file) to render "€12.50 = 1250 crediti"
+ * beside a control the library prices. Two copies of a conversion is one of them being wrong
+ * the day it changes, and this one is quoted in `buy_credits`'s own description.
+ *
+ * It is a RATIO, not a currency thing: a credit is a unit of usage, and the price of usage is
+ * what `config.currency` denominates. Changing it is a pricing change for every deployment,
+ * which is why it is a constant here rather than a config field nobody would keep in step.
+ */
+export const CREDITS_PER_UNIT = 100;
+
+/** Currency → credits, rounded the way every charge in this file rounds. */
+export function creditsForAmount(amountMajor: number): number {
+  return Math.round(amountMajor * CREDITS_PER_UNIT);
+}
+
+/** Credits → currency, for a control sized in credits (a share of somebody's allowance). */
+export function amountForCredits(credits: number): number {
+  return Math.round(credits) / CREDITS_PER_UNIT;
+}
+
 export async function quoteCreditPurchase(
   amountMajor: number,
   taxRateIds: readonly string[] = [],
 ): Promise<CreditQuote> {
-  const subtotal = Math.round(amountMajor * 100);
+  const subtotal = creditsForAmount(amountMajor);
   const stripe = getStripe();
   const rates = await Promise.all(
     taxRateIds.map((id) => {
@@ -684,7 +708,7 @@ export async function purchaseCredits(
   } = {},
 ): Promise<PurchaseResult> {
   const method = opts.method ?? "checkout";
-  const credits = Math.round(amountMajor * 100);
+  const credits = creditsForAmount(amountMajor);
   const currency = config.currency;
   const stripe = getStripe();
 

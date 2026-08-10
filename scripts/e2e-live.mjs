@@ -20,6 +20,7 @@ import Stripe from "stripe";
 import { WorkOSOrgAdapter } from "../dist/adapters/workos-org.js";
 import { __setStripeForTests } from "../dist/billing.js";
 import { createBilling } from "../dist/create-billing.js";
+import { createWorkOSInvitations } from "../dist/invitations.js";
 import { createToolDispatchHandler } from "../dist/routes/rest.js";
 import { getWorkOS } from "../dist/workos.js";
 
@@ -64,6 +65,9 @@ const SECTIONS = [
   ["09", "roles and isolation", () => import("./live/09-roles-and-isolation.mjs")],
   ["10", "workspace close", () => import("./live/10-workspace-close.mjs")],
   ["11", "refusals and dunning", () => import("./live/11-refusals-and-dunning.mjs")],
+  // 12 creates its own throwaway workspace, because it REMOVES people — and the run's org is
+  // every other section's fixture.
+  ["12", "members", () => import("./live/12-members.mjs")],
 ];
 
 async function main() {
@@ -122,6 +126,11 @@ async function main() {
     config,
     plans: LIVE_PLANS,
     realm: "e2e-live",
+    // Membership: the invitation service is what turns the three invitation tools on, and
+    // section 12 is the only thing that can prove a real invitation is created, held against a
+    // seat, and revoked. WorkOS sends its own email to an `@example.test` address that goes
+    // nowhere, which is what a test account is for.
+    members: { invitations: createWorkOSInvitations({ baseUrl: config.baseUrl }) },
     // No `meter`: metering is proven exactly by scripts/e2e-scope-ledger.mjs, and its
     // ~60s of meter lag has no place in a run that asserts on money.
   });

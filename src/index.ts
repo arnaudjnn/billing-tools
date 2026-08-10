@@ -616,6 +616,13 @@ export {
 // WHO is in a workspace, and the two rules about it — the member limit a plan advertises and
 // the last admin nothing used to protect. Exported for a consumer's own screen: the point of
 // putting them here is that its refusal and the tool's are the same refusal.
+export { visibleWindows } from "./usage.js";
+export { CREDITS_PER_UNIT, amountForCredits, creditsForAmount } from "./billing.js";
+export {
+  completeCheckout,
+  type CompleteCheckoutOptions,
+  type CompleteCheckoutResult,
+} from "./complete-checkout.js";
 export {
   changeMemberRole,
   inviteMember,
