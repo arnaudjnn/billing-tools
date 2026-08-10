@@ -1,3 +1,10 @@
+## [21.6.2](https://github.com/arnaudjnn/billing-tools/compare/v21.6.1...v21.6.2) (2026-08-10)
+
+
+### Bug Fixes
+
+* **plans:** a seat's names are pure, so they live where nothing is pulled in ([2494872](https://github.com/arnaudjnn/billing-tools/commit/24948720c77c8b67e24e787b958fa30ed3823d2a))
+
 ## [21.6.1](https://github.com/arnaudjnn/billing-tools/compare/v21.6.0...v21.6.1) (2026-08-10)
 
 
