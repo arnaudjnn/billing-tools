@@ -1,3 +1,10 @@
+## [22.0.1](https://github.com/arnaudjnn/billing-tools/compare/v22.0.0...v22.0.1) (2026-08-10)
+
+
+### Bug Fixes
+
+* **notifications:** deliver the one event whose recipients are ours to route ([d2330d3](https://github.com/arnaudjnn/billing-tools/commit/d2330d34128a8e461574b2bbf33ab4e266817b74))
+
 # [22.0.0](https://github.com/arnaudjnn/billing-tools/compare/v21.8.0...v22.0.0) (2026-08-10)
 
 
