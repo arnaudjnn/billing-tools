@@ -1,3 +1,10 @@
+## [25.0.1](https://github.com/arnaudjnn/billing-tools/compare/v25.0.0...v25.0.1) (2026-08-10)
+
+
+### Bug Fixes
+
+* **tax:** ensureAccountTaxId had never worked, in three ways ([95ce300](https://github.com/arnaudjnn/billing-tools/commit/95ce300a3a65f146b66130544d90dcb9ab6af0e4))
+
 # [25.0.0](https://github.com/arnaudjnn/billing-tools/compare/v24.0.1...v25.0.0) (2026-08-10)
 
 
