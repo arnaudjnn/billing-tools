@@ -204,3 +204,76 @@ test("a rate limit is never offered a payment — no payment lifts it", async ()
   assert.equal(res.headers.get("retry-after"), "42");
   assert.equal(res.headers.get("www-authenticate"), null);
 });
+
+// ── The same offer on a route that is not a tool ─────────────────────────────
+//
+// The other consumer's public API meters `api_request` on ordinary REST routes, and had
+// wrapped the guard by hand exactly as the first one wrapped the dispatcher. Same rule:
+// money can be offered, a rate limit cannot.
+
+import { createApiMeterGuard } from "../dist/metering.js";
+
+const keyed = () =>
+  new Request("https://x.test/api/parcels", { headers: { authorization: "Bearer sk_x" } });
+const adapter = { async validateApiKey() { return { orgId: "ws_1", keyId: "key_1" }; } };
+
+test("an empty wallet on a plain route is offered a payment too", async () => {
+  const guard = createApiMeterGuard(
+    adapter,
+    async () => ({ ok: false, reason: "insufficient_balance", message: "Insufficient credits." }),
+    { payment: createMachinePaymentHandler({ amount: 7, currency: "eur" }) },
+  );
+
+  const res = await guard(keyed(), "api_request");
+  assert.equal(res.status, 402);
+  assert.match(res.headers.get("www-authenticate"), /^Payment .*amount="7", currency="eur"/);
+});
+
+test("a settled payment re-meters the request rather than waving it through", async () => {
+  // An unmetered request is one the workspace was never charged for. Paying funds the
+  // meter; it does not bypass it.
+  let calls = 0;
+  const guard = createApiMeterGuard(
+    adapter,
+    async () => {
+      calls++;
+      return calls === 1
+        ? { ok: false, reason: "insufficient_balance", message: "Insufficient credits." }
+        : { ok: true };
+    },
+    {
+      payment: createMachinePaymentHandler({
+        amount: 7,
+        currency: "eur",
+        settle: async () => ({ receipt: "rcpt" }),
+      }),
+    },
+  );
+
+  const res = await guard(
+    new Request("https://x.test/api/parcels", {
+      headers: { authorization: "Bearer sk_x", "x-payment": "cred" },
+    }),
+    "api_request",
+  );
+  assert.equal(res, null, "null is the guard letting the handler run");
+  assert.equal(calls, 2, "metered again, for real");
+});
+
+test("a rate limit stays a 429 with Retry-After, and is never offered a payment", async () => {
+  const guard = createApiMeterGuard(
+    adapter,
+    async () => ({
+      ok: false,
+      reason: "rate_limit_reached",
+      message: "Too fast.",
+      retryAt: Date.now() + 30_000,
+    }),
+    { payment: createMachinePaymentHandler({ amount: 7, currency: "eur" }) },
+  );
+
+  const res = await guard(keyed(), "api_request");
+  assert.equal(res.status, 429);
+  assert.ok(Number(res.headers.get("retry-after")) > 0);
+  assert.equal(res.headers.get("www-authenticate"), null, "paying would buy nothing");
+});
