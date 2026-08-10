@@ -1,6 +1,21 @@
 import { isLocalTaxOrigin, type LocalTaxOrigin } from "./tax-origins.js";
 import type { PartialMessages } from "./i18n.js";
 
+/**
+ * The role slug `WorkOSOrgAdapter.isAdmin` matches on, and the one the doctor checks exists.
+ *
+ * ONE definition — the adapter, the membership policy, the notification emitter (whose
+ * "email the admins" audience is answered by it) and the doctor all read this. Four copies
+ * of a magic string is how a check comes to disagree with the thing it checks, and the
+ * failure is invisible in a headless run: org API keys keep working while every human gets
+ * 403 from every admin-gated tool.
+ *
+ * It lives HERE, in the dependency-free module on the `/plans` leaf, so a client component
+ * can compare a role against it without pulling Stripe and WorkOS into the browser bundle to
+ * do it. That was not a hypothesis: a consumer had the literal in six files for that reason.
+ */
+export const ADMIN_ROLE_SLUG = "admin";
+
 // The storage seam. `orgId` is an opaque string — a WorkOS org id, a Postgres
 // workspace id ("ws_…"), whatever the host uses. Implement this and the rest of
 // billing-tools (auth flow, metering, all Stripe math, tool/route/CLI surfaces)

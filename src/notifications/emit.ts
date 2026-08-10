@@ -1,4 +1,4 @@
-import type { BillingAdapter, OrgMember } from "../types.js";
+import { ADMIN_ROLE_SLUG, type BillingAdapter, type OrgMember } from "../types.js";
 import type { Audience, BillingNotification, Notifier, Notify } from "./index.js";
 
 // Who gets told, and the one place that swallows a failed telling.
@@ -6,8 +6,6 @@ import type { Audience, BillingNotification, Notifier, Notify } from "./index.js
 // Kept apart from `./index.ts` so the wire format (the event union, the signature, the
 // transport) stays free of the adapter: a consumer's route imports that half to VERIFY a
 // delivery, and has no business pulling the storage seam in to do it.
-
-const ADMIN_ROLE = "admin";
 
 /**
  * Build the fire-and-forget `Notify` every call site inside the library holds.
@@ -70,7 +68,7 @@ async function withRecipients(
   const members = await listOrgMembers(adapter, event.orgId);
   const to =
     audience.kind === "admins"
-      ? members.filter((m) => m.roleSlug === ADMIN_ROLE).map((m) => m.email)
+      ? members.filter((m) => m.roleSlug === ADMIN_ROLE_SLUG).map((m) => m.email)
       : members.filter((m) => m.userId === audience.memberId).map((m) => m.email);
 
   // The member's own address, when the event names one and the caller could not. The same

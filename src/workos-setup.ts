@@ -15,10 +15,12 @@ import { getWorkOS } from "./workos.js";
 // third-party OAuth app), which is a different object entirely. `checkWorkOSSetup`
 // therefore prints the exact URI to add rather than pretending it can check it.
 
-/** The role slug `WorkOSOrgAdapter.isAdmin` matches on. ONE definition, imported by
- *  the adapter, the provisioner and the doctor — three copies of a magic string is
- *  how the check comes to disagree with the thing it checks. */
-export const ADMIN_ROLE_SLUG = "admin";
+// `ADMIN_ROLE_SLUG` lives in `types.ts` — a dependency-free module on the `/plans` leaf —
+// and is re-exported here because this is where callers expect it. It moved because a bare
+// string reachable only from the ROOT barrel forces every client component to hardcode it:
+// importing it pulled Stripe, WorkOS and the MCP SDK into a browser bundle to answer
+// `role === "admin"`, so a consumer wrote the literal instead, in six files.
+export { ADMIN_ROLE_SLUG } from "./types.js";
 
 export interface WorkOSRoleSpec {
   /** Stable identifier. `isAdmin` matches on this, not on the name. */
