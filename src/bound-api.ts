@@ -267,7 +267,21 @@ export function createBoundApi(deps: BoundApiDeps) {
         /** That member's open ask, or null once the workspace has reached the plan anyway. */
         pending: async (orgId: string, memberId: string) =>
           pendingPlanRequest(adapter, orgId, memberId, { plans, currentPlan: await planOf(orgId) }),
-        ask: async (orgId: string, memberId: string, opts: { plan?: string; note?: string } = {}) =>
+        /**
+         * `seats` and `contact` are what a QUOTE-only target needs: how many people they
+         * expect, and who to answer. The contact is taken from the signed-in user by the
+         * consumer — it is never typed into a form, because the account already knows it.
+         */
+        ask: async (
+          orgId: string,
+          memberId: string,
+          opts: {
+            plan?: string;
+            note?: string;
+            seats?: number;
+            contact?: { firstName: string; lastName: string; email: string };
+          } = {},
+        ) =>
           requestPlanChange(adapter, orgId, { ...opts, memberId, plans, currentPlan: await planOf(orgId), notify: deps.notify }),
         /** Ask for a bigger SEAT — the right ask while one exists above them. */
         askSeat: async (orgId: string, memberId: string, opts: { seatType?: string; note?: string } = {}) =>
@@ -677,6 +691,9 @@ export function createBoundApi(deps: BoundApiDeps) {
      * key can reach.
      */
     quotes: {
+      /** Every ask this workspace has filed, with any price on it — what a screen offering
+       *  "accept" reads. Same store as `plans.pending`, listed rather than filtered. */
+      list: (orgId: string) => listPlanRequests(adapter, orgId),
       /** Price an open request. The operator's half; `enforceOperator` gates the TOOL. */
       send: (orgId: string, input: Parameters<typeof quotePlanRequest>[2]) =>
         quotePlanRequest(adapter, orgId, { notify: deps.notify, ...input }),
