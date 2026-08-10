@@ -215,10 +215,17 @@ export interface PlanRequest {
     note?: string;
     at: string;
   };
-  /** What happened when the admin accepted: charged on file, or invoiced. */
+  /**
+   * What happened when the admin accepted: charged on file, invoiced, or waiting on the
+   * cardholder's BANK.
+   *
+   * The third is not a failure and not a bill — the invoice exists and is authenticated
+   * from its hosted page — and recording it as either of the others would send somebody to
+   * the wrong place to fix it.
+   */
   accepted?: {
     at: string;
-    method: "saved_card" | "invoice";
+    method: "saved_card" | "invoice" | "needs_authentication";
     invoiceId?: string;
     invoiceUrl?: string;
   };

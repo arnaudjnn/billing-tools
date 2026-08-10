@@ -748,6 +748,9 @@ export async function sellCredits(
 ): Promise<
   | { status: "invoiced"; invoiceId: string; hostedInvoiceUrl: string | null; dueAt: number | null; emailed: boolean }
   | { status: "charged"; invoiceId: string; hostedInvoiceUrl: string | null; paid: true }
+  /** The card is fine and the BANK wants the cardholder. Nothing is charged yet; the hosted
+   *  invoice page is where they confirm it. */
+  | { status: "needs_authentication"; invoiceId: string; hostedInvoiceUrl: string | null; message: string }
   | { status: "refused"; reason: "no_email" | "no_card" | "invalid_amount" | "charge_failed"; message: string }
 > {
   const { credits, amountMinor } = input;
@@ -838,9 +841,26 @@ export async function sellCredits(
         paid: true,
       };
     } catch (e) {
-      // A declined card leaves a REAL finalized invoice behind, and that is the useful
-      // outcome rather than a lost charge: it is payable from its hosted page, and the
-      // credits still land through `invoice.paid` whenever it is settled.
+      // A card that needs the BANK is not a card that failed, and telling somebody "we have
+      // emailed you a bill" when their bank is waiting for a tap is how a payable invoice
+      // goes unpaid. European cards ask for this routinely on an off-session charge — there
+      // is nobody at a browser to authenticate, which is the whole definition of
+      // off-session — so it is its own answer, with the page the customer completes it on.
+      //
+      // Everything else (a decline, a dead card) keeps the finalized invoice: it is payable
+      // from its hosted page and still grants through `invoice.paid`, which beats losing the
+      // sale to an error nobody sees.
+      const code = (e as { code?: string; raw?: { code?: string } })?.code ?? (e as { raw?: { code?: string } })?.raw?.code;
+      if (code === "invoice_payment_intent_requires_action" || code === "authentication_required") {
+        return {
+          status: "needs_authentication",
+          invoiceId: finalized.id!,
+          hostedInvoiceUrl: finalized.hosted_invoice_url ?? null,
+          message:
+            "The bank asked the cardholder to confirm this payment. It is not charged yet — " +
+            "open the invoice page to authenticate it.",
+        };
+      }
       return {
         status: "invoiced",
         invoiceId: finalized.id!,

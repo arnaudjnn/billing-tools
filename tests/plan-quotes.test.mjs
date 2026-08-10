@@ -454,3 +454,44 @@ test("the operators' event carries what an answer needs, so nobody re-reads our 
   assert.deepEqual(sent[0].data.metadata, { totalEstimatedSeats: 12 });
   assert.equal(sent[0].data.contact.email, "giulia@acme.it");
 });
+
+test("a card the BANK wants to check is its own answer, not a decline and not a bill", async () => {
+  // European cards ask for this routinely on an off-session charge — there is nobody at a
+  // browser to authenticate, which is the definition of off-session. Telling that customer
+  // "we have emailed you a bill" is how a payable invoice goes unpaid: they wait for an
+  // email while their bank waits for a tap.
+  const sent = {};
+  const stripe = saleStripe(sent, [{ id: "pm_1" }]);
+  stripe.invoices.pay = async () => {
+    const e = new Error("This payment requires authentication");
+    e.code = "invoice_payment_intent_requires_action";
+    throw e;
+  };
+  __setStripeForTests(stripe);
+
+  const res = await sellCredits("cus_1", "org_1", { currency: "eur", tax: { mode: "none" } }, {
+    credits: 1_000,
+    amountMinor: 900,
+  });
+
+  assert.equal(res.status, "needs_authentication");
+  assert.equal(res.invoiceId, "in_1");
+  assert.ok(res.hostedInvoiceUrl, "the page they authenticate on IS the remedy");
+  assert.match(res.message, /bank/i);
+});
+
+test("an ordinary decline still keeps the payable invoice", async () => {
+  const stripe = saleStripe({}, [{ id: "pm_1" }]);
+  stripe.invoices.pay = async () => {
+    const e = new Error("Your card was declined");
+    e.code = "card_declined";
+    throw e;
+  };
+  __setStripeForTests(stripe);
+
+  const res = await sellCredits("cus_1", "org_1", { currency: "eur", tax: { mode: "none" } }, {
+    credits: 1_000,
+    amountMinor: 900,
+  });
+  assert.equal(res.status, "invoiced", "losing the sale to an unseen error is the worse outcome");
+});

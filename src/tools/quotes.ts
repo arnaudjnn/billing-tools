@@ -48,6 +48,18 @@ function saleResult(sale: Awaited<ReturnType<typeof sellCredits>>, credits: numb
       credits_on_payment: credits,
     };
   }
+  if (sale.status === "needs_authentication") {
+    // Not charged, not refused, and not a bill in an inbox: the bank is waiting for the
+    // cardholder. Saying any of the other three would send somebody to the wrong place.
+    return {
+      status: "needs_authentication" as const,
+      invoice_id: sale.invoiceId,
+      // Where they confirm it. This link IS the remedy, so it is not optional decoration.
+      invoice_url: sale.hostedInvoiceUrl,
+      message: sale.message,
+      credits_on_payment: credits,
+    };
+  }
   return { status: "refused" as const, reason: sale.reason, message: sale.message };
 }
 
@@ -113,7 +125,12 @@ land when the invoice is PAID. Nothing is charged until this is called.`,
         requestId: open.id,
         accepted: {
           at: new Date().toISOString(),
-          method: sale.status === "charged" ? "saved_card" : "invoice",
+          method:
+            sale.status === "charged"
+              ? "saved_card"
+              : sale.status === "needs_authentication"
+                ? "needs_authentication"
+                : "invoice",
           invoiceId: sale.invoiceId,
           ...(sale.hostedInvoiceUrl ? { invoiceUrl: sale.hostedInvoiceUrl } : {}),
         },

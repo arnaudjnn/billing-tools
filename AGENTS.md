@@ -626,6 +626,15 @@ recoverable where losing the question is not.
 arithmetic, computed in `quotePlanRequest`, so the figure a customer accepts and the figure
 they are charged cannot drift. Fractional minor units are allowed on purpose.
 
+**A card the BANK wants to check is its own answer.** An off-session charge on a European
+card routinely comes back `invoice_payment_intent_requires_action` — there is nobody at a
+browser to authenticate, which is the definition of off-session. That is not a decline and
+not a bill: `needs_authentication` carries the hosted invoice page, which is where the
+cardholder completes it, and the accepted record says so rather than claiming an email went
+out. Telling that customer "we have emailed you a bill" is how a payable invoice goes unpaid
+— they wait for an email while their bank waits for a tap. An ordinary decline still keeps
+the finalized invoice, because losing a sale to an unseen error is the worse outcome.
+
 **Accepting charges the card on file, or emails a bill.** `sellCredits({ method: "auto" })`
 reads the wallet FIRST, because `collection_method` cannot be changed after an invoice is
 created: a card means `charge_automatically` + `invoices.pay({ off_session: true })`, no card
