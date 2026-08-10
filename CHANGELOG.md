@@ -1,3 +1,10 @@
+# [21.5.0](https://github.com/arnaudjnn/billing-tools/compare/v21.4.0...v21.5.0) (2026-08-10)
+
+
+### Features
+
+* **checkout:** finishing a payment is the library's too, and four rules come home ([81a5741](https://github.com/arnaudjnn/billing-tools/commit/81a5741cbcd3f7697aa2cb63b81f7a061b1da7db))
+
 # [21.4.0](https://github.com/arnaudjnn/billing-tools/compare/v21.3.0...v21.4.0) (2026-08-10)
 
 
