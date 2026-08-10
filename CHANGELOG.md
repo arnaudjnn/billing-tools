@@ -1,3 +1,10 @@
+## [22.0.3](https://github.com/arnaudjnn/billing-tools/compare/v22.0.2...v22.0.3) (2026-08-10)
+
+
+### Bug Fixes
+
+* **roles:** one admin slug, reachable without a browser bundle ([8bd3be5](https://github.com/arnaudjnn/billing-tools/commit/8bd3be570d5d43f61428a36dd66a952b9b45ca24))
+
 ## [22.0.2](https://github.com/arnaudjnn/billing-tools/compare/v22.0.1...v22.0.2) (2026-08-10)
 
 
