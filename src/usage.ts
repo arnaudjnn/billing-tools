@@ -1,6 +1,11 @@
 import { getBillingCustomerId } from "./billing.js";
 import { resolveAllowance, type AllowanceState, type LimitState } from "./allowance.js";
 import { resolveLocalized, type LocaleOptions } from "./i18n.js";
+// A seat's NAMES are pure resolution over the catalogue and live on the pure module, so a seat
+// picker or a pricing card can read them without pulling Stripe in. Re-exported here because
+// every consumer already imports them from this module.
+export { resolveSeat, type UsageSeat } from "./plan-model.js";
+import { resolveSeat, type UsageSeat } from "./plan-model.js";
 import { getSeatType } from "./seats.js";
 import {
   DEFAULT_SEAT_TYPE,
@@ -57,35 +62,6 @@ export function visibleWindows(
   return included ? [...rows, included] : rows;
 }
 
-/** Which seat the caller holds, and the plan's own word for it. */
-export interface UsageSeat {
-  /** Seat type key: a sold seat type, the plan's implicit seat, or `api`. */
-  type: string;
-  /**
-   * `display.badge`, else `display.label`, resolved for the requested locale —
-   * null when the config gave that seat no display at all. The badge form wins
-   * because this is the pill on a usage screen, not a pricing card.
-   */
-  label: string | null;
-  /**
-   * The FULL form on its own — `display.label`, null when the config gave none.
-   *
-   * `label` above is the PILL value and collapses the two, so a caller writing a sentence
-   * ("Passa a Posto Premium") could not get the long name back once a badge existed — one
-   * reached into `model.seatTypes.find(...)?.display?.label` itself to recover it, which is a
-   * consumer reading the catalogue shape to answer a question the resolver is for.
-   */
-  name: string | null;
-  /**
-   * The SHORT form on its own — `display.badge`, null when the config gave none.
-   *
-   * `label` collapses the two, which is right for a pill and wrong for everything else: a
-   * consumer needing the short word where the long one already carries a noun ("Posto
-   * Premium" in a row that says "posto") was reduced to stripping the noun with a regex, in
-   * two files. Both forms are the config's, so both are reported and the caller picks.
-   */
-  badge: string | null;
-}
 
 export interface UsageSummary {
   plan: string | null;
@@ -154,26 +130,6 @@ export interface UsageSummaryInput {
   locale?: LocaleOptions;
 }
 
-/**
- * How a plan presents one seat type: a sold seat type first, then the implicit
- * seat of a plan that sells none. Exported because a members list wants the same
- * pill as a usage screen, and reimplementing this lookup is how the two drift.
- */
-export function resolveSeat(
-  model: PlanModel | null,
-  type: string,
-  locale?: LocaleOptions,
-): UsageSeat {
-  const display =
-    model?.seatTypes.find((s) => s.key === type)?.display ??
-    (model?.seat?.key === type ? model.seat.display : null);
-  return {
-    type,
-    label: display ? (resolveLocalized(display.badge ?? display.label, locale) ?? null) : null,
-    name: display?.label ? (resolveLocalized(display.label, locale) ?? null) : null,
-    badge: display?.badge ? (resolveLocalized(display.badge, locale) ?? null) : null,
-  };
-}
 
 /**
  * Everything a usage screen shows for one subject (a workspace, or one member).

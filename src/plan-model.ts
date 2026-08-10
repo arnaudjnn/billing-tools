@@ -41,8 +41,10 @@
 
 import {
   formatMessage,
+  resolveLocalized,
   resolveMessages,
   type Localized,
+  type LocaleOptions,
   type LocalizedList,
   type PartialMessages,
 } from "./i18n.js";
@@ -207,6 +209,65 @@ export type Exhausted =
  * actually means. It is the only way to say that: the pack size cannot express it,
  * since the size is a number and the period is the window.
  */
+/**
+ * Which seat the caller holds, and the plan's own words for it.
+ *
+ * On the PURE module: resolving a seat's name is a lookup in the catalogue plus a locale
+ * choice, and it was reachable only through `usage.ts` — which imports the allowance engine,
+ * which imports Stripe. So a seat picker or a pricing card, the two screens that most want a
+ * seat's name, had to pull the whole engine through the root barrel to get a string. That is
+ * the mistake `CREDITS_PER_UNIT` already made once, at the cost of every page in a consumer.
+ */
+export interface UsageSeat {
+  /** Seat type key: a sold seat type, the plan's implicit seat, or `api`. */
+  type: string;
+  /**
+   * `display.badge`, else `display.label`, resolved for the requested locale —
+   * null when the config gave that seat no display at all. The badge form wins
+   * because this is the pill on a usage screen, not a pricing card.
+   */
+  label: string | null;
+  /**
+   * The FULL form on its own — `display.label`, null when the config gave none.
+   *
+   * `label` above is the PILL value and collapses the two, so a caller writing a sentence
+   * ("Passa a Posto Premium") could not get the long name back once a badge existed — one
+   * reached into `model.seatTypes.find(...)?.display?.label` itself to recover it, which is a
+   * consumer reading the catalogue shape to answer a question the resolver is for.
+   */
+  name: string | null;
+  /**
+   * The SHORT form on its own — `display.badge`, null when the config gave none.
+   *
+   * `label` collapses the two, which is right for a pill and wrong for everything else: a
+   * consumer needing the short word where the long one already carries a noun ("Posto
+   * Premium" in a row that says "posto") was reduced to stripping the noun with a regex, in
+   * two files. Both forms are the config's, so both are reported and the caller picks.
+   */
+  badge: string | null;
+}
+
+/**
+ * How a plan presents one seat type: a sold seat type first, then the implicit
+ * seat of a plan that sells none. Exported because a members list wants the same
+ * pill as a usage screen, and reimplementing this lookup is how the two drift.
+ */
+export function resolveSeat(
+  model: PlanModel | null,
+  type: string,
+  locale?: LocaleOptions,
+): UsageSeat {
+  const display =
+    model?.seatTypes.find((s) => s.key === type)?.display ??
+    (model?.seat?.key === type ? model.seat.display : null);
+  return {
+    type,
+    label: display ? (resolveLocalized(display.badge ?? display.label, locale) ?? null) : null,
+    name: display?.label ? (resolveLocalized(display.label, locale) ?? null) : null,
+    badge: display?.badge ? (resolveLocalized(display.badge, locale) ?? null) : null,
+  };
+}
+
 /**
  * Credits per unit of currency — 100, i.e. one credit per cent.
  *
