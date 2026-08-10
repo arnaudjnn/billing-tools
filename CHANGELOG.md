@@ -1,3 +1,10 @@
+# [22.1.0](https://github.com/arnaudjnn/billing-tools/compare/v22.0.3...v22.1.0) (2026-08-10)
+
+
+### Features
+
+* **quotes:** a lead is a valid ask, and an operator can sell without one ([143940a](https://github.com/arnaudjnn/billing-tools/commit/143940a0f56de53dc9460f0fab6a6088200756d6))
+
 ## [22.0.3](https://github.com/arnaudjnn/billing-tools/compare/v22.0.2...v22.0.3) (2026-08-10)
 
 
