@@ -207,6 +207,31 @@ export type Exhausted =
  * actually means. It is the only way to say that: the pack size cannot express it,
  * since the size is a number and the period is the window.
  */
+/**
+ * Credits per unit of currency — 100, i.e. one credit per cent.
+ *
+ * On the PURE module deliberately. It is the ratio a checkout summary and a credit control
+ * render ("€12.50 = 1250 crediti"), so consumers reach for it from CLIENT components — and a
+ * copy defined next to the Stripe engine, or re-exported through the root barrel, drags the
+ * MCP SDK, Stripe and WorkOS into a browser bundle to answer a multiplication. Measured: doing
+ * exactly that turned every page of a consumer into a 500.
+ *
+ * It is a ratio, not a currency thing: a credit is a unit of usage, and `config.currency`
+ * denominates the price of usage. Changing it is a pricing change for every deployment, which
+ * is why it is a constant rather than a config field nobody would keep in step.
+ */
+export const CREDITS_PER_UNIT = 100;
+
+/** Currency → credits, rounded the way every charge in this library rounds. */
+export function creditsForAmount(amountMajor: number): number {
+  return Math.round(amountMajor * CREDITS_PER_UNIT);
+}
+
+/** Credits → currency, for a control sized in credits (a share of somebody's allowance). */
+export function amountForCredits(credits: number): number {
+  return Math.round(credits) / CREDITS_PER_UNIT;
+}
+
 export type CapWindow = "cycle" | "month";
 
 /**

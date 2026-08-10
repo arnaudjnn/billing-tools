@@ -617,7 +617,6 @@ export {
 // the last admin nothing used to protect. Exported for a consumer's own screen: the point of
 // putting them here is that its refusal and the tool's are the same refusal.
 export { visibleWindows } from "./usage.js";
-export { CREDITS_PER_UNIT, amountForCredits, creditsForAmount } from "./billing.js";
 export {
   completeCheckout,
   type CompleteCheckoutOptions,
