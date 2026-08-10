@@ -1,3 +1,10 @@
+# [23.1.0](https://github.com/arnaudjnn/billing-tools/compare/v23.0.0...v23.1.0) (2026-08-10)
+
+
+### Features
+
+* **api:** the bound ask carries seats and a contact ([72704ed](https://github.com/arnaudjnn/billing-tools/commit/72704ed3ac7d288cc8a06bd1d50817113ebef095))
+
 # [23.0.0](https://github.com/arnaudjnn/billing-tools/compare/v22.2.1...v23.0.0) (2026-08-10)
 
 
