@@ -300,14 +300,18 @@ test("the two shapes differ by exactly the seven tools", () => {
   const scart = names({ plans: SCARTOFFIE });
   const extra = [...scart].filter((n) => !gtm.has(n)).sort();
   assert.deepEqual(extra, [...SEAT_TOOLS, SEAT_ASK, ...TOP_UP_TOOLS].sort());
-  // 46 − 8. Both numbers are quoted in AGENTS.md, so both are asserted here. The six member
+  // 49 − 8. Both numbers are quoted in AGENTS.md, so both are asserted here. The six member
   // tools are on both sides on purpose: who is in a workspace is not something a CATALOGUE
   // can decide, so they are gated on the adapter and the invitation service instead.
   // `request_plan_change` / `resolve_plan_request` stay on BOTH sides: asking to move up is
   // the answer on exactly the plans that have no per-member allowance to top up, which is
   // the pooled catalogue's only rung.
-  assert.equal(gtm.size, 38);
-  assert.equal(scart.size, 46);
+  //
+  // The three CREDIT-QUOTE tools are on both sides for the same reason as the member ones:
+  // any deployment can be asked for a volume price, and `sale: "quote"` describes the plan
+  // that EXPECTS the question rather than the only one allowed to be asked it.
+  assert.equal(gtm.size, 41);
+  assert.equal(scart.size, 49);
 });
 
 test("no catalogue means no declaration to read, so every group registers", () => {

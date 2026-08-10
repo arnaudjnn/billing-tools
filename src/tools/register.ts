@@ -5,6 +5,7 @@ import { registerKeyTools } from "./keys.js";
 import { registerBillingOnlyTools, type TopUpToolOptions } from "./billing.js";
 import { registerManagementTools } from "./management.js";
 import { registerMemberTools, registerWorkspaceTools, type MemberToolOptions } from "./members.js";
+import { registerQuoteTools } from "./quotes.js";
 import { registerProfileTools } from "./profile.js";
 import { registerSubscriptionTools, type SubscriptionToolOptions } from "./subscription.js";
 import { ensurePlans, normalizePlans, poolSizeOf, type PlanCatalog } from "../plans.js";
@@ -164,6 +165,10 @@ export function registerBillingTools(server: McpServer, opts: RegisterBillingToo
     ...opts.members,
   });
   registerWorkspaceTools(server, opts.adapter);
+  // The commercial conversation. Registered for every catalogue rather than gated on
+  // `sale: "quote"`: a deployment can be asked for a volume price on any plan, and the one
+  // that sells a quote-only tier is simply the one that expects it.
+  registerQuoteTools(server, opts.adapter, { config, notify: opts.notify });
   if (opts.profileTools !== false) registerProfileTools(server, opts.adapter);
   if (opts.plans) {
     // `list_plans` and `get_plan` are READS and always register: "what is on offer"
@@ -283,6 +288,12 @@ export const BILLING_TOOL_NAMES = [
   "approve_top_up",
   "grant_top_up",
   "deny_top_up",
+  // The commercial conversation (registerQuoteTools). `sale: "quote"` used to render a
+  // "contact us" button and end there; these carry the ask to somebody who can answer it,
+  // and `resolve_credit_quote` is the only OPERATOR-gated tool in the library.
+  "request_credit_quote",
+  "list_credit_quotes",
+  "resolve_credit_quote",
   // The billing account itself (registerProfileTools).
   "get_billing_profile",
   "set_billing_profile",

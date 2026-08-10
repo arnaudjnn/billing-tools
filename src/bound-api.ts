@@ -77,6 +77,7 @@ import {
 } from "./members.js";
 import type { InvitationService } from "./invitations.js";
 import type { Notify } from "./notifications/index.js";
+import { answerCreditQuote, listCreditQuotes, requestCreditQuote } from "./credit-quotes.js";
 import { topUpTargetOf } from "./allowance.js";
 import {
   defaultSeatOf,
@@ -665,6 +666,22 @@ export function createBoundApi(deps: BoundApiDeps) {
      * which is why they must come from the same module instance, and why binding
      * them here rather than re-importing is the safe way round.
      */
+    /**
+     * The commercial conversation: a workspace asks for a volume price, an operator answers.
+     *
+     * `resolve` is NOT gated here, and that is deliberate. The bound API is server-side code
+     * holding the deployment's own credentials — the same trust level as the env var that
+     * lists the operators — which is what makes the ops CLI able to answer a quote at all.
+     * The TOOL is where `enforceOperator` stands, because that is the surface a customer's
+     * key can reach.
+     */
+    quotes: {
+      list: (orgId: string) => listCreditQuotes(adapter, orgId),
+      request: (orgId: string, input: Parameters<typeof requestCreditQuote>[2]) =>
+        requestCreditQuote(adapter, orgId, { notify: deps.notify, ...input }),
+      answer: (orgId: string, input: Parameters<typeof answerCreditQuote>[2]) =>
+        answerCreditQuote(adapter, orgId, { notify: deps.notify, ...input }),
+    },
     auth: {
       access: () => enforceAccess(adapter),
       admin: (action: string) => enforceAdmin(adapter, action),

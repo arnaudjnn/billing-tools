@@ -663,3 +663,17 @@ export {
   DEFAULT_ALERT_THRESHOLDS,
   type AlertCrossing,
 } from "./alerts.js";
+
+// Selling credits at a price nobody published — the Enterprise conversation, as a record.
+// `sellCredits` is the money half: the ONE path here where the amount invoiced and the
+// credits granted are allowed to be different numbers.
+export {
+  answerCreditQuote,
+  listCreditQuotes,
+  requestCreditQuote,
+  type VolumeQuote,
+  type QuoteAnswer,
+  type QuoteAsk,
+} from "./credit-quotes.js";
+export { sellCredits } from "./billing.js";
+export { currentOperatorToken, enforceOperator, operatorConfig } from "./auth.js";

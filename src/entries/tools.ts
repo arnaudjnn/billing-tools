@@ -23,6 +23,7 @@ export {
   registerWorkspaceTools,
   type MemberToolOptions,
 } from "../tools/members.js";
+export { registerQuoteTools, type QuoteToolOptions } from "../tools/quotes.js";
 export type { TopUpToolOptions } from "../tools/billing.js";
 export type { SubscriptionToolOptions } from "../tools/subscription.js";
 

@@ -23,10 +23,26 @@ export interface Principal {
   userId: string;
   /** Pre-resolved role, when the caller already knows it — skips the lookup. */
   isAdmin?: boolean;
+  /**
+   * Their address, when the surface knows it.
+   *
+   * Only `enforceOperator` reads it, and it has to: a platform operator is identified by
+   * WHO THEY ARE across every workspace, not by a role inside one — an operator answering a
+   * customer's quote is typically not a member of that customer's workspace at all.
+   */
+  email?: string;
 }
 
 interface AuthStore {
   authHeader: string | null;
+  /**
+   * A platform-operator credential presented by a machine (`X-Operator-Token`).
+   *
+   * Separate from `authHeader` because it answers a different question: that one says which
+   * WORKSPACE is calling, this says the caller acts for the deployment itself. An agent
+   * doing operator work holds both — its own workspace key, and this.
+   */
+  operatorToken?: string;
   // Pre-resolved org (e.g. the MCP transport verified an OAuth JWT). When set,
   // enforceAccess returns it without re-validating an API key.
   orgId?: string;
@@ -35,8 +51,12 @@ interface AuthStore {
 
 export const authContext = new AsyncLocalStorage<AuthStore>();
 
-export function runWithAuth<T>(header: string | null, fn: () => T): T {
-  return authContext.run({ authHeader: header }, fn);
+export function runWithAuth<T>(
+  header: string | null,
+  fn: () => T,
+  extra?: { operatorToken?: string },
+): T {
+  return authContext.run({ authHeader: header, ...extra }, fn);
 }
 
 // Used by the MCP transport's OAuth path: run with a pre-resolved org.
@@ -48,11 +68,21 @@ export function runWithResolvedOrg<T>(header: string | null, orgId: string, fn: 
  *  from a session-backed surface (a server action, an OAuth token carrying a
  *  user). The org may be pre-resolved or left to the API key. */
 export function runWithPrincipal<T>(
-  ctx: { authHeader?: string | null; orgId?: string; principal: Principal },
+  ctx: {
+    authHeader?: string | null;
+    orgId?: string;
+    principal: Principal;
+    operatorToken?: string;
+  },
   fn: () => T,
 ): T {
   return authContext.run(
-    { authHeader: ctx.authHeader ?? null, orgId: ctx.orgId, principal: ctx.principal },
+    {
+      authHeader: ctx.authHeader ?? null,
+      orgId: ctx.orgId,
+      principal: ctx.principal,
+      operatorToken: ctx.operatorToken,
+    },
     fn,
   );
 }
@@ -60,6 +90,65 @@ export function runWithPrincipal<T>(
 /** The caller, if this surface established one. */
 export function currentPrincipal(): Principal | null {
   return authContext.getStore()?.principal ?? null;
+}
+
+/** The machine operator credential this call presented, if any. */
+export function currentOperatorToken(): string | null {
+  return authContext.getStore()?.operatorToken ?? null;
+}
+
+/**
+ * Who the deployment lets sell at a negotiated price.
+ *
+ * `BILLING_OPERATOR_EMAILS` (comma-separated) plus `BILLING_OPERATOR_TOKEN` for a machine.
+ * Read at call time rather than at boot so rotating either needs a restart of nothing.
+ */
+export function operatorConfig(): { emails: string[]; token: string | null } {
+  return {
+    emails: (process.env.BILLING_OPERATOR_EMAILS ?? "")
+      .split(",")
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean),
+    token: process.env.BILLING_OPERATOR_TOKEN?.trim() || null,
+  };
+}
+
+/**
+ * The platform's own staff — and the ONE gate in this library that fails CLOSED.
+ *
+ * Everywhere else, an unanswerable question allows: `enforceAdmin` lets an org API key
+ * through because that credential has no user behind it, and an adapter that cannot report
+ * roles must not lock every admin tool. Both are the right trade when the thing being
+ * prevented is smaller than the thing being broken.
+ *
+ * Here it is the other way round. This gate stands between a customer and their own
+ * discount: "unknown allows" would mean any workspace key could approve the price its own
+ * admin just asked for, which is not a permission that should exist at any level of doubt.
+ * So a caller who cannot be identified as an operator is refused, and a deployment that has
+ * configured no operators has nobody who can approve — which is correct, and says so.
+ */
+export function enforceOperator(action: string): { authorized: true } | ToolErrorResult {
+  const { emails, token } = operatorConfig();
+  const presented = currentOperatorToken();
+  const email = currentPrincipal()?.email?.trim().toLowerCase();
+
+  const byToken = Boolean(token && presented && presented === token);
+  const byEmail = Boolean(email && emails.includes(email));
+  if (byToken || byEmail) return { authorized: true };
+
+  return {
+    isError: true,
+    content: [
+      {
+        type: "text",
+        text:
+          `Forbidden (403): ${action} is a platform-operator action. ` +
+          (emails.length || token
+            ? "Sign in as an operator, or present X-Operator-Token."
+            : "This deployment has configured no operators (BILLING_OPERATOR_EMAILS)."),
+      },
+    ],
+  };
 }
 
 // Resolve the caller's org from the Bearer API key (via the adapter). Returns

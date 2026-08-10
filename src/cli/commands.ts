@@ -194,6 +194,66 @@ export function registerBillingCommands(program: CommandLike, opts: CliOptions) 
       print(await callTool(requireConfig(), "remove_member", { member_id: memberId })),
     );
 
+  // ── Credit quotes ─────────────────────────────────────────────────────────
+  // Two audiences at one seam. `ask` and `list` are the CUSTOMER's — an admin asking for a
+  // volume price. `answer` is the deployment's, and the server refuses it to anyone who is
+  // not an operator, so the command exists for everybody and works for the people it should.
+  const quotes = program.command("quotes").description("Volume pricing: ask for one, or answer one");
+  quotes
+    .command("ask")
+    .description("Ask for a price on a volume this plan does not sell self-serve")
+    .option("--credits <n>", "Credits wanted")
+    .option("--volume <n>", "Or your own unit, e.g. 20000")
+    .option("--unit <name>", 'What those are ("searches", "documents")')
+    .option("--term <term>", "one_off | monthly | annual (default: one_off)")
+    .option("--seats <n>", "How many people")
+    .option("--budget <amount>", "What you expect to pay, in whole currency units")
+    .option("--needed-by <date>", "ISO date you need it live by")
+    .option("--po <number>", "Your purchase-order number, for the invoice")
+    .option("--note <text>", "What you are doing with it")
+    .action(async (o: Record<string, string>) =>
+      print(
+        await callTool(requireConfig(), "request_credit_quote", {
+          ...(o.credits ? { credits: Number(o.credits) } : {}),
+          ...(o.volume ? { volume_amount: Number(o.volume) } : {}),
+          ...(o.unit ? { volume_unit: o.unit } : {}),
+          ...(o.term ? { term: o.term } : {}),
+          ...(o.seats ? { seats: Number(o.seats) } : {}),
+          ...(o.budget ? { budget: Number(o.budget) } : {}),
+          ...(o.neededBy ? { needed_by: o.neededBy } : {}),
+          ...(o.po ? { purchase_order: o.po } : {}),
+          ...(o.note ? { note: o.note } : {}),
+        }),
+      ),
+    );
+  quotes
+    .command("list")
+    .description("This workspace's quotes, asked and answered")
+    .action(async () => print(await callTool(requireConfig(), "list_credit_quotes")));
+  quotes
+    .command("answer <workspace_id> <quote_id>")
+    .description("Approve or deny a quote (platform operators only)")
+    .option("--credits <n>", "What they get")
+    .option("--amount <amount>", "What they pay, in whole currency units")
+    .option("--deny", "Refuse it instead")
+    .option("--valid-until <date>", "ISO date the price expires")
+    .option("--days-until-due <n>", "Net terms on the invoice (default 30)")
+    .option("--note <text>", "")
+    .action(async (workspaceId: string, quoteId: string, o: Record<string, string | boolean>) =>
+      print(
+        await callTool(requireConfig(), "resolve_credit_quote", {
+          workspace_id: workspaceId,
+          quote_id: quoteId,
+          outcome: o.deny ? "denied" : "approved",
+          ...(o.credits ? { credits: Number(o.credits) } : {}),
+          ...(o.amount ? { amount: Number(o.amount) } : {}),
+          ...(o.validUntil ? { valid_until: String(o.validUntil) } : {}),
+          ...(o.daysUntilDue ? { days_until_due: Number(o.daysUntilDue) } : {}),
+          ...(o.note ? { note: String(o.note) } : {}),
+        }),
+      ),
+    );
+
   const invites = program.command("invitations").description("Pending invitations");
   invites
     .command("list")

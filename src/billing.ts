@@ -661,6 +661,118 @@ export type PurchaseResult =
   | { status: "refused"; reason: "no_card" | "no_email" | "charge_failed"; message: string };
 
 /**
+ * Sell credits at a price that is not the list price.
+ *
+ * The one thing no other path here can do. Everywhere else `credits` IS the money —
+ * `CREDITS_PER_UNIT = 100` makes them the same number, deliberately, so a customer typing an
+ * amount and an agent calling `buy_credits` cannot be quoted differently. A negotiated deal
+ * is precisely the case where they must differ: 600 000 credits for €4 000 is the whole
+ * point of an Enterprise conversation, and until now the library could describe that plan and
+ * not sell it.
+ *
+ * So the two numbers are separated HERE and nowhere else, behind an operator gate, and only
+ * as an INVOICE:
+ *
+ *   • The invoice item carries `amountMinor` — what they agreed to pay.
+ *   • `metadata.credits` carries the quantity — what they agreed to get.
+ *   • Paying it credits the wallet through the `invoice.paid` branch that already exists,
+ *     with the `credit:invoice:<id>` key it already uses.
+ *
+ * That last point is why this is not a grant. There is no second crediting path to keep in
+ * step with the first, an unpaid quote hands over nothing, and a refund reverses through the
+ * same machinery as any other invoice.
+ */
+export async function sellCredits(
+  stripeCustomerId: string,
+  orgId: string,
+  input: {
+    /** What they get. */
+    credits: number;
+    /** What they pay, in minor units of `currency`. Deliberately unrelated to `credits`. */
+    amountMinor: number;
+    currency?: string;
+    /** Shown on the invoice — the deal, in the customer's own words. */
+    description?: string;
+    /** Net terms. Procurement rarely pays on receipt; 30 is the usual answer here. */
+    daysUntilDue?: number;
+    /** Their PO, on the invoice rather than in an email, because that is what unblocks
+     *  payment. */
+    purchaseOrder?: string;
+    taxRates?: string[] | null;
+    /** Reuse an existing invoice for a retried approval rather than raising a second one. */
+    idempotencyKey?: string;
+  },
+): Promise<
+  | { status: "invoiced"; invoiceId: string; hostedInvoiceUrl: string | null; dueAt: number | null; emailed: boolean }
+  | { status: "refused"; reason: "no_email" | "invalid_amount" | "charge_failed"; message: string }
+> {
+  const { credits, amountMinor } = input;
+  if (!Number.isFinite(credits) || credits <= 0 || !Number.isFinite(amountMinor) || amountMinor <= 0) {
+    return { status: "refused", reason: "invalid_amount", message: "Credits and amount must both be positive." };
+  }
+  const stripe = getStripe();
+  const currency = input.currency ?? "usd";
+  const customer = await stripe.customers.retrieve(stripeCustomerId);
+  const email = !("deleted" in customer && customer.deleted) ? customer.email : null;
+  if (!email) {
+    return {
+      status: "refused",
+      reason: "no_email",
+      message: "Stripe cannot email an invoice to a customer with no email address. Set one with set_billing_profile.",
+    };
+  }
+
+  const key = input.idempotencyKey ?? `sell:${stripeCustomerId}:${credits}:${amountMinor}`;
+  const description = input.description ?? `${credits.toLocaleString("en-US")} credits`;
+  await stripe.invoiceItems.create(
+    {
+      customer: stripeCustomerId,
+      currency,
+      amount: amountMinor,
+      description,
+      ...(input.taxRates?.length ? { tax_rates: input.taxRates } : {}),
+    },
+    { idempotencyKey: `${key}:item` },
+  );
+  const draft = await stripe.invoices.create(
+    {
+      customer: stripeCustomerId,
+      currency,
+      collection_method: "send_invoice",
+      days_until_due: input.daysUntilDue ?? 30,
+      auto_advance: false,
+      pending_invoice_items_behavior: "include",
+      description,
+      // On the invoice, where procurement looks for it.
+      ...(input.purchaseOrder ? { custom_fields: [{ name: "PO", value: input.purchaseOrder.slice(0, 30) }] } : {}),
+      // What the webhook grants when this is paid — and the ONE place in this library where
+      // it is not simply the amount.
+      metadata: { org_id: orgId, credits: String(credits) },
+    },
+    { idempotencyKey: `${key}:invoice` },
+  );
+  if (!draft.id) return { status: "refused", reason: "charge_failed", message: "Stripe returned no invoice." };
+
+  const finalized = await stripe.invoices.finalizeInvoice(draft.id);
+  // Finalized is payable whether or not the send succeeds — losing a real bill to an email
+  // error is the worst outcome, and it is one this account has actually produced.
+  let emailed = true;
+  let sent = finalized;
+  try {
+    sent = await stripe.invoices.sendInvoice(finalized.id!);
+  } catch {
+    emailed = false;
+  }
+  return {
+    status: "invoiced",
+    invoiceId: sent.id!,
+    hostedInvoiceUrl: sent.hosted_invoice_url ?? finalized.hosted_invoice_url ?? null,
+    dueAt: sent.due_date ? sent.due_date * 1000 : null,
+    emailed,
+  };
+}
+
+/**
  * Buy credits, by whichever method the caller can actually complete.
  *
  * The single implementation behind `buy_credits` AND behind a consuming app's own purchase

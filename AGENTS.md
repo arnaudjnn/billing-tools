@@ -549,6 +549,54 @@ all reach it), `approveTopUp` / `denyTopUp` / `grantTopUp`, `requestSeatChange` 
 `requestPlanChange`, and the invitation service, which `createBilling` **wraps** so the event
 fires whatever service was passed and whether or not it has a `sendEmail` hook of its own.
 
+## Selling at a price nobody published — credit quotes (`src/credit-quotes.ts`)
+
+`sale: "quote"` used to be a label. It withheld the self-serve tools, rendered "contact us",
+refused `validateBasket` — and then the trail ended: no record of who asked, nothing to
+answer with, and **no credit sale anywhere that could carry a negotiated price**, because
+`CREDITS_PER_UNIT = 100` makes credits and cents the same number in every other path. That
+constant is right for a top-up (a customer typing an amount and an agent calling `buy_credits`
+must not be quoted differently) and it is exactly wrong for the only conversation that matters
+commercially.
+
+**Three tools, two authorities.** `request_credit_quote` is the workspace ADMIN's;
+`list_credit_quotes` is a member-visible read; `resolve_credit_quote` is the deployment
+OPERATOR's. That split is the point — "approve my own discount" is not a permission that
+should exist.
+
+**The ask is shaped for a salesperson, not for the schema.** Credits OR a volume in the
+customer's own unit ("20 000 searches per month" — making a buyer convert to credits is asking
+them to price the product for us), term (one-off / monthly / annual), seats, an optional
+BUDGET (the single most useful field: it says whether this is a discount request or simply a
+big order), needed-by, payment method (Italian B2B is bonifico against an invoice far more
+often than a card), a PO number that goes ON the invoice where procurement looks for it, and a
+note. Nothing already known is asked again — VAT, address, SDI and current usage are the
+workspace's.
+
+**One open quote per WORKSPACE**, unlike the top-up's one-per-member: two admins asking
+separately would have an operator answering the same customer twice with two prices.
+
+**`enforceOperator` is the only gate here that FAILS CLOSED.** Everywhere else an
+unanswerable question allows — `enforceAdmin` lets an org API key through, an adapter that
+cannot report roles does not lock every management tool — because the thing prevented is
+smaller than the thing broken. Invert it here and "unknown allows" means any workspace key
+approves the discount its own admin just asked for. `BILLING_OPERATOR_EMAILS` for a signed-in
+human (the principal now carries `email`, because an operator is identified across workspaces
+rather than by a role inside one) and `BILLING_OPERATOR_TOKEN` presented as `X-Operator-Token`
+for a machine. Neither set means nobody can approve, which is the right state for a deployment
+that does not sell this way, and it says so.
+
+**Approving is an INVOICE, not a grant** (`sellCredits`). The invoice item carries the
+negotiated amount, `metadata.credits` carries the negotiated quantity, and paying it credits
+the wallet through the `invoice.paid` branch that already exists with the
+`credit:invoice:<id>` key it already uses. So there is no second crediting path to keep in
+step, an unpaid quote hands over nothing, and a refund reverses like any other invoice. The
+tool says `credits_on_payment` rather than `credits`, because "approved" reads like "granted".
+
+**`VolumeQuote`, not `CreditQuote`** — that name belongs to the tax estimate
+`quoteCreditPurchase` returns. Two records with one name in a single barrel is how somebody
+imports the wrong one and finds out at runtime.
+
 ## Mounting in a Next app
 
 **Both consumers mount this way, and hand-wiring is the thing it replaces.** gtm-tools kept five factories plus its own MCP route, REST routes and Stripe webhook, and every defect that cost it something came from that: no `customer.subscription.*` branch, so nothing wrote the org's `plan` and every subscriber metered as planless (`planModel(plans, null)` is null — the pool they bought never applied); no idempotency key, so a re-delivery double-credited; `caller.id` set to the org id; and an empty wallet answered 500. **The composition is not boilerplate — it is where those five decisions live**, so a consumer writing its own re-decides them all, silently and one at a time.
@@ -695,7 +743,7 @@ Money localises through `Intl` (`locale` + `currency`), with `formatMoney` as th
 
 ## Env
 
-`WORKOS_API_KEY`, `WORKOS_CLIENT_ID` (auth + WorkOS-org adapter), `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` (billing), `BILLING_WEBHOOK_URL` (optional — where this deployment's webhook lives, read by `webhookUrlFromArgv`, so the URL travels with the environment instead of being hardcoded in an ops script a laptop can run against production), `REFRESH_TOKEN_SECRET` (OAuth proxy — signs refresh tokens; **required, no fallback**: an earlier version fell back to `WORKOS_CLIENT_ID`, a *public* identifier, so anyone who knew it could forge a 30-day refresh token. Without it the token endpoint returns `server_error` rather than signing with something guessable). `tests/conventions.test.mjs` fails if the library reads one this list forgets.
+`WORKOS_API_KEY`, `WORKOS_CLIENT_ID` (auth + WorkOS-org adapter), `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` (billing), `BILLING_WEBHOOK_URL` (optional — where this deployment's webhook lives, read by `webhookUrlFromArgv`, so the URL travels with the environment instead of being hardcoded in an ops script a laptop can run against production), `REFRESH_TOKEN_SECRET` (OAuth proxy — signs refresh tokens; **required, no fallback**: an earlier version fell back to `WORKOS_CLIENT_ID`, a *public* identifier, so anyone who knew it could forge a 30-day refresh token. Without it the token endpoint returns `server_error` rather than signing with something guessable), `BILLING_OPERATOR_EMAILS` + `BILLING_OPERATOR_TOKEN` (who may answer a credit quote — a comma-separated list of addresses for a signed-in human, and one shared secret for a machine, presented as `X-Operator-Token`. Both unset means nobody can approve a negotiated price, which is the correct state for a deployment that does not sell them). `tests/conventions.test.mjs` fails if the library reads one this list forgets.
 
 **The two keys must name the same environment, and `environmentMismatch` is what says so.** Each half of the report already stated its own — "LIVE MODE" from Stripe, "production key" from WorkOS — so a live Stripe key beside a staging WorkOS key printed both facts, passed every check and read as healthy. It is the worst mistake available here: real cards charged against orgs and `sk_` keys in the wrong environment, with the mapping between them (the org's `stripeCustomerId`) written where nobody is looking. `checkWorkOSSetup({ expectLivemode })` errors on it, from the key prefixes and no network, and both `setupBilling` and `runBillingDoctor` pass it. **Undefined stays "the caller did not say there is a Stripe half"** — never "the halves agree" — so a WorkOS-only audit is unaffected.
 

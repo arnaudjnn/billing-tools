@@ -92,10 +92,16 @@ export function createToolDispatchHandler(opts: {
     const rm =
       typeof opts.resourceMetadata === "function" ? opts.resourceMetadata(request) : opts.resourceMetadata;
     const principal = opts.principal ? await opts.principal(request) : null;
+    // The machine half of the operator gate. A header rather than the Bearer slot because
+    // an operator agent still holds a workspace key: it is acting FOR the deployment on
+    // somebody else's workspace, so the two credentials answer different questions.
+    const operatorToken = request.headers.get("x-operator-token")?.trim() || undefined;
     // One store either way: `runWithPrincipal` sets the same `authHeader` plus the
     // caller, so `enforceAccess` behaves identically and only `enforceAdmin` sees more.
     const withContext = <T>(fn: () => T): T =>
-      principal ? runWithPrincipal({ authHeader, principal }, fn) : runWithAuth(authHeader, fn);
+      principal
+        ? runWithPrincipal({ authHeader, principal, operatorToken }, fn)
+        : runWithAuth(authHeader, fn, { operatorToken });
     // Read the body ONCE, up front. The paid retry below re-dispatches, and a Request
     // body can only be read once — parsing here (rather than cloning the request) is
     // what makes the retry a plain second call with the same arguments.
