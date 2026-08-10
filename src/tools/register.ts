@@ -9,6 +9,7 @@ import { registerProfileTools } from "./profile.js";
 import { registerSubscriptionTools, type SubscriptionToolOptions } from "./subscription.js";
 import { ensurePlans, normalizePlans, poolSizeOf, type PlanCatalog } from "../plans.js";
 import type { UsageLedger } from "../usage-ledger.js";
+import type { Notify } from "../notifications/index.js";
 import {
   ALL_TOOL_CAPABILITIES,
   toolCapabilities,
@@ -110,6 +111,14 @@ export interface RegisterBillingToolsOptions {
    * put a record without a service.
    */
   members?: MemberToolOptions;
+  /**
+   * Fire-and-forget notifications, from `createBilling`'s emitter.
+   *
+   * The tools that CHANGE something somebody else is waiting on — a top-up asked for, a
+   * request answered — say so here. Absent is a no-op, which is every deployment that
+   * configured no notifier.
+   */
+  notify?: Notify;
 }
 
 // Register the billing-tools surface (auth/key management + credit billing) on
@@ -146,7 +155,7 @@ export function registerBillingTools(server: McpServer, opts: RegisterBillingToo
     server,
     opts.adapter,
     config,
-    { plans: opts.plans, resolvePlan: opts.resolvePlan, usageLedger: opts.usageLedger },
+    { plans: opts.plans, resolvePlan: opts.resolvePlan, usageLedger: opts.usageLedger, notify: opts.notify },
     caps,
   );
   registerMemberTools(server, opts.adapter, {
@@ -164,7 +173,7 @@ export function registerBillingTools(server: McpServer, opts: RegisterBillingToo
     registerPlanTools(server, opts.plans, opts.defaultPlan, config.currency);
     if (opts.subscriptionTools !== false) {
       const sub = typeof opts.subscriptionTools === "object" ? opts.subscriptionTools : {};
-      registerSubscriptionTools(server, opts.adapter, config, { ...sub, plans: opts.plans }, caps);
+      registerSubscriptionTools(server, opts.adapter, config, { ...sub, plans: opts.plans, notify: opts.notify }, caps);
     }
   }
 }

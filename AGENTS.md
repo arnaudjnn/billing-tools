@@ -477,6 +477,55 @@ The **payment** sibling of auth.md: Stripe's [MPP](https://mpp.dev) — a client
 
 `ensurePaymentMethodConfig` takes `only` / `enable` / `disable`, memoised per process and idempotent by `name`. `defaultPaymentMethodConfig` **never throws**: a restricted key that cannot read configurations returns undefined and the form renders with the account default, because a missing permission must not take down checkout.
 
+## Telling somebody — notifications (`src/notifications/`)
+
+The library knows the moment an invitation exists, the moment a member asks their admin for
+more credit, the moment an admin answers, and the moment somebody hits a wall. It renders no
+email, in no language, and it never will: a branded template is JSX in the consumer's app, in
+the consumer's words. So it does not send. It **says**, and the consumer sends.
+
+`notifications: <Notifier>` on `createBilling` turns it on; absent, every emission is a
+no-op that costs nothing (`createEmitter` returns `undefined` and every call site is
+`notify?.(…)`). The shipped transport is **`webhookNotifier({ endpoint, secret })`** — for
+the common case where the code that CAN render the email is one HTTP hop away, which is
+exactly why the three invitation tools used to be missing from a deployment whose invite
+email was react-email in a Next app.
+
+**The contract: emitting never throws and never blocks.** Every event describes something
+that ALREADY happened, so a failed delivery must not undo it or delay it. `createEmitter`
+holds the one `.catch()`, rather than each of the eight call sites — where the ninth would
+forget, and a down email service would roll back a granted top-up. Same rule, same reason as
+`usage-faults.ts`.
+
+**Recipients are resolved HERE, not by the app.** "Email the admins" is a question about
+membership and roles, which is this package's; answering it in a consumer means answering it
+once per consumer. A call site states an **audience** (`{kind:"admins"}`,
+`{kind:"member",memberId}`, `{kind:"email",email}`) and the emitter turns it into addresses
+off the hot path — one `adapter.listMembers`, which also fills in the member's own address
+where the event names one. An adapter that cannot list members tells nobody rather than
+throwing, and nobody-to-tell skips the round trip entirely.
+
+**Ids are stable and derived, never random or timestamped.** `invite:<invitationId>`,
+`topup-requested:<requestId>`, `topup-approved:<requestId>`, `upgrade-requested:<requestId>`.
+A receiver dedupes on that id, so a retry, a re-delivery or two replicas send one email — and
+`topup-denied:` is a different id from `topup-approved:` on purpose, so a second decision is
+not swallowed as a repeat of the first.
+
+**The wire format is a leaf entry point.** A receiver imports `verifyNotification` from
+`@arnaudjnn/billing-tools/notifications`, which pulls no Stripe, no WorkOS, no MCP SDK — the
+same reasoning as `/plans`. The signature is Svix-shaped (HMAC-SHA256 over
+`<id>.<timestamp>.<body>`, ±300s replay window, `timingSafeEqual`) because that is what a
+consumer's inbound route most likely already verifies. `webhookNotifier` retries 5xx and
+network failures, and does **not** retry a 4xx: the receiver understood and refused, and
+repeating it only doubles the refusals.
+
+Events today: `invitation.created`, `topup.requested`, `topup.resolved`,
+`upgrade.requested`. They fire from the choke points every path funnels through —
+`requestTopUp` (the raw tool, the derived `requestExtraAllowance`, and `api.topUps.request`
+all reach it), `approveTopUp` / `denyTopUp` / `grantTopUp`, `requestSeatChange` /
+`requestPlanChange`, and the invitation service, which `createBilling` **wraps** so the event
+fires whatever service was passed and whether or not it has a `sendEmail` hook of its own.
+
 ## Mounting in a Next app
 
 **Both consumers mount this way, and hand-wiring is the thing it replaces.** gtm-tools kept five factories plus its own MCP route, REST routes and Stripe webhook, and every defect that cost it something came from that: no `customer.subscription.*` branch, so nothing wrote the org's `plan` and every subscriber metered as planless (`planModel(plans, null)` is null — the pool they bought never applied); no idempotency key, so a re-delivery double-credited; `caller.id` set to the org id; and an empty wallet answered 500. **The composition is not boilerplate — it is where those five decisions live**, so a consumer writing its own re-decides them all, silently and one at a time.

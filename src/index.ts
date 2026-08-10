@@ -633,3 +633,22 @@ export {
   type MemberSeats,
 } from "./members.js";
 export type { OrgMember } from "./types.js";
+
+// Telling somebody. The library knows the moment an invitation exists, the moment a member
+// asks for more credit and the moment an allowance runs out; it renders no email, in no
+// language, so it says so on a channel the consumer chooses. `webhookNotifier` is the
+// shipped transport; a receiver should import `verifyNotification` from
+// `@arnaudjnn/billing-tools/notifications`, which pulls none of this.
+export {
+  notificationId,
+  signNotification,
+  verifyNotification,
+  webhookNotifier,
+  type Audience,
+  type BillingNotification,
+  type DeliverableNotification,
+  type Notifier,
+  type Notify,
+  type WebhookNotifierOptions,
+} from "./notifications/index.js";
+export { createEmitter } from "./notifications/emit.js";

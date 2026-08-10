@@ -45,6 +45,11 @@
       "import": "./dist/entries/plans.js",
       "default": "./dist/entries/plans.js"
     },
+    "./notifications": {
+      "types": "./dist/entries/notifications.d.ts",
+      "import": "./dist/entries/notifications.js",
+      "default": "./dist/entries/notifications.js"
+    },
     "./tools": {
       "types": "./dist/entries/tools.d.ts",
       "import": "./dist/entries/tools.js",

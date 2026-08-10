@@ -18,6 +18,7 @@ import { normalizePlans, planModel, type PlanCatalog } from "../plans.js";
 import { DEFAULT_MAX_PERCENT, requestBounds } from "../plan-model.js";
 import { ALL_TOOL_CAPABILITIES, type ToolCapabilities } from "../plan-model.js";
 import { callerWithSeat, orgUsage, usageSummary } from "../usage.js";
+import type { Notify } from "../notifications/index.js";
 import type { UsageLedger } from "../usage-ledger.js";
 
 function json(obj: unknown) {
@@ -55,6 +56,8 @@ export function registerManagementTools(
      * reads 0 — `get_usage_limits` reporting allowance a call would be refused for.
      */
     usageLedger?: UsageLedger;
+    /** Say that somebody asked, or that an admin answered. See `notifications/`. */
+    notify?: Notify;
   } = {},
   caps: ToolCapabilities = ALL_TOOL_CAPABILITIES,
 ) {
@@ -437,13 +440,18 @@ not what a reasonable top-up is.`,
         // two refusals live — one open ask per member per cycle, and the plan's `maxPerCycle`.
         if (cycle) {
           const id = crypto.randomUUID();
-          await requestTopUp(adapter, auth.orgId, {
-            id,
-            memberId: member_id,
-            amount: amount ?? 0,
-            cycle,
-            createdAt: new Date().toISOString(),
-          });
+          await requestTopUp(
+            adapter,
+            auth.orgId,
+            {
+              id,
+              memberId: member_id,
+              amount: amount ?? 0,
+              cycle,
+              createdAt: new Date().toISOString(),
+            },
+            opts.notify,
+          );
           return json({ status: "requested", id, member_id, amount: amount ?? 0, cycle });
         }
 
@@ -475,6 +483,7 @@ not what a reasonable top-up is.`,
           plans: opts.plans,
           plan,
           memberId: member_id,
+          notify: opts.notify,
           ...(amount != null ? { amount } : {}),
           ...(target === undefined
             ? {}
@@ -528,7 +537,7 @@ member for the cycle (added on top of their seat pack by the meter).`,
       async ({ request_id }) => {
         const auth = await enforceAdmin(adapter, "approve_top_up");
         if ("isError" in auth) return auth;
-        const r = await approveTopUp(adapter, auth.orgId, request_id);
+        const r = await approveTopUp(adapter, auth.orgId, request_id, opts.notify);
         if (!r.ok) return err(`Request not found or already handled: ${request_id}`);
         return json({ status: "approved", request_id });
       },
@@ -583,6 +592,7 @@ request it, as a percentage of their own seat pack (default 25%). Admin action.`
           plans: opts.plans,
           plan,
           memberId: member_id,
+          notify: opts.notify,
           // An explicit credit figure wins; otherwise the percentage — the plan's own
           // default when the caller named none.
           ...(credits != null ? { amount: credits } : { percent }),
@@ -614,7 +624,7 @@ request it, as a percentage of their own seat pack (default 25%). Admin action.`
       async ({ request_id }) => {
         const auth = await enforceAdmin(adapter, "deny_top_up");
         if ("isError" in auth) return auth;
-        const r = await denyTopUp(adapter, auth.orgId, request_id);
+        const r = await denyTopUp(adapter, auth.orgId, request_id, opts.notify);
         if (!r.ok) return err(`Request not found or already handled: ${request_id}`);
         return json({ status: "denied", request_id });
       },

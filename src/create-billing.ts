@@ -18,6 +18,8 @@ import {
 import type { ClaimStore } from "./agent-auth/claim-store.js";
 import { createMachinePaymentHandler, createPaymentMd, type MachinePaymentOptions } from "./machine-payment/index.js";
 import { createOAuthProxy, type OAuthProxyOptions } from "./oauth-proxy/index.js";
+import type { Notifier } from "./notifications/index.js";
+import { createEmitter } from "./notifications/emit.js";
 import { createMeter, createApiMeterGuard } from "./metering.js";
 import { defaultUsageLedger, type UsageLedger } from "./usage-ledger.js";
 import type { PlanCatalog } from "./plans.js";
@@ -96,6 +98,20 @@ export interface CreateBillingOptions {
   machinePayment?: Omit<MachinePaymentOptions, "amount"> & {
     amount?: MachinePaymentOptions["amount"];
   };
+  /**
+   * Where to send the things this library learns and cannot say itself.
+   *
+   * It knows the moment a member is invited, the moment somebody asks their admin for more
+   * credit, and the moment an allowance crosses a threshold — and it renders no email, in
+   * no language. Configure a notifier and each of those becomes an event, with the
+   * recipients already resolved from the workspace's membership; the consumer renders and
+   * sends. Omit it and every emission is a no-op that costs nothing.
+   *
+   * `webhookNotifier({ endpoint, secret })` is the shipped transport, for the common case
+   * where the code that CAN render the email is an HTTP route away (a Next app whose
+   * templates are JSX the billing package cannot compile). Any object with `deliver` works.
+   */
+  notifications?: Notifier;
   /** Enable the MCP OAuth 2.1 + Dynamic Client Registration proxy, so MCP
    *  clients (Claude Desktop, Claude.ai) can connect without an API key. When
    *  set, the authorization_code + refresh_token grants are advertised, the
@@ -144,6 +160,53 @@ export interface CreateBillingOptions {
 
 export function createBilling(opts: CreateBillingOptions) {
   const resolved = resolveConfig(opts.config);
+
+  // Telling somebody. `undefined` when no notifier is configured, and every call site is
+  // `notify?.(…)`, so a deployment that wants none pays nothing.
+  const notify = createEmitter(opts.adapter, opts.notifications);
+
+  // The invitation service, with the "it happened" event attached.
+  //
+  // Wrapped HERE rather than emitted from inside `send()`: the service is the consumer's
+  // object (it may not even be this library's WorkOS one), and what the library owns is the
+  // fact that an invitation now exists and somebody should be told. `hooks.sendEmail` stays
+  // for a consumer that renders in-process — a deployment can have both, and one that has
+  // neither still gets WorkOS's own email.
+  const invitations = opts.members?.invitations;
+  const invitationsWithEvents =
+    invitations && notify
+      ? {
+          ...invitations,
+          send: async (
+            orgId: string,
+            email: string,
+            roleSlug: string,
+            inviterUserId?: string,
+          ) => {
+            const invitation = await invitations.send(orgId, email, roleSlug, inviterUserId);
+            notify({
+              // The invitation id: one invitation, one email, however many times a retry or
+              // a second replica re-delivers this.
+              id: `invite:${invitation.id}`,
+              type: "invitation.created",
+              orgId,
+              to: [],
+              audience: { kind: "email", email: invitation.email },
+              data: {
+                invitationId: invitation.id,
+                email: invitation.email,
+                roleSlug: invitation.roleSlug,
+                // The service builds this from its own accept path; the fallback is that
+                // service's own default, for a custom implementation that records none.
+                acceptUrl: invitation.acceptUrl ?? `${resolved.baseUrl}/invita/${invitation.id}`,
+                organizationId: invitation.organizationId,
+                ...(inviterUserId ? { inviterUserId } : {}),
+              },
+            });
+            return invitation;
+          },
+        }
+      : invitations;
 
   // MCP OAuth 2.1 + DCR proxy (opt-in). Built first so agentAuth can advertise
   // its endpoints and grants in the discovery document.
@@ -209,7 +272,8 @@ export function createBilling(opts: CreateBillingOptions) {
       // would be refused for. It is resolved below as `ledger`; hoisting is not possible
       // (this closure runs per request, long after), which is why it reads it there.
       usageLedger: ledger,
-      members: opts.members,
+      members: { ...opts.members, invitations: invitationsWithEvents },
+      notify,
     });
     opts.registerTools?.(server);
   };
@@ -363,7 +427,8 @@ export function createBilling(opts: CreateBillingOptions) {
     plans: opts.plans,
     ledger,
     resolvePlan: opts.resolvePlan ?? opts.meter?.resolvePlan,
-    invitations: opts.members?.invitations,
+    invitations: invitationsWithEvents,
+    notify,
   });
 
   return {

@@ -76,6 +76,7 @@ import {
   removeMember,
 } from "./members.js";
 import type { InvitationService } from "./invitations.js";
+import type { Notify } from "./notifications/index.js";
 import { topUpTargetOf } from "./allowance.js";
 import {
   defaultSeatOf,
@@ -108,6 +109,14 @@ export interface BoundApiDeps {
   /** The invitation service (`createWorkOSInvitations`). Without it `members.invite` and the
    *  two invitation reads throw rather than pretending — there is nowhere to put the record. */
   invitations?: InvitationService;
+  /**
+   * Fire-and-forget notifications, from `createBilling`'s emitter.
+   *
+   * The bound API and the TOOLS are two doors to the same functions, so both pass it: a
+   * top-up asked for through a server action and one asked for through MCP are the same
+   * event, and telling the admins only about one of them is the parity rule failing quietly.
+   */
+  notify?: Notify;
 }
 
 type Caller = { kind: "user" | "api"; id?: string; seatType?: string };
@@ -258,13 +267,14 @@ export function createBoundApi(deps: BoundApiDeps) {
         pending: async (orgId: string, memberId: string) =>
           pendingPlanRequest(adapter, orgId, memberId, { plans, currentPlan: await planOf(orgId) }),
         ask: async (orgId: string, memberId: string, opts: { plan?: string; note?: string } = {}) =>
-          requestPlanChange(adapter, orgId, { ...opts, memberId, plans, currentPlan: await planOf(orgId) }),
+          requestPlanChange(adapter, orgId, { ...opts, memberId, plans, currentPlan: await planOf(orgId), notify: deps.notify }),
         /** Ask for a bigger SEAT — the right ask while one exists above them. */
         askSeat: async (orgId: string, memberId: string, opts: { seatType?: string; note?: string } = {}) =>
           requestSeatChange(adapter, orgId, {
             ...opts,
             memberId,
             plans,
+            notify: deps.notify,
             currentPlan: await planOf(orgId),
             currentSeatType: await getSeatType(adapter, orgId, memberId),
           }),
@@ -478,13 +488,18 @@ export function createBoundApi(deps: BoundApiDeps) {
         if (stranger) throw new Error(stranger.content[0].text);
         const cycle = req.cycle ?? (await currentCycle(adapter, { orgId, plans, plan: await planOf(orgId) })).key;
         const id = req.id ?? crypto.randomUUID();
-        await requestTopUp(adapter, orgId, {
-          id,
-          memberId: req.memberId,
-          amount: req.amount,
-          cycle,
-          createdAt: new Date().toISOString(),
-        });
+        await requestTopUp(
+          adapter,
+          orgId,
+          {
+            id,
+            memberId: req.memberId,
+            amount: req.amount,
+            cycle,
+            createdAt: new Date().toISOString(),
+          },
+          deps.notify,
+        );
         return { id, cycle };
       },
       /**
@@ -505,6 +520,7 @@ export function createBoundApi(deps: BoundApiDeps) {
           ...opts,
           ...target,
           blocked,
+          notify: deps.notify,
           orgId,
           plans,
           plan: await planOf(orgId),
@@ -527,11 +543,11 @@ export function createBoundApi(deps: BoundApiDeps) {
       /** That member's own ask still waiting on an answer, or null. */
       pending: (orgId: string, memberId: string, cycle: string) =>
         pendingTopUpFor(adapter, orgId, memberId, cycle),
-      approve: (orgId: string, requestId: string) => approveTopUp(adapter, orgId, requestId),
-      deny: (orgId: string, requestId: string) => denyTopUp(adapter, orgId, requestId),
+      approve: (orgId: string, requestId: string) => approveTopUp(adapter, orgId, requestId, deps.notify),
+      deny: (orgId: string, requestId: string) => denyTopUp(adapter, orgId, requestId, deps.notify),
       /** Grant outright, in credits, against a cycle you name. */
       grant: (orgId: string, input: Parameters<typeof grantTopUp>[2]) =>
-        grantTopUp(adapter, orgId, input),
+        grantTopUp(adapter, orgId, input, deps.notify),
       /**
        * Grant as a percentage of that member's own seat pack (default 25%).
        *
@@ -552,7 +568,7 @@ export function createBoundApi(deps: BoundApiDeps) {
         // No `blocked` gate on the GRANT: an owner may top somebody up before they hit the
         // wall — going away on Friday, a demo on Monday — and refusing that would be the
         // library second-guessing a decision that is theirs and costs nothing.
-        return grantExtraAllowance(adapter, { ...opts, ...target, orgId, plans, plan, memberId });
+        return grantExtraAllowance(adapter, { ...opts, ...target, orgId, plans, plan, memberId, notify: deps.notify });
       },
       /** Extra already granted to a member for a cycle. */
       granted: (orgId: string, memberId: string, cycle: string) =>

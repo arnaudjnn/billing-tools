@@ -21,6 +21,7 @@ import {
 import { getSeatType } from "../seats.js";
 import { ALL_TOOL_CAPABILITIES, type ToolCapabilities } from "../plan-model.js";
 import type { BillingAdapter, ResolvedConfig } from "../types.js";
+import type { Notify } from "../notifications/index.js";
 
 // The subscription lifecycle, as tools.
 //
@@ -69,6 +70,8 @@ export interface SubscriptionToolOptions {
   /** Stripe TaxRate ids for a change, when the account computes its own tax.
    *  Defaults to the rates already on the subscription's items. */
   taxRates?: (orgId: string) => Promise<string[]> | string[];
+  /** Say that somebody asked to move up. See `notifications/`. */
+  notify?: Notify;
 }
 
 export function registerSubscriptionTools(
@@ -344,6 +347,7 @@ the ask for whoever can. The plan defaults to the next one up.`,
       const res = await requestPlanChange(adapter, auth.orgId, {
         memberId,
         plans: opts.plans,
+        notify: opts.notify,
         currentPlan: current,
         ...(plan ? { plan } : {}),
         ...(note ? { note } : {}),
@@ -408,6 +412,7 @@ pack permanently while a top-up buys a few days. Does NOT change the seat or tak
         const res = await requestSeatChange(adapter, auth.orgId, {
           memberId,
           plans: opts.plans,
+          notify: opts.notify,
           currentPlan: current,
           currentSeatType: seat,
           ...(seat_type ? { seatType: seat_type } : {}),

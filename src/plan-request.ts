@@ -6,6 +6,7 @@ import {
   seatRank,
   type PlanRequest,
 } from "./ladder.js";
+import type { Notify } from "./notifications/index.js";
 import { normalizePlans, planModel, type PlanCatalog } from "./plan-model.js";
 import type { BillingAdapter } from "./types.js";
 
@@ -140,6 +141,8 @@ export async function requestSeatChange(
   input: {
     memberId: string;
     plans: PlanCatalog;
+    /** Say that they asked. See `notifications/`. */
+    notify?: Notify;
     currentPlan?: string | null;
     currentSeatType?: string | null;
     /** Defaults to the next seat up. */
@@ -181,6 +184,7 @@ export async function requestSeatChange(
   if (!(await write(adapter, orgId, [...list, request]))) {
     return { ok: false, reason: "queue_full" };
   }
+  notifyRequested(input.notify, orgId, request);
   return { ok: true, id: request.id, seatType: target };
 }
 
@@ -197,6 +201,8 @@ export async function requestPlanChange(
   input: {
     memberId: string;
     plans: PlanCatalog;
+    /** Say that they asked. See `notifications/`. */
+    notify?: Notify;
     currentPlan?: string | null;
     /** Defaults to the next plan up. */
     plan?: string;
@@ -247,7 +253,26 @@ export async function requestPlanChange(
   if (!(await write(adapter, orgId, [...list.filter((r) => r.id !== request.id), request]))) {
     return { ok: false, reason: "queue_full" };
   }
+  notifyRequested(input.notify, orgId, request);
   return { ok: true, id: request.id, plan: target };
+}
+
+/** The rung nobody's money can climb alone: the admins are the only ones who can answer. */
+function notifyRequested(notify: Notify | undefined, orgId: string, request: PlanRequest): void {
+  notify?.({
+    id: `upgrade-requested:${request.id}`,
+    type: "upgrade.requested",
+    orgId,
+    to: [],
+    audience: { kind: "admins" },
+    data: {
+      requestId: request.id,
+      member: { id: request.memberId, email: null },
+      // `kind` is optional on the record for a legacy row; these two callers always set it.
+      kind: request.kind ?? "plan",
+      target: request.plan,
+    },
+  });
 }
 
 /**

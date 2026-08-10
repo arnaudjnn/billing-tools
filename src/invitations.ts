@@ -49,6 +49,15 @@ export interface Invitation {
   state: "pending" | "accepted" | "expired" | "revoked";
   createdAt: string;
   expiresAt: string;
+  /**
+   * Where the invited person accepts, built from this service's own `baseUrl` + `acceptPath`.
+   *
+   * On the record rather than only in the email hook's context, because the email is no
+   * longer the only thing that needs it: a notification carries the link to whoever renders
+   * it, and the alternative — every consumer of the event re-deriving the path — is how the
+   * link in the email and the route that accepts it come to disagree.
+   */
+  acceptUrl?: string;
 }
 
 export interface WorkOSInvitationsOptions {
@@ -127,6 +136,7 @@ export function createWorkOSInvitations(
       roleSlug,
       inviterUserId,
     });
+    const acceptUrl = `${baseUrl}${acceptPath}/${inv.id}`;
     if (hooks.sendEmail) {
       await hooks.sendEmail({
         id: inv.id,
@@ -134,11 +144,11 @@ export function createWorkOSInvitations(
         roleSlug: inv.roleSlug ?? roleSlug,
         orgId,
         organizationId,
-        acceptUrl: `${baseUrl}${acceptPath}/${inv.id}`,
+        acceptUrl,
         inviterUserId,
       });
     }
-    return normalize(inv, orgId);
+    return { ...(await normalize(inv, orgId)), acceptUrl };
   }
 
   async function list(orgId: string): Promise<Invitation[]> {

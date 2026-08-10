@@ -1,4 +1,5 @@
 import type { BillingAdapter } from "./types.js";
+import type { Notify } from "./notifications/index.js";
 import { cycleWindowFor, packSizeOf, planModel, requestBounds, type PlanCatalog } from "./plan-model.js";
 import { getSeatType } from "./seats.js";
 
@@ -211,10 +212,28 @@ export async function requestTopUp(
   adapter: BillingAdapter,
   orgId: string,
   req: { id: string; memberId: string; amount: number; cycle: string; createdAt: string },
+  notify?: Notify,
 ): Promise<void> {
   const list = await readJson<TopUpRequest[]>(adapter, orgId, REQUESTS_KEY, []);
   list.push({ ...req, status: "pending" });
   await writeJson(adapter, orgId, REQUESTS_KEY, trimRequestsToBudget(list));
+  // Every path that files an ask comes through here — the raw tool, the derived
+  // `requestExtraAllowance`, and `api.topUps.request` — so this is where the admins get
+  // told. Told, and not merely shown a pill the next time somebody opens a page, which is
+  // what "un amministratore la vedrà" amounted to.
+  notify?.({
+    id: `topup-requested:${req.id}`,
+    type: "topup.requested",
+    orgId,
+    to: [],
+    audience: { kind: "admins" },
+    data: {
+      requestId: req.id,
+      member: { id: req.memberId, email: null },
+      credits: req.amount,
+      window: null,
+    },
+  });
 }
 
 export async function listTopUpRequests(adapter: BillingAdapter, orgId: string): Promise<TopUpRequest[]> {
@@ -227,6 +246,7 @@ export async function approveTopUp(
   adapter: BillingAdapter,
   orgId: string,
   requestId: string,
+  notify?: Notify,
 ): Promise<{ ok: boolean; reason?: "not_found" }> {
   const list = await readJson<TopUpRequest[]>(adapter, orgId, REQUESTS_KEY, []);
   const req = list.find((r) => r.id === requestId);
@@ -239,6 +259,7 @@ export async function approveTopUp(
   // already over the limit from a previous version would otherwise be unable to
   // record ANY approval, and this repairs it on the first one.
   await writeJson(adapter, orgId, REQUESTS_KEY, trimRequestsToBudget(list));
+  notifyResolved(notify, orgId, req, "approved");
   return { ok: true };
 }
 
@@ -269,6 +290,7 @@ export async function grantTopUp(
     id?: string;
     createdAt?: string;
   },
+  notify?: Notify,
 ): Promise<{ ok: boolean; total: number; reason?: "invalid_amount" | "duplicate" }> {
   if (!Number.isFinite(input.amount) || input.amount <= 0) {
     return { ok: false, total: 0, reason: "invalid_amount" };
@@ -304,6 +326,9 @@ export async function grantTopUp(
   });
 
   await writeJson(adapter, orgId, REQUESTS_KEY, trimRequestsToBudget(list));
+  // An owner acting unprompted. The member never asked, so they have no reason to expect
+  // it — which is precisely why they are told.
+  notifyResolved(notify, orgId, { id: input.id ?? null, memberId: input.memberId, amount: input.amount }, "granted");
   return { ok: true, total };
 }
 
@@ -342,6 +367,8 @@ export async function grantExtraAllowance(
     /** An absolute number of credits instead. Exactly one of the two. */
     amount?: number;
     grantedBy?: string;
+    /** Say that it was granted. See `notifications/`. */
+    notify?: Notify;
     id?: string;
     now?: number;
     /**
@@ -396,13 +423,18 @@ export async function grantExtraAllowance(
   // The window key IS the cycle key unless a tighter window was named.
   const key = input.windowKey ?? cycleWindowFor(model, period, input.now ?? Date.now()).key;
 
-  const res = await grantTopUp(adapter, input.orgId, {
-    memberId: input.memberId,
-    amount,
-    cycle: key,
-    grantedBy: input.grantedBy,
-    id: input.id,
-  });
+  const res = await grantTopUp(
+    adapter,
+    input.orgId,
+    {
+      memberId: input.memberId,
+      amount,
+      cycle: key,
+      grantedBy: input.grantedBy,
+      id: input.id,
+    },
+    input.notify,
+  );
   return { ...res, granted: amount, packSize, cycle: key };
 }
 
@@ -451,6 +483,8 @@ export async function requestExtraAllowance(
     plans: PlanCatalog;
     plan?: string | null;
     memberId: string;
+    /** Say that it was asked for. See `notifications/`. */
+    notify?: Notify;
     /** Override the plan's share. Absolute credits win over it, as in `grantExtraAllowance`. */
     percent?: number;
     amount?: number;
@@ -527,13 +561,18 @@ export async function requestExtraAllowance(
   }
 
   const id = input.id ?? crypto.randomUUID();
-  await requestTopUp(adapter, input.orgId, {
-    id,
-    memberId: input.memberId,
-    amount,
-    cycle: cycle.key,
-    createdAt: new Date(input.now ?? Date.now()).toISOString(),
-  });
+  await requestTopUp(
+    adapter,
+    input.orgId,
+    {
+      id,
+      memberId: input.memberId,
+      amount,
+      cycle: cycle.key,
+      createdAt: new Date(input.now ?? Date.now()).toISOString(),
+    },
+    input.notify,
+  );
   return { ok: true, id, amount, packSize, cycle: cycle.key };
 }
 
@@ -541,13 +580,38 @@ export async function denyTopUp(
   adapter: BillingAdapter,
   orgId: string,
   requestId: string,
+  notify?: Notify,
 ): Promise<{ ok: boolean; reason?: "not_found" }> {
   const list = await readJson<TopUpRequest[]>(adapter, orgId, REQUESTS_KEY, []);
   const req = list.find((r) => r.id === requestId);
   if (!req || req.status !== "pending") return { ok: false, reason: "not_found" };
   req.status = "denied";
   await writeJson(adapter, orgId, REQUESTS_KEY, trimRequestsToBudget(list));
+  notifyResolved(notify, orgId, req, "denied");
   return { ok: true };
+}
+
+/** The answer, to the person who asked. Keyed on the request AND the outcome, so a retry
+ *  sends once and an approval after a denial is a different event, not a duplicate. */
+function notifyResolved(
+  notify: Notify | undefined,
+  orgId: string,
+  req: { id: string | null; memberId: string; amount: number },
+  outcome: "approved" | "denied" | "granted",
+): void {
+  notify?.({
+    id: `topup-${outcome}:${req.id ?? `${req.memberId}:${req.amount}`}`,
+    type: "topup.resolved",
+    orgId,
+    to: [],
+    audience: { kind: "member", memberId: req.memberId },
+    data: {
+      requestId: req.id,
+      member: { id: req.memberId, email: null },
+      credits: req.amount,
+      outcome,
+    },
+  });
 }
 
 /** A member's approved extra allowance for a cycle. `resolveAllowance` reads this
