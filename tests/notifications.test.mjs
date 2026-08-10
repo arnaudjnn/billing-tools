@@ -192,22 +192,24 @@ test("an UNADDRESSED event is still delivered — an empty `to` is its shape, no
   const sent = [];
   const notify = createEmitter(adapterWith(MEMBERS), { deliver: async (n) => void sent.push(n) });
 
-  // `quote.requested` is the one event whose audience is on our side of the transaction: it
-  // names the deployment's OPERATORS, whom the consumer routes (an ops inbox, a Slack
-  // channel, a CRM), so it carries no `audience` and an empty `to`. Testing it on the same
-  // "nobody to tell" guard as an admins lookup that found nobody meant the one event the
-  // operators exist to receive was the one event never sent, and a workspace asking for a
-  // price reached nobody at all.
+  // An event with no `audience` is not this library's to address: its recipients are the
+  // DEPLOYMENT's — an ops inbox, a Slack channel, a CRM — and the consumer routes it, so an
+  // empty `to` is its shape rather than a failed lookup.
+  //
+  // Every event shipped today is addressed; the one that was not (`quote.requested`) went
+  // when custom pricing became a plan change. This pins the BRANCH, because it is the
+  // difference between the next unaddressed event being routed and being silently dropped —
+  // which is exactly what happened to that one, with nothing erroring.
   notify({
-    id: "quote-requested:q_1",
-    type: "quote.requested",
+    id: "ops:q_1",
+    type: "upgrade.requested",
     orgId: "org_1",
     to: [],
-    data: { quoteId: "q_1", member: { id: "u_1", email: null }, quote: {} },
+    data: { requestId: "q_1", member: { id: "u_1", email: null }, kind: "plan", target: "pro" },
   });
   await settle();
 
-  assert.equal(sent.length, 1, "the operator ask must reach the transport");
+  assert.equal(sent.length, 1, "an unaddressed event must still reach the transport");
   assert.deepEqual(sent[0].to, [], "and it is the consumer that decides where it goes");
 });
 

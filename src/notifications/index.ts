@@ -101,15 +101,6 @@ export type BillingNotification =
         target: string;
       };
     }
-  /** A workspace asked for a price. `to` is the deployment's OPERATORS — this is the one
-   *  ask whose audience is on our side of the transaction, so it carries no `audience` and
-   *  the consumer routes it (an ops inbox, a Slack channel, a CRM). */
-  | {
-      type: "quote.requested";
-      orgId: string;
-      to: string[];
-      data: { quoteId: string; member: NotifiedMember; quote: unknown };
-    }
   /** An operator answered. `to` is the admin who asked. */
   | {
       type: "quote.resolved";

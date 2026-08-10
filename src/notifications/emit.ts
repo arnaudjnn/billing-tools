@@ -45,11 +45,15 @@ export function createEmitter(
       // worth a round trip either.
       //
       // Only for an ADDRESSED event. An event carrying no audience was never this library's
-      // to address — `quote.requested` names the deployment's own operators, whom the
-      // consumer routes to an ops inbox, a Slack channel, a CRM — so an empty `to` there is
-      // the intended shape, not a failed lookup. Dropping it on the same test meant the one
-      // event the operators exist to receive was the one event never delivered, and a
-      // workspace asking for a price reached nobody.
+      // to address: its recipients are the DEPLOYMENT's (an ops inbox, a Slack channel, a
+      // CRM) and the consumer routes it, so an empty `to` there is the intended shape rather
+      // than a failed lookup.
+      //
+      // Every event shipped today is addressed — the one that was not, `quote.requested`,
+      // went when custom pricing became a plan change. The branch stays because it is the
+      // difference between the next unaddressed event being ROUTED and being silently
+      // dropped, which is what happened to that one: the single event its operators existed
+      // to receive was the single event never delivered, and nothing errored.
       if (audience && !resolved.to.length) return;
       await notifier.deliver({ ...resolved, at: Date.now() });
     })().catch(fail);

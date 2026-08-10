@@ -509,15 +509,16 @@ off the hot path — one `adapter.listMembers`, which also fills in the member's
 where the event names one. An adapter that cannot list members tells nobody rather than
 throwing, and nobody-to-tell skips the round trip entirely.
 
-**But nobody-to-tell only applies to an ADDRESSED event.** `quote.requested` is the one event
-whose recipients are on OUR side of the transaction — the deployment's operators, whom the
-consumer routes to an ops inbox, a Slack channel, a CRM — so it carries no `audience` and an
-empty `to` deliberately. Dropping it on the same "nobody to tell" test meant the one event
-operators exist to receive was the one event **never delivered**: a workspace asking for a
-price reached nobody, and nothing errored. Invisible offline because every test of the
-emitter passed an audience, and invisible in the tool tests because they hand
-`requestCreditQuote` a spy instead of a real emitter. So the guard now reads `audience &&
-!to.length`, and `scripts/live/13-*.mjs` asserts the POST arrives with `to: []`.
+**But nobody-to-tell only applies to an ADDRESSED event.** An event carrying no `audience` was
+never this library's to address: its recipients are the DEPLOYMENT's — an ops inbox, a Slack
+channel, a CRM — and the consumer routes it, so an empty `to` is its shape rather than a
+failed lookup. The guard reads `audience && !to.length`. Every event shipped today IS
+addressed; the one that was not (`quote.requested`) went when custom pricing became a plan
+change, and its union variant went with it, because a variant a consumer can write a handler
+for that never fires is the same false statement as a dead tool. The branch stays: dropping
+that event on the "nobody to tell" test meant the single event its operators existed to
+receive was the single one **never delivered**, with nothing erroring — invisible offline
+because every emitter test passed an audience.
 
 **Ids are stable and derived, never random or timestamped.** `invite:<invitationId>`,
 `topup-requested:<requestId>`, `topup-approved:<requestId>`, `upgrade-requested:<requestId>`.
@@ -557,7 +558,7 @@ email at the receiver. Locking a metered call to avoid a rare duplicate would be
 trade by a wide margin.
 
 Events today: `invitation.created`, `topup.requested`, `topup.resolved`,
-`upgrade.requested`, `usage.threshold`. They fire from the choke points every path funnels through —
+`upgrade.requested`, `quote.resolved`, `usage.threshold`. They fire from the choke points every path funnels through —
 `requestTopUp` (the raw tool, the derived `requestExtraAllowance`, and `api.topUps.request`
 all reach it), `approveTopUp` / `denyTopUp` / `grantTopUp`, `requestSeatChange` /
 `requestPlanChange`, and the invitation service, which `createBilling` **wraps** so the event
@@ -606,6 +607,15 @@ accepting a price agreed days ago. A DECLINE leaves the finalized invoice behind
 losing the sale: it is payable from its hosted page, and the credits still land through
 `invoice.paid`. `saved_card` forces the charge and refuses instead of falling back, for a
 caller that needs to know.
+
+**And it is TAXED like every other charge, because `sellCredits` takes the `ResolvedConfig`.**
+It resolved no tax at all and its one caller passed none, so the largest sale the library
+makes went out at 0% while every seat invoice and every top-up on the same account carried
+the account's rate — the auto-reload defect, on an Enterprise deal, with the mandatory
+mention missing from the invoice most likely to be audited. The currency AND the tax
+declaration both come off that one object, so neither can be a second answer: manual rates
+ride the ITEM, `automatic_tax` rides the invoice, exactly as `purchaseCredits` does. Measured
+live in `scripts/live/13-*.mjs` at €4 200 → €5 124 with `22% "IVA"` on the rate.
 
 **The credits are granted by payment, never by acceptance.** `metadata.credits` on the
 invoice is the negotiated quantity and the amount is the negotiated price — the one place in
@@ -802,7 +812,7 @@ Money localises through `Intl` (`locale` + `currency`), with `formatMoney` as th
 - **A green assertion can be green for the wrong reason, and that is the failure mode to hunt.** Three caught here: a declined-card scenario attached the bad card BEFORE the first payment, so the subscription expired and every assertion passed while measuring nothing about an upgrade; a seat-removal case changed two things at once and blamed the library for the resulting charge; and a visibility check read `member_id` where the record says `memberId`, producing a confident FALSE finding. Assert the precondition you depend on, in the test.
 - **WHICH functions have run against a real account is a list, not a judgement** (`tests/live-coverage.test.mjs`). A static call graph over `src/`, rooted at what the live suite actually reaches — every function it names, plus every tool FILE containing a tool it dispatches — answers one question: which exports that touch Stripe or WorkOS have never been executed against either. 127 SDK-touching exports; the ledger names every uncovered one with a reason, and the real gaps carry a `GAP:` prefix so closing one is a deliberate edit. It works: the retax handoff was one of five, and closing it in section 03d made the ledger fail on its own stale entry. An uncovered function is fine; a **silently** uncovered one is where every expensive defect in this package has lived. **Its premise is that the live suite is GREEN** — it credits what the suite NAMES, and a section that throws halfway still names everything below the throw. The first full run after it was written had four sections red, every one inflating the coverage it counted, so run `pnpm e2e:live` before trusting the file and treat a red section as coverage withdrawn. Two biases are deliberate and must stay: a function body runs to the next top-level `export` (over-inclusion makes coverage look BETTER, so anything still reported really is uncovered), and tools are rooted at the file rather than the handler (per-handler regex under-matched 31 of 49, and a guard that cries wolf is one people scroll past). Writing it deleted four dead exports — the `default_incomplete` subscription trio and the `useCheckout` hook that drove them, a second charge path with none of the real one's guards.
 - **A LIBRARY guard that lands after a section was written STRANDS it, and only a full run says so.** Three did, and the harness had quietly gone un-runnable end to end: `request_top_up` refusing a member nothing is refusing (06 and 09 file an ask for a member with allowance left — deliberately, so drive the queue through `api.topUps.request`, which resolves the same cycle and carries no `blocked` gate, and assert the tool's refusal separately; do **not** reach for the tool's `cycle` escape hatch, which makes "filed under the meter's cycle" tautological); `createCreditCheckoutSession` returning `{url, clientSecret, sessionId}` rather than a string (07e asserted the old shape from the day it was written, so it had **never** passed); and `seatTypeExists` refusing a seat the org's own plan does not sell (10 assigned `premium` on a Starter workspace). **Run the whole suite after adding a refusal**, not the section you were working on — `E2E_ONLY` is what let all three sit there.
-- **A seam whose fake is a one-line function is the one a live section is worth most.** Section 13 runs a real `http.createServer` on localhost and points `webhookNotifier` at it, because a fake notifier — a function that pushes onto an array — can show none of what actually breaks: that a POST left the process, that the signature a receiver verifies is the one the sender wrote, that a 503 is retried byte-for-byte so a derived id really does dedupe, that a **down** endpoint leaves the grant it was describing in place, or that an alert record fits inside the WorkOS metadata value every other write on that org shares. It builds its OWN `createBilling`, because a notifier on the shared one would charge every earlier section the transport's retries against an endpoint that does not exist yet. Two defects on the first run, both of them the "a fake accepts anything" shape: the unaddressed `quote.requested` never delivered, and the negotiated invoice untaxed.
+- **A seam whose fake is a one-line function is the one a live section is worth most.** Section 13 runs a real `http.createServer` on localhost and points `webhookNotifier` at it, because a fake notifier — a function that pushes onto an array — can show none of what actually breaks: that a POST left the process, that the signature a receiver verifies is the one the sender wrote, that a 503 is retried byte-for-byte so a derived id really does dedupe, that a **down** endpoint leaves the grant it was describing in place, or that an alert record fits inside the WorkOS metadata value every other write on that org shares. It builds its OWN `createBilling`, because a notifier on the shared one would charge every earlier section the transport's retries against an endpoint that does not exist yet. Two defects on the first run, both of them the "a fake accepts anything" shape: an unaddressed event never delivered, and the negotiated invoice untaxed. It was then stranded itself when `feat(quotes)!` replaced the tools it dispatched — see the stranding rule above.
 - **An "allowed" role assertion is the ABSENCE of a refusal.** Every admin-gated tool calls `enforceAdmin` first, so the matrix passes deliberately inert arguments (`plan: "__no_such_plan__"`, `pm_does_not_exist`) and asserts no `Forbidden` — which keeps 33 probes read-only instead of 33 real mutations. The structural assertion beside them, that every gated tool is probed, is worth more than any single one: it catches a 14th gate added without a probe.
 
 ## Build & release
