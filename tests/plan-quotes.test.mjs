@@ -432,3 +432,25 @@ test("a deployment with no operators tells nobody, rather than telling the custo
 
   assert.deepEqual(sent, [], "silence beats routing our conversation to their inbox");
 });
+
+test("the operators' event carries what an answer needs, so nobody re-reads our store", async () => {
+  // A renderer with only a workspace id would have to go back to the request queue for the
+  // headcount and the address — an app reading a store this library owns, which is the
+  // shape every one of these seams exists to avoid.
+  process.env.BILLING_OPERATOR_EMAILS = "ops@ours.test";
+  const { sent, store, notify } = collector();
+
+  await ask(store, "org_1", {
+    memberId: "u_dev",
+    plans: CATALOGUE,
+    currentPlan: "pro",
+    plan: "enterprise",
+    metadata: { totalEstimatedSeats: 12 },
+    contact: { firstName: "Giulia", lastName: "Rossi", email: "giulia@acme.it" },
+    notify,
+  });
+  await settle();
+
+  assert.deepEqual(sent[0].data.metadata, { totalEstimatedSeats: 12 });
+  assert.equal(sent[0].data.contact.email, "giulia@acme.it");
+});
