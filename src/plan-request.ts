@@ -389,6 +389,8 @@ function notifyRequested(
       // `kind` is optional on the record for a legacy row; these two callers always set it.
       kind: request.kind ?? "plan",
       target: request.plan,
+      ...(request.metadata ? { metadata: request.metadata } : {}),
+      ...(request.contact ? { contact: request.contact } : {}),
     },
   });
 }

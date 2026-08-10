@@ -69,12 +69,34 @@ export async function run(ctx) {
   defer("notification endpoint", () => new Promise((r) => server.close(r)));
   note(`notifications → ${endpoint}`);
 
+  // A catalogue with a `sale: "quote"` plan in it, because `quote` is a CAPABILITY: a
+  // deployment whose catalogue prices everything self-serve has no volume conversation to
+  // hold, so `quote_plan_change`, `accept_plan_quote` and `sell_credits` correctly do not
+  // register for it. The run's own catalogue is entirely self-serve — adding the plan HERE
+  // rather than to `LIVE_PLANS` keeps it out of the plan-move matrix in 08 and out of
+  // `nextPlanUp` everywhere else, where a fourth tier would change what "the next one up"
+  // means.
+  //
+  // `sells: nothing` so it mints no prices (the same shape as the free plan) — it exists to
+  // declare that this deployment sells by quote, not to be moved onto.
+  const QUOTE_PLAN = `${RUN}_enterprise`;
+  const plansWithQuote = {
+    ...ctx.plans,
+    [QUOTE_PLAN]: {
+      sells: { kind: "nothing" },
+      grant: { kind: "none" },
+      cap: { kind: "wallet" },
+      sale: "quote",
+      display: { name: "Enterprise", order: 9 },
+    },
+  };
+
   // Its own composition, because the run's `billing` has no notifier: a dead endpoint on
   // every earlier section would have cost each of them the transport's retries.
   const billing = createBilling({
     adapter,
     config: ctx.config,
-    plans: ctx.plans,
+    plans: plansWithQuote,
     realm: "e2e-live",
     notifications: webhookNotifier({ endpoint, secret, retries: 1, timeoutMs: 4000 }),
   });

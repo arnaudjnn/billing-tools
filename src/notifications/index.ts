@@ -99,6 +99,14 @@ export type BillingNotification =
         kind: "seat" | "plan";
         /** The seat type or plan key they asked for. */
         target: string;
+        /**
+         * The consumer's own form, and who to answer — carried because a renderer needs
+         * them and looking them up again means the app reading a store the library owns.
+         * Both empty for an ordinary upgrade ask; both present for a quote-only one, which
+         * is the case where somebody has to write back.
+         */
+        metadata?: Record<string, string | number | boolean>;
+        contact?: { firstName: string; lastName: string; email: string };
       };
     }
   /** An operator answered. `to` is the admin who asked. */
