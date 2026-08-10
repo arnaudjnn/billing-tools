@@ -1,3 +1,10 @@
+## [24.0.1](https://github.com/arnaudjnn/billing-tools/compare/v24.0.0...v24.0.1) (2026-08-10)
+
+
+### Bug Fixes
+
+* **notifications:** finish the quote refactor — drop the event nothing emits ([365d29b](https://github.com/arnaudjnn/billing-tools/commit/365d29b1dfb3299f51f74981c292b76dcd7e8b70))
+
 # [24.0.0](https://github.com/arnaudjnn/billing-tools/compare/v23.1.0...v24.0.0) (2026-08-10)
 
 
