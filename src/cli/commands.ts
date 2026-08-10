@@ -194,55 +194,57 @@ export function registerBillingCommands(program: CommandLike, opts: CliOptions) 
       print(await callTool(requireConfig(), "remove_member", { member_id: memberId })),
     );
 
-  // ── Credit quotes ─────────────────────────────────────────────────────────
-  // Two audiences at one seam. `ask` and `list` are the CUSTOMER's — an admin asking for a
-  // volume price. `answer` is the deployment's, and the server refuses it to anyone who is
-  // not an operator, so the command exists for everybody and works for the people it should.
-  const quotes = program.command("quotes").description("Volume pricing: ask for one, or answer one");
+  // ── Custom pricing ────────────────────────────────────────────────────────
+  // The ASK is `plan request` (request_plan_change), the same verb as any other upgrade.
+  // What is here is the answer, its acceptance, and the sale that needs no request.
+  const quotes = program.command("quotes").description("Custom pricing: quote one, accept one, sell one");
   quotes
-    .command("ask")
-    .description("Ask for a price on a volume this plan does not sell self-serve")
-    .option("--credits <n>", "Credits wanted")
-    .option("--volume <n>", "Or your own unit, e.g. 20000")
-    .option("--unit <name>", 'What those are ("searches", "documents")')
-    .option("--term <term>", "one_off | monthly | annual (default: one_off)")
-    .option("--seats <n>", "How many people")
-    .option("--budget <amount>", "What you expect to pay, in whole currency units")
-    .option("--needed-by <date>", "ISO date you need it live by")
-    .option("--po <number>", "Your purchase-order number, for the invoice")
-    .option("--note <text>", "What you are doing with it")
-    .action(async (o: Record<string, string>) =>
+    .command("accept <request_id>")
+    .description("Accept a quoted price — charges the card on file, else emails an invoice")
+    .option("--po <number>", "Your purchase-order number, printed on the invoice")
+    .option("--days-until-due <n>", "Net terms when it is invoiced (default 30)")
+    .action(async (requestId: string, o: Record<string, string>) =>
       print(
-        await callTool(requireConfig(), "request_credit_quote", {
-          ...(o.credits ? { credits: Number(o.credits) } : {}),
-          ...(o.volume ? { volume_amount: Number(o.volume) } : {}),
-          ...(o.unit ? { volume_unit: o.unit } : {}),
-          ...(o.term ? { term: o.term } : {}),
-          ...(o.seats ? { seats: Number(o.seats) } : {}),
-          ...(o.budget ? { budget: Number(o.budget) } : {}),
-          ...(o.neededBy ? { needed_by: o.neededBy } : {}),
+        await callTool(requireConfig(), "accept_plan_quote", {
+          request_id: requestId,
           ...(o.po ? { purchase_order: o.po } : {}),
-          ...(o.note ? { note: o.note } : {}),
+          ...(o.daysUntilDue ? { days_until_due: Number(o.daysUntilDue) } : {}),
         }),
       ),
     );
   quotes
-    .command("list")
-    .description("This workspace's quotes, asked and answered")
-    .action(async () => print(await callTool(requireConfig(), "list_credit_quotes")));
-  // Cross-org, and the reason it lives under `quotes` rather than beside `buy`: this is
-  // the SELLER's side of the counter. `buy` is what a customer does at the list price.
+    .command("send <workspace_id> <request_id>")
+    .description("Price an open request: credits and a price PER credit (operators only)")
+    .option("--credits <n>", "How many credits the deal is for")
+    .option("--per-credit <minor>", "Minor units per credit — 0.7 is 0.7 cents")
+    .option("--valid-until <date>", "ISO date the price expires")
+    .option("--note <text>", "")
+    .action(async (workspaceId: string, requestId: string, o: Record<string, string>) => {
+      if (!o.credits || !o.perCredit) {
+        console.error("Both --credits and --per-credit are required.");
+        process.exitCode = 1;
+        return;
+      }
+      print(
+        await callTool(requireConfig(), "quote_plan_change", {
+          workspace_id: workspaceId,
+          request_id: requestId,
+          credits: Number(o.credits),
+          price_per_credit: Number(o.perCredit),
+          ...(o.validUntil ? { valid_until: o.validUntil } : {}),
+          ...(o.note ? { note: o.note } : {}),
+        }),
+      );
+    });
   quotes
     .command("sell <workspace_id>")
-    .description("Sell a workspace credits at a negotiated price (platform operators only)")
-    // `option`, not `requiredOption`: `CommandLike` is the structural type that keeps
-    // commander out of a consumer's dependencies, and it has no required variant. The
-    // check below is the guard, and the tool re-checks anyway.
+    .description("Sell credits at a negotiated price with no request on file (operators only)")
     .option("--credits <n>", "What they get")
     .option("--amount <amount>", "What they pay, in whole currency units")
     .option("--description <text>", "What the invoice line says")
     .option("--days-until-due <n>", "Net terms (default 30)")
     .option("--po <number>", "Their purchase-order number, printed on the invoice")
+    .option("--method <how>", "auto | saved_card | invoice (default auto)")
     .option("--reference <key>", "Your own idempotency key — the same one reuses the invoice")
     .action(async (workspaceId: string, o: Record<string, string>) => {
       if (!o.credits || !o.amount) {
@@ -258,33 +260,11 @@ export function registerBillingCommands(program: CommandLike, opts: CliOptions) 
           ...(o.description ? { description: o.description } : {}),
           ...(o.daysUntilDue ? { days_until_due: Number(o.daysUntilDue) } : {}),
           ...(o.po ? { purchase_order: o.po } : {}),
+          ...(o.method ? { method: o.method } : {}),
           ...(o.reference ? { reference: o.reference } : {}),
         }),
       );
     });
-  quotes
-    .command("answer <workspace_id> <quote_id>")
-    .description("Approve or deny a quote (platform operators only)")
-    .option("--credits <n>", "What they get")
-    .option("--amount <amount>", "What they pay, in whole currency units")
-    .option("--deny", "Refuse it instead")
-    .option("--valid-until <date>", "ISO date the price expires")
-    .option("--days-until-due <n>", "Net terms on the invoice (default 30)")
-    .option("--note <text>", "")
-    .action(async (workspaceId: string, quoteId: string, o: Record<string, string | boolean>) =>
-      print(
-        await callTool(requireConfig(), "resolve_credit_quote", {
-          workspace_id: workspaceId,
-          quote_id: quoteId,
-          outcome: o.deny ? "denied" : "approved",
-          ...(o.credits ? { credits: Number(o.credits) } : {}),
-          ...(o.amount ? { amount: Number(o.amount) } : {}),
-          ...(o.validUntil ? { valid_until: String(o.validUntil) } : {}),
-          ...(o.daysUntilDue ? { days_until_due: Number(o.daysUntilDue) } : {}),
-          ...(o.note ? { note: String(o.note) } : {}),
-        }),
-      ),
-    );
 
   const invites = program.command("invitations").description("Pending invitations");
   invites

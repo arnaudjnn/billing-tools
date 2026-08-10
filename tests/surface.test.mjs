@@ -307,11 +307,12 @@ test("the two shapes differ by exactly the seven tools", () => {
   // the answer on exactly the plans that have no per-member allowance to top up, which is
   // the pooled catalogue's only rung.
   //
-  // The three CREDIT-QUOTE tools are on both sides for the same reason as the member ones:
-  // any deployment can be asked for a volume price, and `sale: "quote"` describes the plan
-  // that EXPECTS the question rather than the only one allowed to be asked it.
-  assert.equal(gtm.size, 42);
-  assert.equal(scart.size, 50);
+  // The CUSTOM-PRICING tools are on both sides for the same reason as the member ones: any
+  // deployment can be asked for a volume price, and `sale: "quote"` describes the plan that
+  // EXPECTS the question rather than the only one allowed to be asked it. The ASK itself is
+  // not among them — it is `request_plan_change`, which was already on both sides.
+  assert.equal(gtm.size, 41);
+  assert.equal(scart.size, 49);
 });
 
 test("no catalogue means no declaration to read, so every group registers", () => {

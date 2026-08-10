@@ -258,7 +258,7 @@ function registerPlanTools(
  * actually refuses them is `enforceOperator`, at call time, and it does not care whether
  * they were advertised.
  */
-export const OPERATOR_TOOL_NAMES = ["resolve_credit_quote", "sell_credits"] as const;
+export const OPERATOR_TOOL_NAMES = ["quote_plan_change", "sell_credits"] as const;
 
 export const BILLING_TOOL_NAMES = [
   "get_api_key",
@@ -309,12 +309,12 @@ export const BILLING_TOOL_NAMES = [
   "approve_top_up",
   "grant_top_up",
   "deny_top_up",
-  // The commercial conversation (registerQuoteTools). `sale: "quote"` used to render a
-  // "contact us" button and end there; these carry the ask to somebody who can answer it,
-  // and `resolve_credit_quote` is the only OPERATOR-gated tool in the library.
-  "request_credit_quote",
-  "list_credit_quotes",
-  "resolve_credit_quote",
+  // Custom pricing (registerQuoteTools). The ASK is `request_plan_change` above — asking to
+  // move to a plan you cannot buy self-serve is the same act as asking to move to one you
+  // can — so what is here is only the answer, its acceptance, and the sale that needs no
+  // request behind it.
+  "accept_plan_quote",
+  "quote_plan_change",
   "sell_credits",
   // The billing account itself (registerProfileTools).
   "get_billing_profile",

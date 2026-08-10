@@ -563,89 +563,63 @@ all reach it), `approveTopUp` / `denyTopUp` / `grantTopUp`, `requestSeatChange` 
 `requestPlanChange`, and the invitation service, which `createBilling` **wraps** so the event
 fires whatever service was passed and whether or not it has a `sendEmail` hook of its own.
 
-## Selling at a price nobody published — credit quotes (`src/credit-quotes.ts`)
+## Custom pricing — in the taxonomy that already existed (`src/plan-request.ts`)
 
-`sale: "quote"` used to be a label. It withheld the self-serve tools, rendered "contact us",
-refused `validateBasket` — and then the trail ended: no record of who asked, nothing to
-answer with, and **no credit sale anywhere that could carry a negotiated price**, because
-`CREDITS_PER_UNIT = 100` makes credits and cents the same number in every other path. That
-constant is right for a top-up (a customer typing an amount and an agent calling `buy_credits`
-must not be quoted differently) and it is exactly wrong for the only conversation that matters
-commercially.
+`sale: "quote"` used to be a label: it withheld the self-serve tools, rendered "contact us",
+refused `validateBasket`, and there the trail ended. The first attempt at fixing that grew a
+family of its own — `request_credit_quote` / `list_credit_quotes` / `resolve_credit_quote`,
+over a second store — and **that was the mistake**. Asking to move to a plan you cannot buy
+self-serve is the SAME act as asking to move to one you can. `request_plan_change` already
+means "I want to move up", already keeps one open ask per member, and already tells the
+people who can answer. A quote-only plan does not need another verb; it needs the answer to
+be able to carry a price.
 
-**Four tools, two authorities.** `request_credit_quote` is the workspace ADMIN's;
-`list_credit_quotes` is a member-visible read; `resolve_credit_quote` and **`sell_credits`**
-are the deployment OPERATOR's. That split is the point — "approve my own discount" is not a
-permission that should exist.
+So the record grew and the family collapsed. `PlanRequest` gains `seats`, `contact`, `quote`
+and `accepted`, plus a `quoted` status between `pending` and `done`. Four verbs, three
+authorities:
 
-**Neither is advertised to a customer.** The REST tool list filters `OPERATOR_TOOL_NAMES`
-out for a caller who is not an operator, and the MCP transport builds TWO memoised tool sets
-— the customer's and the operator's — rather than one, because `createMcpHandler` registers
-once and serves every connection from that server, so "hide this from this caller" cannot be
-decided inside it. Two registrations per process is the same arithmetic the REST dispatcher
-already makes.
+| | who | what |
+|---|---|---|
+| `request_plan_change` | admin | the ask. `seats` optional; `contact` comes from the SIGNED-IN user, never typed |
+| `quote_plan_change` | **operator** | a quantity and a price PER CREDIT |
+| `accept_plan_quote` | admin | takes it, and pays it |
+| `sell_credits` | **operator** | the same sale with no request behind it |
 
-This is an honesty boundary, not a security one: `enforceOperator` is the boundary, it runs
-at call time, and it does not care what was advertised. The DISPATCHER keeps both tools
-registered for exactly that reason — an operator calls them through the same REST surface a
-customer reads the list from. What changes is what a caller is TOLD exists, and the reason
-to change it is that an agent reading a tool list will try what it finds there.
+**Per credit, not per deal.** That is what a negotiation is actually about — "we can do
+0.7¢" survives the customer changing how much they want, and a total does not. The total is
+arithmetic, computed in `quotePlanRequest`, so the figure a customer accepts and the figure
+they are charged cannot drift. Fractional minor units are allowed on purpose.
 
-**`sell_credits` is the cross-org one, and needs no quote on file.** It names a workspace
-that is not the caller's and invoices it at a negotiated price, which is exactly why the gate
-below fails closed. `resolve_credit_quote` is the same sale with a request attached; this is
-for a conversation that started somewhere else — a call, an email, a conference — where
-making the customer file a form first would be theatre.
+**Accepting charges the card on file, or emails a bill.** `sellCredits({ method: "auto" })`
+reads the wallet FIRST, because `collection_method` cannot be changed after an invoice is
+created: a card means `charge_automatically` + `invoices.pay({ off_session: true })`, no card
+means `send_invoice` at net 30. Off-session because nobody is at a browser — this is an admin
+accepting a price agreed days ago. A DECLINE leaves the finalized invoice behind rather than
+losing the sale: it is payable from its hosted page, and the credits still land through
+`invoice.paid`. `saved_card` forces the charge and refuses instead of falling back, for a
+caller that needs to know.
 
-**Volume is NOT required.** A person who has not priced the product cannot name a credit
-figure, and a form that demands one goes unfilled — "twelve people, talk to me" is a real
-ask. `nothing_asked` now means no credits, no volume, no seats AND nobody to answer. The
-`contact` (work email + name) exists because a WorkOS account email is whatever somebody
-registered with, and the first thing a salesperson needs is an address on the company's own
-domain.
-
-**The ask is shaped for a salesperson, not for the schema.** Credits OR a volume in the
-customer's own unit ("20 000 searches per month" — making a buyer convert to credits is asking
-them to price the product for us), term (one-off / monthly / annual), seats, an optional
-BUDGET (the single most useful field: it says whether this is a discount request or simply a
-big order), needed-by, payment method (Italian B2B is bonifico against an invoice far more
-often than a card), a PO number that goes ON the invoice where procurement looks for it, and a
-note. Nothing already known is asked again — VAT, address, SDI and current usage are the
-workspace's.
-
-**One open quote per WORKSPACE**, unlike the top-up's one-per-member: two admins asking
-separately would have an operator answering the same customer twice with two prices.
+**The credits are granted by payment, never by acceptance.** `metadata.credits` on the
+invoice is the negotiated quantity and the amount is the negotiated price — the one place in
+this library where they are allowed to differ — so the existing `invoice.paid` branch grants
+exactly that, with the `credit:invoice:<id>` key it already uses. No second crediting path,
+and an unaccepted or unpaid quote hands over nothing. Every tool answers
+`credits_on_payment`, never `credits`.
 
 **`enforceOperator` is the only gate here that FAILS CLOSED.** Everywhere else an
 unanswerable question allows — `enforceAdmin` lets an org API key through, an adapter that
 cannot report roles does not lock every management tool — because the thing prevented is
 smaller than the thing broken. Invert it here and "unknown allows" means any workspace key
-approves the discount its own admin just asked for. `BILLING_OPERATOR_EMAILS` for a signed-in
-human (the principal now carries `email`, because an operator is identified across workspaces
-rather than by a role inside one) and `BILLING_OPERATOR_TOKEN` presented as `X-Operator-Token`
-for a machine. Neither set means nobody can approve, which is the right state for a deployment
-that does not sell this way, and it says so.
+prices its own discount. `BILLING_OPERATOR_EMAILS` for a signed-in human (the principal
+carries `email`, because an operator is identified across workspaces rather than by a role
+inside one) and `BILLING_OPERATOR_TOKEN` as `X-Operator-Token` for a machine.
 
-**Approving is an INVOICE, not a grant** (`sellCredits`). The invoice item carries the
-negotiated amount, `metadata.credits` carries the negotiated quantity, and paying it credits
-the wallet through the `invoice.paid` branch that already exists with the
-`credit:invoice:<id>` key it already uses. So there is no second crediting path to keep in
-step, an unpaid quote hands over nothing, and a refund reverses like any other invoice. The
-tool says `credits_on_payment` rather than `credits`, because "approved" reads like "granted".
-
-**And it is TAXED like every other charge, because it takes `config` rather than a currency.**
-`sellCredits` resolved no tax at all and its one caller passed none, so the largest sale the
-library makes went out at 0% while every seat invoice and every top-up on the same account
-carried the account's rate — the auto-reload defect, on an Enterprise deal, with the mandatory
-mention missing from the one invoice most likely to be audited. It now takes the
-`ResolvedConfig` (the currency AND the tax declaration are both read from it, so neither can be
-a second answer) and resolves `taxFor` when the caller passes no `tax`: manual rates ride the
-ITEM, `automatic_tax` rides the invoice, exactly as `purchaseCredits` does. Measured live at
-€4 000 → €4 880 with `22% "IVA"` on the rate.
-
-**`VolumeQuote`, not `CreditQuote`** — that name belongs to the tax estimate
-`quoteCreditPurchase` returns. Two records with one name in a single barrel is how somebody
-imports the wrong one and finds out at runtime.
+**Neither operator tool is advertised to a customer.** The REST list filters
+`OPERATOR_TOOL_NAMES`, and the MCP transport builds TWO memoised tool sets rather than one,
+because `createMcpHandler` registers once and serves every connection from that server. An
+honesty boundary, not a security one: the gate runs at call time and does not care what was
+advertised — the dispatcher keeps both registered so an operator can call them through the
+same REST surface a customer reads the list from.
 
 ## Mounting in a Next app
 

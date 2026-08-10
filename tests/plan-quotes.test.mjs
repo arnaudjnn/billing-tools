@@ -1,122 +1,23 @@
-// Selling at a price nobody published.
+// Custom pricing: the gate, and what a customer is told exists.
 //
-// Two things here are unlike everything else in this library, and both are what the tests
-// are about. The first: `credits` and money are the same number everywhere else on purpose
-// (`CREDITS_PER_UNIT`), and a negotiated deal is exactly the case where they must not be.
-// The second: `enforceOperator` FAILS CLOSED, where every other gate here allows when it
-// cannot tell — because this one stands between a customer and their own discount.
+// The ASK and its store are `plan-request.test.mjs` now — asking to move to a plan you
+// cannot buy self-serve turned out to be the same act as asking to move to one you can, so
+// it queues in the same place with the same verb. What is left here is the half that is
+// genuinely different: who may PRICE it, and who is even told the tool exists.
+//
+// `enforceOperator` fails CLOSED, where every other gate in this library allows when it
+// cannot tell. Everywhere else the thing prevented is smaller than the thing broken; here it
+// stands between a customer and their own discount.
 
 process.env.STRIPE_SECRET_KEY ??= "sk_test_fake";
 
 import assert from "node:assert/strict";
 import { test } from "vitest";
 
-import { answerCreditQuote, listCreditQuotes, requestCreditQuote } from "../dist/credit-quotes.js";
 import { enforceOperator, runWithAuth, runWithPrincipal } from "../dist/auth.js";
 import { __setStripeForTests, sellCredits } from "../dist/billing.js";
-import { fakeAdapter, WORKOS_MAX_VALUE } from "./helpers.mjs";
-
-const ask = (over = {}) => ({
-  memberId: "u_admin",
-  term: "annual",
-  paymentMethod: "invoice",
-  credits: 600_000,
-  budgetMinor: 400_000,
-  ...over,
-});
-
-test("a quote records what was asked, in the terms it was asked in", async () => {
-  const a = fakeAdapter({ members: ["u_admin"] });
-  const res = await requestCreditQuote(a, "org_1", ask({ credits: undefined, volume: { amount: 20_000, unit: "searches", per: "month" } }));
-
-  assert.equal(res.ok, true);
-  // Nobody made them convert searches into credits. Asking a buyer to price the product on
-  // our behalf is how a quote form goes unfilled.
-  assert.deepEqual(res.quote.volume, { amount: 20_000, unit: "searches", per: "month" });
-  assert.equal(res.quote.status, "pending");
-});
-
-test("a quote with neither a quantity nor a volume is refused", async () => {
-  const a = fakeAdapter({ members: ["u_admin"] });
-  const res = await requestCreditQuote(a, "org_1", ask({ credits: undefined }));
-  assert.equal(res.ok, false);
-  assert.equal(res.reason, "nothing_asked", "a question nobody can answer");
-});
-
-test("one open quote per WORKSPACE, not per member", async () => {
-  // Two admins asking separately would put an operator in the position of answering the same
-  // customer twice, with two prices.
-  const a = fakeAdapter({ members: ["u_admin", "u_other"] });
-  await requestCreditQuote(a, "org_1", ask());
-  const second = await requestCreditQuote(a, "org_1", ask({ memberId: "u_other" }));
-
-  assert.equal(second.ok, false);
-  assert.equal(second.reason, "already_pending");
-  assert.equal(second.pending.memberId, "u_admin", "and it says whose");
-});
-
-test("answering frees the workspace to ask again", async () => {
-  const a = fakeAdapter({ members: ["u_admin"] });
-  const first = await requestCreditQuote(a, "org_1", ask());
-  await answerCreditQuote(a, "org_1", { quoteId: first.quote.id, outcome: "denied" });
-
-  const again = await requestCreditQuote(a, "org_1", ask({ credits: 100_000 }));
-  assert.equal(again.ok, true);
-  const all = await listCreditQuotes(a, "org_1");
-  assert.equal(all.length, 2);
-  assert.equal(all.filter((q) => q.status === "pending").length, 1);
-});
-
-test("the answer carries the two numbers that are allowed to differ", async () => {
-  const a = fakeAdapter({ members: ["u_admin"] });
-  const { quote } = await requestCreditQuote(a, "org_1", ask());
-  const res = await answerCreditQuote(a, "org_1", {
-    quoteId: quote.id,
-    outcome: "approved",
-    answer: {
-      credits: 600_000,
-      amountMinor: 400_000,
-      currency: "eur",
-      invoiceId: "in_1",
-      validUntil: "2026-12-31",
-    },
-  });
-
-  assert.equal(res.ok, true);
-  // €4 000 for 600 000 credits. At list price those credits are €6 000 — expressing that at
-  // all is the capability this whole module exists for.
-  assert.equal(res.quote.answer.credits, 600_000);
-  assert.equal(res.quote.answer.amountMinor, 400_000);
-  assert.ok(res.quote.answer.at, "stamped when it was answered");
-});
-
-test("answering a quote that is not open is not found, rather than answered twice", async () => {
-  const a = fakeAdapter({ members: ["u_admin"] });
-  const { quote } = await requestCreditQuote(a, "org_1", ask());
-  await answerCreditQuote(a, "org_1", { quoteId: quote.id, outcome: "approved", answer: { credits: 1, amountMinor: 1, currency: "eur" } });
-  const twice = await answerCreditQuote(a, "org_1", { quoteId: quote.id, outcome: "denied" });
-  assert.equal(twice.ok, false);
-  assert.equal(twice.reason, "not_found");
-});
-
-test("the queue stays inside one metadata value, and never sheds a pending ask", async () => {
-  const a = fakeAdapter({ members: ["u_admin"] });
-  for (let i = 0; i < 8; i++) {
-    const { quote } = await requestCreditQuote(
-      a,
-      "org_1",
-      ask({ note: "x".repeat(200), purchaseOrder: `PO-2026-${i}` }),
-    );
-    if (i < 7) await answerCreditQuote(a, "org_1", { quoteId: quote.id, outcome: "denied" });
-  }
-
-  const raw = a.store.btCreditQuotes;
-  assert.ok(raw.length <= WORKOS_MAX_VALUE, `the record is ${raw.length} chars`);
-  const kept = JSON.parse(raw);
-  // Somebody is waiting on a price. Losing the question means they wait for ever, so the
-  // history is what gets shed.
-  assert.equal(kept.filter((q) => q.status === "pending").length, 1);
-});
+import { requestPlanChange } from "../dist/plan-request.js";
+import { fakeAdapter } from "./helpers.mjs";
 
 // ── The gate that fails closed ───────────────────────────────────────────────
 
@@ -180,10 +81,13 @@ test("a deployment with no operators configured has nobody who can approve, and 
 
 // ── The money half: what Stripe is actually SENT ─────────────────────────────
 
-/** Enough of Stripe for one sale, recording the params rather than answering questions. */
-function saleStripe(sent) {
+/** Enough of Stripe for one sale, recording the params rather than answering questions.
+ *  `cards` seeds the wallet: empty is the INVOICE path, one card is the charge path. */
+function saleStripe(sent, cards = []) {
   return {
     customers: { retrieve: async () => ({ id: "cus_1", email: "ap@customer.test" }) },
+    // The card decides the whole shape of the charge, so it is the first thing read.
+    paymentMethods: { list: async () => ({ data: cards }) },
     invoiceItems: {
       create: async (params) => {
         sent.item = params;
@@ -197,6 +101,7 @@ function saleStripe(sent) {
       },
       finalizeInvoice: async () => ({ id: "in_1", hosted_invoice_url: "https://pay.test/in_1" }),
       sendInvoice: async () => ({ id: "in_1", hosted_invoice_url: "https://pay.test/in_1", due_date: 1 }),
+      pay: async (id) => ((sent.paid = id), { id, hosted_invoice_url: "https://pay.test/in_1" }),
     },
   };
 }
@@ -247,34 +152,28 @@ test("an untaxed deployment stays untaxed, explicitly", async () => {
   assert.equal(sent.invoice.automatic_tax, undefined);
 });
 
-test("a lead is a valid ask: a contact and a headcount, with no volume named", async () => {
-  // The form a human fills is four fields — work email, name, seats — because somebody who
-  // has not priced the product cannot name a credit figure, and demanding one is how a
-  // quote form goes unfilled. "Twelve people, talk to me" is a perfectly good ask.
+test("the Enterprise ask is a PLAN request, with seats and a contact on it", async () => {
+  // No second verb, no second store. A quote-only plan is one a customer cannot buy
+  // self-serve, and asking to move to it is the same act as asking to move to any other —
+  // which is why it queues where every other upgrade ask already queued.
   const a = fakeAdapter({ members: ["u_admin"] });
-  const res = await requestCreditQuote(a, "org_1", {
+  const res = await requestPlanChange(a, "org_1", {
     memberId: "u_admin",
-    term: "annual",
-    paymentMethod: "invoice",
+    plans: {
+      pro: { sells: { kind: "flat", price: { monthly: 1800 } }, cap: { kind: "pool", credits: 1000 }, sale: "self_serve" },
+      enterprise: { sells: { kind: "flat", price: { monthly: 0 } }, cap: { kind: "wallet" }, sale: "quote" },
+    },
+    currentPlan: "pro",
+    plan: "enterprise",
     seats: 12,
     contact: { firstName: "Giulia", lastName: "Rossi", email: "giulia@acme.it" },
   });
 
   assert.equal(res.ok, true);
-  assert.equal(res.quote.seats, 12);
-  assert.equal(res.quote.contact.email, "giulia@acme.it");
-  assert.equal(res.quote.credits, undefined, "nothing invented on their behalf");
-});
-
-test("but a request naming nothing at all is still refused", async () => {
-  const a = fakeAdapter({ members: ["u_admin"] });
-  const res = await requestCreditQuote(a, "org_1", {
-    memberId: "u_admin",
-    term: "annual",
-    paymentMethod: "invoice",
-  });
-  assert.equal(res.ok, false);
-  assert.equal(res.reason, "nothing_asked", "no size, no volume, nobody to answer");
+  const [filed] = await (await import("../dist/plan-request.js")).listPlanRequests(a, "org_1");
+  assert.equal(filed.seats, 12, "the one number a customer knows before seeing a price");
+  assert.equal(filed.contact.email, "giulia@acme.it");
+  assert.equal(filed.status, "pending", "nothing is priced yet");
 });
 
 // ── What a customer is TOLD exists ───────────────────────────────────────────
@@ -284,8 +183,6 @@ test("but a request naming nothing at all is still refused", async () => {
 // customer describes a capability they will never have, and an agent reading that list
 // will spend a call finding out.
 
-import { registerBillingTools, OPERATOR_TOOL_NAMES } from "../dist/tools/register.js";
-import { createToolListHandler } from "../dist/routes/rest.js";
 
 function registeredNames(opts = {}) {
   const names = new Set();
@@ -293,10 +190,19 @@ function registeredNames(opts = {}) {
   registerBillingTools(server, {
     adapter: { async validateApiKey() { return { orgId: "org_1" }; }, async getOrgMetadata() { return {}; }, async setOrgMetadata() {} },
     config: { baseUrl: "https://x.test" },
+    // A catalogue, because `request_plan_change` lives with the subscription tools and
+    // those register only where there are plans to move between.
+    plans: {
+      pro: { sells: { kind: "flat", price: { monthly: 1800 } }, cap: { kind: "pool", credits: 1000 }, sale: "self_serve" },
+      enterprise: { sells: { kind: "flat", price: { monthly: 0 } }, cap: { kind: "wallet" }, sale: "quote" },
+    },
     ...opts,
   });
   return names;
 }
+
+import { registerBillingTools, OPERATOR_TOOL_NAMES } from "../dist/tools/register.js";
+import { createToolListHandler } from "../dist/routes/rest.js";
 
 test("the customer's tool set leaves the operator half out", () => {
   const all = registeredNames();
@@ -308,7 +214,10 @@ test("the customer's tool set leaves the operator half out", () => {
   }
   // And nothing else moved: hiding two tools is not an excuse to drop a third.
   assert.equal(customer.size, all.size - OPERATOR_TOOL_NAMES.length);
-  assert.ok(customer.has("request_credit_quote"), "the ASK is the customer's own");
+  // The ask is `request_plan_change` — the same verb as any other upgrade, which is the
+  // whole point of the collapse — and accepting a price is the customer's too.
+  assert.ok(customer.has("request_plan_change"), "the ASK is the customer's own");
+  assert.ok(customer.has("accept_plan_quote"), "and so is taking the price");
 });
 
 test("the REST list hides them from a caller who is not an operator", async () => {
@@ -331,8 +240,74 @@ test("the REST list hides them from a caller who is not an operator", async () =
   ).json();
   assert.deepEqual(asOperator.tools.map((t) => t.name).sort(), [
     "get_credit_balance",
-    "resolve_credit_quote",
+    "quote_plan_change",
     "sell_credits",
   ]);
   delete process.env.BILLING_OPERATOR_TOKEN;
+});
+
+
+// ── Card on file, or a bill: the shape "accept" takes ────────────────────────
+
+test("a card on file is CHARGED, off-session, and the invoice is not emailed", async () => {
+  // What a person expects from pressing accept: somebody who has already given us a card
+  // does not want a bill in their inbox. Off-session because nobody is at a browser — this
+  // is an admin accepting a price agreed days ago.
+  const sent = {};
+  __setStripeForTests(saleStripe(sent, [{ id: "pm_1" }]));
+  const res = await sellCredits("cus_1", "org_1", { currency: "eur", tax: { mode: "none" } }, {
+    credits: 600_000,
+    amountMinor: 400_000,
+  });
+
+  assert.equal(res.status, "charged");
+  assert.equal(sent.paid, "in_1", "paid off-session rather than sent");
+  assert.equal(sent.invoice.collection_method, "charge_automatically");
+  assert.equal(sent.invoice.default_payment_method, "pm_1");
+  // The negotiated pair survives: €4 000 charged, 600 000 credits granted on payment.
+  assert.equal(sent.item.amount, 400_000);
+  assert.equal(sent.invoice.metadata.credits, "600000");
+});
+
+test("no card falls back to an emailed invoice rather than refusing", async () => {
+  const sent = {};
+  __setStripeForTests(saleStripe(sent, []));
+  const res = await sellCredits("cus_1", "org_1", { currency: "eur", tax: { mode: "none" } }, {
+    credits: 1_000,
+    amountMinor: 900,
+  });
+
+  assert.equal(res.status, "invoiced");
+  assert.equal(sent.invoice.collection_method, "send_invoice");
+  assert.equal(sent.invoice.days_until_due, 30, "net 30, because procurement does not pay on receipt");
+});
+
+test("`saved_card` refuses instead of falling back, for a caller that needs to know", async () => {
+  __setStripeForTests(saleStripe({}, []));
+  const res = await sellCredits("cus_1", "org_1", { currency: "eur", tax: { mode: "none" } }, {
+    credits: 1_000,
+    amountMinor: 900,
+    method: "saved_card",
+  });
+  assert.equal(res.status, "refused");
+  assert.equal(res.reason, "no_card");
+});
+
+test("a declined card leaves the finalized invoice behind, payable", async () => {
+  // The worst outcome would be losing a real bill to a decline. It is finalized, it has a
+  // hosted page, and the credits still land through `invoice.paid` whenever it settles.
+  const sent = {};
+  const stripe = saleStripe(sent, [{ id: "pm_1" }]);
+  stripe.invoices.pay = async () => {
+    throw new Error("card_declined");
+  };
+  __setStripeForTests(stripe);
+  const res = await sellCredits("cus_1", "org_1", { currency: "eur", tax: { mode: "none" } }, {
+    credits: 1_000,
+    amountMinor: 900,
+  });
+
+  assert.equal(res.status, "invoiced");
+  assert.equal(res.invoiceId, "in_1");
+  assert.equal(res.emailed, false, "it was never sent — it was meant to be charged");
 });

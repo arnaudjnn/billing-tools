@@ -168,10 +168,53 @@ export interface PlanRequest {
   kind?: "plan" | "seat";
   /** The target — a plan key, or a seat-type key when `kind` is "seat". */
   plan: string;
-  status: "pending" | "done" | "denied";
+  /**
+   * `quoted` is the rung a QUOTE-only plan adds, and it sits between the two that were
+   * here: somebody asked, an operator priced it, and nobody has paid yet. `done` still
+   * means "an admin acted on it", which for a quoted request means they accepted and it
+   * has been charged or invoiced.
+   */
+  status: "pending" | "quoted" | "done" | "denied";
   createdAt: string;
   /** Why they are asking, in their words. Optional, capped at 140 chars by the caller. */
   note?: string;
+  /**
+   * How many people they expect. The one number a customer knows before seeing a price —
+   * which is why it is the only field the Enterprise form asks for.
+   */
+  seats?: number;
+  /**
+   * Who to answer, when it is not simply the account they signed up with.
+   *
+   * A person's registered email is personal as often as not, and the first thing a
+   * salesperson needs is an address on the company's own domain.
+   */
+  contact?: { firstName: string; lastName: string; email: string };
+  /**
+   * What an operator answered: a quantity, and a price PER CREDIT.
+   *
+   * Per credit rather than a total because that is the number a negotiation is actually
+   * about — "we can do 0.7¢" survives the customer changing how much they want, and a
+   * total does not. The total is arithmetic, and the tool does it.
+   */
+  quote?: {
+    credits: number;
+    /** Minor units per credit, so 0.7¢ is 0.7 — a fraction is allowed on purpose. */
+    unitPriceMinor: number;
+    /** Minor units, `credits × unitPriceMinor` rounded. What they will actually be charged. */
+    totalMinor: number;
+    /** ISO date the price expires. A price with no expiry is a price for ever. */
+    validUntil?: string;
+    note?: string;
+    at: string;
+  };
+  /** What happened when the admin accepted: charged on file, or invoiced. */
+  accepted?: {
+    at: string;
+    method: "saved_card" | "invoice";
+    invoiceId?: string;
+    invoiceUrl?: string;
+  };
 }
 
 /** Has the workspace already reached (or passed) what this request asked for? */

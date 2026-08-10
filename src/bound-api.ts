@@ -77,7 +77,7 @@ import {
 } from "./members.js";
 import type { InvitationService } from "./invitations.js";
 import type { Notify } from "./notifications/index.js";
-import { answerCreditQuote, listCreditQuotes, requestCreditQuote } from "./credit-quotes.js";
+import { markPlanQuoteAccepted, quotePlanRequest } from "./plan-request.js";
 import { topUpTargetOf } from "./allowance.js";
 import {
   defaultSeatOf,
@@ -667,7 +667,8 @@ export function createBoundApi(deps: BoundApiDeps) {
      * them here rather than re-importing is the safe way round.
      */
     /**
-     * The commercial conversation: a workspace asks for a volume price, an operator answers.
+     * Custom pricing: the ask is `plans.ask` (`request_plan_change`) — the same verb as any
+     * other upgrade — and these are the two halves that carry a PRICE on the answer.
      *
      * `resolve` is NOT gated here, and that is deliberate. The bound API is server-side code
      * holding the deployment's own credentials — the same trust level as the env var that
@@ -676,11 +677,12 @@ export function createBoundApi(deps: BoundApiDeps) {
      * key can reach.
      */
     quotes: {
-      list: (orgId: string) => listCreditQuotes(adapter, orgId),
-      request: (orgId: string, input: Parameters<typeof requestCreditQuote>[2]) =>
-        requestCreditQuote(adapter, orgId, { notify: deps.notify, ...input }),
-      answer: (orgId: string, input: Parameters<typeof answerCreditQuote>[2]) =>
-        answerCreditQuote(adapter, orgId, { notify: deps.notify, ...input }),
+      /** Price an open request. The operator's half; `enforceOperator` gates the TOOL. */
+      send: (orgId: string, input: Parameters<typeof quotePlanRequest>[2]) =>
+        quotePlanRequest(adapter, orgId, { notify: deps.notify, ...input }),
+      /** Record that an admin took it, once the charge has been arranged. */
+      accepted: (orgId: string, input: Parameters<typeof markPlanQuoteAccepted>[2]) =>
+        markPlanQuoteAccepted(adapter, orgId, input),
     },
     auth: {
       access: () => enforceAccess(adapter),

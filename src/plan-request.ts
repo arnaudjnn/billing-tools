@@ -207,6 +207,10 @@ export async function requestPlanChange(
     /** Defaults to the next plan up. */
     plan?: string;
     note?: string;
+    /** How many people they expect — the Enterprise form's only field. */
+    seats?: number;
+    /** Who to answer. Taken from the signed-in user by the consumer, never typed. */
+    contact?: PlanRequest["contact"];
     id?: string;
     now?: number;
   },
@@ -236,7 +240,12 @@ export async function requestPlanChange(
   const list = await read(adapter, orgId);
   // One open ask per member, for the same reason the top-up has one: the button that files it
   // cannot choose anything, so pressing it twice would queue the same sentence twice.
-  const open = list.find((r) => r.memberId === input.memberId && r.status === "pending");
+  // An ask that is waiting on a PRICE is open too. `pending` is "nobody has looked at it";
+  // `quoted` is "an operator answered and the admin has not accepted yet" — and filing a
+  // second ask in either state queues the same conversation twice.
+  const open = list.find(
+    (r) => r.memberId === input.memberId && (r.status === "pending" || r.status === "quoted"),
+  );
   if (open && !isSatisfied(open, input.plans, currentPlan)) {
     return { ok: false, reason: "already_pending", pending: open, plan: open.plan };
   }
@@ -249,12 +258,96 @@ export async function requestPlanChange(
     status: "pending",
     createdAt: new Date(input.now ?? Date.now()).toISOString(),
     ...(input.note ? { note: input.note.slice(0, 140) } : {}),
+    ...(input.seats ? { seats: Math.round(input.seats) } : {}),
+    ...(input.contact ? { contact: input.contact } : {}),
   };
   if (!(await write(adapter, orgId, [...list.filter((r) => r.id !== request.id), request]))) {
     return { ok: false, reason: "queue_full" };
   }
   notifyRequested(input.notify, orgId, request);
   return { ok: true, id: request.id, plan: target };
+}
+
+/**
+ * Price an open ask — the operator's half, and the only place a per-credit rate is set.
+ *
+ * Per CREDIT rather than a total, because that is what a negotiation is actually about:
+ * "we can do 0.7¢" survives the customer changing how much they want, and a total does not.
+ * The total is arithmetic and is computed here, so the number the customer accepts and the
+ * number they are charged cannot drift.
+ */
+export async function quotePlanRequest(
+  adapter: BillingAdapter,
+  orgId: string,
+  input: {
+    requestId: string;
+    credits: number;
+    /** Minor units per credit. Fractions are allowed: 0.7 is 0.7¢. */
+    unitPriceMinor: number;
+    validUntil?: string;
+    note?: string;
+    now?: number;
+    notify?: Notify;
+  },
+): Promise<
+  | { ok: true; request: PlanRequest }
+  | { ok: false; reason: "not_found" | "invalid_amount" | "queue_full" }
+> {
+  if (
+    !Number.isFinite(input.credits) ||
+    input.credits <= 0 ||
+    !Number.isFinite(input.unitPriceMinor) ||
+    input.unitPriceMinor <= 0
+  ) {
+    return { ok: false, reason: "invalid_amount" };
+  }
+  const list = await read(adapter, orgId);
+  const found = list.find(
+    (r) => r.id === input.requestId && (r.status === "pending" || r.status === "quoted"),
+  );
+  if (!found) return { ok: false, reason: "not_found" };
+
+  const updated: PlanRequest = {
+    ...found,
+    // Re-quoting an already-quoted ask is a NEW price on the same conversation, not a second
+    // request: a negotiation that goes back and forth is the normal case.
+    status: "quoted",
+    quote: {
+      credits: Math.round(input.credits),
+      unitPriceMinor: input.unitPriceMinor,
+      totalMinor: Math.round(input.credits * input.unitPriceMinor),
+      ...(input.validUntil ? { validUntil: input.validUntil } : {}),
+      ...(input.note ? { note: input.note.slice(0, 280) } : {}),
+      at: new Date(input.now ?? Date.now()).toISOString(),
+    },
+  };
+  if (!(await write(adapter, orgId, list.map((r) => (r.id === updated.id ? updated : r))))) {
+    return { ok: false, reason: "queue_full" };
+  }
+
+  input.notify?.({
+    id: `quote-sent:${updated.id}:${updated.quote!.at}`,
+    type: "quote.resolved",
+    orgId,
+    to: [],
+    audience: { kind: "member", memberId: updated.memberId },
+    data: { quoteId: updated.id, member: { id: updated.memberId, email: null }, quote: updated },
+  });
+  return { ok: true, request: updated };
+}
+
+/** Mark a quoted ask as accepted, once the money half has been arranged. */
+export async function markPlanQuoteAccepted(
+  adapter: BillingAdapter,
+  orgId: string,
+  input: { requestId: string; accepted: PlanRequest["accepted"]; now?: number },
+): Promise<PlanRequest | null> {
+  const list = await read(adapter, orgId);
+  const found = list.find((r) => r.id === input.requestId && r.status === "quoted");
+  if (!found) return null;
+  const updated: PlanRequest = { ...found, status: "done", accepted: input.accepted };
+  await write(adapter, orgId, list.map((r) => (r.id === updated.id ? updated : r)));
+  return updated;
 }
 
 /** The rung nobody's money can climb alone: the admins are the only ones who can answer. */

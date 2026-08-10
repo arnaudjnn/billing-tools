@@ -706,10 +706,21 @@ export async function sellCredits(
     tax?: ChargeTax;
     /** Reuse an existing invoice for a retried approval rather than raising a second one. */
     idempotencyKey?: string;
+    /**
+     * How to collect it.
+     *
+     * `auto` (the default) charges the CARD ON FILE and falls back to emailing an invoice
+     * when there is none — which is the behaviour a person expects from "accept": somebody
+     * who has already given us a card does not want a bill in their inbox, and somebody who
+     * has not cannot be charged. `invoice` forces the bill; `saved_card` forces the charge
+     * and refuses rather than falling back, for a caller that needs to know.
+     */
+    method?: "auto" | "saved_card" | "invoice";
   },
 ): Promise<
   | { status: "invoiced"; invoiceId: string; hostedInvoiceUrl: string | null; dueAt: number | null; emailed: boolean }
-  | { status: "refused"; reason: "no_email" | "invalid_amount" | "charge_failed"; message: string }
+  | { status: "charged"; invoiceId: string; hostedInvoiceUrl: string | null; paid: true }
+  | { status: "refused"; reason: "no_email" | "no_card" | "invalid_amount" | "charge_failed"; message: string }
 > {
   const { credits, amountMinor } = input;
   if (!Number.isFinite(credits) || credits <= 0 || !Number.isFinite(amountMinor) || amountMinor <= 0) {
@@ -717,9 +728,26 @@ export async function sellCredits(
   }
   const stripe = getStripe();
   const currency = config.currency;
+  const method = input.method ?? "auto";
+  // The card decides the shape of the whole charge, so it is read before anything is
+  // created: an invoice raised and then charged is one object either way, but which
+  // `collection_method` it carries cannot be changed afterwards.
+  const card =
+    method === "invoice"
+      ? null
+      : (await stripe.paymentMethods.list({ customer: stripeCustomerId, type: "card", limit: 1 })).data[0] ?? null;
+  if (!card && method === "saved_card") {
+    return {
+      status: "refused",
+      reason: "no_card",
+      message: "No card on file to charge. Use method \"invoice\" to email a payable invoice instead.",
+    };
+  }
   const customer = await stripe.customers.retrieve(stripeCustomerId);
   const email = !("deleted" in customer && customer.deleted) ? customer.email : null;
-  if (!email) {
+  // Only the emailed path needs an address. A card on file is charged whether or not Stripe
+  // can write to them, and refusing that would be inventing a requirement.
+  if (!email && !card) {
     return {
       status: "refused",
       reason: "no_email",
@@ -749,8 +777,11 @@ export async function sellCredits(
     {
       customer: stripeCustomerId,
       currency,
-      collection_method: "send_invoice",
-      days_until_due: input.daysUntilDue ?? 30,
+      // Charge-now or bill-later, decided by whether there is a card. `charge_automatically`
+      // is what lets `invoices.pay` take the card below.
+      ...(card
+        ? { collection_method: "charge_automatically" as const, default_payment_method: card.id }
+        : { collection_method: "send_invoice" as const, days_until_due: input.daysUntilDue ?? 30 }),
       auto_advance: false,
       pending_invoice_items_behavior: "include",
       description,
@@ -766,6 +797,32 @@ export async function sellCredits(
   if (!draft.id) return { status: "refused", reason: "charge_failed", message: "Stripe returned no invoice." };
 
   const finalized = await stripe.invoices.finalizeInvoice(draft.id);
+
+  if (card) {
+    // Off-session, because nobody is at a browser: this is an operator accepting on the
+    // customer's behalf, or an admin pressing accept on a price agreed days ago.
+    try {
+      const paid = await stripe.invoices.pay(finalized.id!, { off_session: true });
+      return {
+        status: "charged",
+        invoiceId: paid.id!,
+        hostedInvoiceUrl: paid.hosted_invoice_url ?? finalized.hosted_invoice_url ?? null,
+        paid: true,
+      };
+    } catch (e) {
+      // A declined card leaves a REAL finalized invoice behind, and that is the useful
+      // outcome rather than a lost charge: it is payable from its hosted page, and the
+      // credits still land through `invoice.paid` whenever it is settled.
+      return {
+        status: "invoiced",
+        invoiceId: finalized.id!,
+        hostedInvoiceUrl: finalized.hosted_invoice_url ?? null,
+        dueAt: finalized.due_date ? finalized.due_date * 1000 : null,
+        emailed: false,
+      };
+    }
+  }
+
   // Finalized is payable whether or not the send succeeds — losing a real bill to an email
   // error is the worst outcome, and it is one this account has actually produced.
   let emailed = true;
