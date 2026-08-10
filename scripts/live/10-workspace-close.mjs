@@ -45,7 +45,10 @@ export async function run(ctx) {
     taxRates: rateIds,
     label: "closing",
   });
-  await api.seats.assign(doomed.orgId, doomed.memberUserId, "premium");
+  // `standard`, because this workspace is on STARTER and that plan sells nothing else.
+  // `seatTypeExists` refuses a seat the org's own plan does not offer — a rule added after
+  // this section was written, which asked for `premium` and threw.
+  await api.seats.assign(doomed.orgId, doomed.memberUserId, "standard");
   const cycle = await api.usage.cycle(doomed.orgId);
   await api.topUps.grant(doomed.orgId, { memberId: doomed.memberUserId, amount: 100, cycle: cycle.key, id: `${RUN}-close` });
 
@@ -53,7 +56,7 @@ export async function run(ctx) {
   ok("the subscription is live", live0.status === "active", live0.status);
   const invoicesBefore = await s.invoices(20);
   ok("an invoice exists", invoicesBefore.length > 0, `${invoicesBefore.length}`);
-  ok("the member holds a seat", (await api.seats.get(doomed.orgId, doomed.memberUserId)) === "premium");
+  ok("the member holds a seat", (await api.seats.get(doomed.orgId, doomed.memberUserId)) === "standard");
   const metaBefore = await adapter.getUserMetadata(doomed.memberUserId);
   ok(
     "and their record carries this workspace",

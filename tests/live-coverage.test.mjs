@@ -12,6 +12,14 @@
 // suite actually reaches, answering one question. Which functions that TOUCH Stripe or WorkOS
 // have never been executed against either?
 //
+// ONE PREMISE, AND IT IS NOT FREE: this credits what the live suite NAMES, not what it
+// successfully EXECUTES. A section that throws halfway still names everything below the throw,
+// so these numbers are only true while `pnpm e2e:live` is GREEN. That is not hypothetical
+// either — the first full run after this file was written had four sections failing on stale
+// harness code (a `not_blocked` guard, a changed return shape, a seat a plan no longer sells),
+// every one of them silently inflating the coverage counted here. Run the live suite before
+// trusting this file, and treat a red section as coverage withdrawn.
+//
 // The answer is a number this file pins, and a registry that has to give a reason for every
 // name in it. That is the point: an uncovered function is allowed, a SILENTLY uncovered one is
 // not. Writing this found four dead exports (the `default_incomplete` subscription trio and

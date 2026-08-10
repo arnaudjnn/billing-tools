@@ -74,8 +74,24 @@ export async function run(ctx) {
   note(`cycle: ${cycle.key}  (${new Date(cycle.start).toISOString().slice(0, 10)} →)`);
   ok("the cycle has a key anything filed against it must use", Boolean(cycle.key), cycle.key);
 
-  const requested = (await callers.asMember("request_top_up", { member_id: memberUserId, amount: 250 })).value;
-  ok("a member can request extra allowance", requested?.status === "requested", requested?.status);
+  // The TOOL refuses somebody nothing is refusing, and that is the rule rather than an
+  // obstacle: an ask filed by a member with allowance left is a question with no answer, and
+  // it then blocks the real ask they would make on running out. This harness wires no meter
+  // deliberately, so no usage is ever recorded and the member is never blocked — which makes
+  // this the one place the refusal can be observed live.
+  const premature = await callers.asMember("request_top_up", { member_id: memberUserId, amount: 250 });
+  ok(
+    "a member with allowance left is refused, not queued",
+    /not_blocked|nothing is refusing|allowance left/i.test(premature.error ?? JSON.stringify(premature.value ?? {})),
+    (premature.error ?? JSON.stringify(premature.value)).slice(0, 80),
+  );
+
+  // So the queue below is driven through the bound API, which resolves the cycle the same way
+  // and carries no `blocked` gate (the gate belongs to the ladder, not to the record). NOT the
+  // tool's `cycle` escape hatch: passing the key in would make the next assertion tautological,
+  // and the claim is precisely that the library derives the SAME key the meter reads.
+  const requested = await api.topUps.request(orgId, { memberId: memberUserId, amount: 250 });
+  ok("an ask can still be filed for them", Boolean(requested?.id), requested?.id?.slice(0, 8));
   // Not "a cycle" — THE cycle. A request written under a calendar month while the meter
   // reads a subscription period grants nothing and reports no error.
   ok("filed under the meter's cycle", requested?.cycle === cycle.key, `${requested?.cycle} vs ${cycle.key}`);
@@ -106,7 +122,10 @@ export async function run(ctx) {
     outrightCall.ok ? JSON.stringify(outrightCall.value).slice(0, 80) : outrightCall.error?.slice(0, 80),
   );
 
-  const denyTarget = (await callers.asAdmin("request_top_up", { member_id: memberUserId, amount: 10 })).value;
+  // Filed through the bound API for the same reason as above: this member has allowance left,
+  // so the TOOL correctly refuses to queue an ask — and what is being asserted here is the
+  // DENIAL, which needs something pending to act on.
+  const denyTarget = await api.topUps.request(orgId, { memberId: memberUserId, amount: 10 });
   const denied = (await callers.asAdmin("deny_top_up", { request_id: denyTarget.id })).value;
   ok("and refuse one", denied?.status === "denied", denied?.status);
 
@@ -127,8 +146,10 @@ export async function run(ctx) {
     `${stillGranted} credits, row ${rowStill ? "kept" : "trimmed"}`,
   );
 
-  // The other half of the rule: a PENDING ask is never what gets dropped.
-  const fresh = (await callers.asMember("request_top_up", { member_id: memberUserId, amount: 5 })).value;
+  // The other half of the rule: a PENDING ask is never what gets dropped. Filed through the
+  // bound API — same reason as the two above, and the claim here is about the metadata trim,
+  // not about who may ask.
+  const fresh = await api.topUps.request(orgId, { memberId: memberUserId, amount: 5 });
   const pendingAfter = ((await callers.asAdmin("list_top_up_requests", {})).value?.requests ?? []).find(
     (r) => r.id === fresh.id,
   );

@@ -31,8 +31,12 @@ export async function run(ctx) {
   // ── visibility ────────────────────────────────────────────────────────────
   section("09a — what a member can SEE, which no refusal governs");
   // Two asks from two different people, so "can a member see someone else's" is answerable.
-  const mine = (await callers.asMember("request_top_up", { member_id: memberUserId, amount: 15 })).value;
-  const theirs = (await callers.asAdmin("request_top_up", { member_id: adminUserId, amount: 15 })).value;
+  // Through the bound API, not `request_top_up`: the tool refuses a member nothing is
+  // refusing (see 06b, which asserts that refusal), and what THIS section is about is who can
+  // SEE the queue once there is one — a visibility question the ladder's gate has nothing to
+  // say about.
+  const mine = await api.topUps.request(orgId, { memberId: memberUserId, amount: 15 });
+  const theirs = await api.topUps.request(orgId, { memberId: adminUserId, amount: 15 });
   ok("both asks are filed", Boolean(mine?.id && theirs?.id), `${mine?.id?.slice(0, 8)} / ${theirs?.id?.slice(0, 8)}`);
 
   const asMember = (await callers.asMember("list_top_up_requests", {})).value?.requests ?? [];
@@ -86,7 +90,7 @@ export async function run(ctx) {
     (unknown.error ?? "no error — it ACCEPTED a request that does not exist").slice(0, 60),
   );
 
-  const toDeny = (await callers.asMember("request_top_up", { member_id: memberUserId, amount: 5 })).value;
+  const toDeny = await api.topUps.request(orgId, { memberId: memberUserId, amount: 5 });
   await callers.asAdmin("deny_top_up", { request_id: toDeny.id });
   const beforeFlip = await api.topUps.granted(orgId, memberUserId, cycle.key);
   const flip = await callers.asAdmin("approve_top_up", { request_id: toDeny.id });

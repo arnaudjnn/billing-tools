@@ -136,12 +136,22 @@ export async function run(ctx) {
   ok("€10 buys 1 000 credits", priced.credits === 1_000, `${priced.credits}`);
   ok("and the quote adds 22% IVA", priced.total === 1_220 && priced.taxPercent === 22, `${eur(priced.total)} at ${priced.taxPercent}%`);
 
-  const url = await createCreditCheckoutSession(customerId, orgId, 10, config, {
+  // `{ url, clientSecret, sessionId }`, not a string. It used to be one string whose meaning
+  // depended on the mode, which forced every embedded caller to recover the session id by
+  // splitting the client secret on `_secret_` — a consumer did exactly that, in production.
+  // This section was written after that changed and asserted the old shape anyway, so 07e had
+  // never passed; the first full run since is what said so.
+  const session = await createCreditCheckoutSession(customerId, orgId, 10, config, {
     taxRates: purchaseRates.rateIds,
     successUrl: "https://e2e.test/ok",
     cancelUrl: "https://e2e.test/no",
   });
-  ok("the top-up returns a URL a caller with no browser can hand over", url.startsWith("https://checkout.stripe.com/"), url.slice(0, 44));
+  ok(
+    "the top-up returns a URL a caller with no browser can hand over",
+    session.url?.startsWith("https://checkout.stripe.com/"),
+    session.url?.slice(0, 44),
+  );
+  ok("and the session id, without anyone parsing a client secret for it", Boolean(session.sessionId), session.sessionId?.slice(0, 12));
 
   const full = (await stripe.checkout.sessions.list({ customer: customerId, limit: 1 })).data[0];
   // A hosted session cannot be COMPLETED headlessly, so the assertions are on what it WILL
