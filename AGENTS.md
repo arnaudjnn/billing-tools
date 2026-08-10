@@ -78,13 +78,14 @@ Deliberate exceptions — don't "fix" these:
 
 REST and MCP get it structurally (`createDispatcher` monkey-patches `server.tool`, so every registered tool is an endpoint). `tests/surface.test.mjs` asserts `BILLING_TOOL_NAMES` matches what registration produces, **in both directions and by count**. The CLI is hand-written and is the one surface that can silently fall behind, so `tests/conventions.test.mjs` asserts it reaches every tool — and, since it is hand-written, that it is **gated by the same `toolCapabilities`**: pass `plans` to `registerBillingCommands` and a flat/pooled deployment stops shipping `seats` / `assign-seat` / the five `topup` commands, which on that catalogue call tools that were never registered and can only answer "Unknown tool". A dead command is the same false statement as a dead tool. Omitting `plans` registers everything, because undefined is "the caller did not say". Coverage is per tool, not per command: `get_api_key` has no command because `auth` performs that flow, `preview_credit_purchase` is `buy --quote`, `set_spend_controls` is `spend limit` / `spend alerts`.
 
-### The 43 tools
+### The 46 tools
 
 `BILLING_TOOL_NAMES` (`tools/register.ts`) is the canonical list of what the library **can** register. The **needs** column is not documentation: `toolCapabilities(plans)` computes it and `registerBillingTools` reads it, so the table and the code cannot disagree.
 
 | tool | group | what it does | needs |
 |---|---|---|---|
 | `get_api_key` | keys | Provisions or retrieves the workspace's API key | — |
+| `create_api_key` | keys | An ADDITIONAL key, named by the caller — `get_api_key` names what it mints "API Key", so several were indistinguishable and none safely revocable | — |
 | `list_api_keys` | keys | Lists the keys, obfuscated — never the full value | — |
 | `revoke_api_key` | keys | Hard-deletes one key by id | — |
 | `get_credit_balance` | wallet | Balance + per-tool costs + auto-reload state | — |
@@ -106,6 +107,8 @@ REST and MCP get it structurally (`createDispatcher` monkey-patches `server.tool
 | `revoke_invitation` | members | Cancels a pending one, freeing its seat (admin) | `invitations` |
 | `change_member_role` | members | Moves a member between roles; refuses the last admin (admin) | `setMemberRole` |
 | `remove_member` | members | Removes them, clearing their records FIRST; refuses the last admin (admin) | `removeMember` |
+| `rename_workspace` | workspace | Renames it — the name invoices, members lists and switchers all show (admin) | `renameOrg` |
+| `close_workspace` | workspace | Stops the billing, KEEPS the invoices, returns each member's metadata budget. Deleting is opt-in (admin) | — |
 | `list_seats` | seats | Per-member seat-type assignments + the types on offer | `sells: seats` **+** org metadata |
 | `assign_seat_type` | seats | Puts a member on a seat type (admin) | `sells: seats` **+** org metadata |
 | `list_top_up_requests` | top-ups | The queue, pending and settled | `replenish.request` **+** org metadata |

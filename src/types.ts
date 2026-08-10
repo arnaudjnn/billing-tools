@@ -164,6 +164,11 @@ export interface BillingAdapter {
    *  been stopped — the org holds the Stripe pointer, so deleting it first orphans the
    *  subscription. Absent means the caller removes the org itself. */
   deleteOrg?(orgId: string): Promise<void>;
+  /** The workspace's display name, and how to change it. A name is what an invoice, a
+   *  members list and a workspace switcher all show, so a headless caller that can create
+   *  and close a workspace should be able to name it too. */
+  getOrgName?(orgId: string): Promise<string | null>;
+  renameOrg?(orgId: string, name: string): Promise<void>;
 
 }
 

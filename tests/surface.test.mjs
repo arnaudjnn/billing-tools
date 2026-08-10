@@ -130,6 +130,12 @@ const adapter = {
   },
   async setMemberRole() {},
   async removeMember() {},
+  // The workspace's own name: `rename_workspace` registers only where the adapter can write
+  // it, the same adapter-gated rule as the membership writes above.
+  async getOrgName() {
+    return "Test workspace";
+  },
+  async renameOrg() {},
 };
 
 /** The invitation service, which is what the three invitation tools need somewhere to put a
@@ -294,14 +300,14 @@ test("the two shapes differ by exactly the seven tools", () => {
   const scart = names({ plans: SCARTOFFIE });
   const extra = [...scart].filter((n) => !gtm.has(n)).sort();
   assert.deepEqual(extra, [...SEAT_TOOLS, SEAT_ASK, ...TOP_UP_TOOLS].sort());
-  // 43 − 8. Both numbers are quoted in AGENTS.md, so both are asserted here. The six member
+  // 46 − 8. Both numbers are quoted in AGENTS.md, so both are asserted here. The six member
   // tools are on both sides on purpose: who is in a workspace is not something a CATALOGUE
   // can decide, so they are gated on the adapter and the invitation service instead.
   // `request_plan_change` / `resolve_plan_request` stay on BOTH sides: asking to move up is
   // the answer on exactly the plans that have no per-member allowance to top up, which is
   // the pooled catalogue's only rung.
-  assert.equal(gtm.size, 35);
-  assert.equal(scart.size, 43);
+  assert.equal(gtm.size, 38);
+  assert.equal(scart.size, 46);
 });
 
 test("no catalogue means no declaration to read, so every group registers", () => {

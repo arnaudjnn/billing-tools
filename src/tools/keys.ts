@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { BillingAdapter, ResolvedConfig } from "../types.js";
-import { enforceAccess } from "../auth.js";
+import { currentPrincipal, enforceAccess } from "../auth.js";
 import { sendMagicAuth, verifyMagicAuth } from "../magic-auth.js";
 import { ensureStripeCustomer, stripeConfigured } from "../billing.js";
 
@@ -72,6 +72,63 @@ Add the key to your config as: "Authorization": "Bearer <key>"`,
             {
               type: "text" as const,
               text: `Authentication error: ${e instanceof Error ? e.message : String(e)}`,
+            },
+          ],
+        };
+      }
+    },
+  );
+
+  server.tool(
+    "create_api_key",
+    `Creates an ADDITIONAL API key for the workspace you are already authenticated to, with a
+name of your choosing. The value is shown once and never again.
+
+Use this rather than get_api_key when you already hold a key: get_api_key is the
+email-verification flow for a caller with none, and it names what it mints "API Key" — so a
+workspace with several of them cannot tell from list_api_keys which is which, and cannot
+safely revoke one. Free.`,
+    {
+      name: z
+        .string()
+        .min(1)
+        .max(80)
+        .describe(`What this key is for — "CI", "staging worker". Shown by list_api_keys`),
+    },
+    async ({ name }) => {
+      // Not admin-gated, deliberately: whoever holds a key for this workspace can already do
+      // everything a new key could, so refusing them a second one protects nothing. What it
+      // DOES need is an existing key, which is what `enforceAccess` means here.
+      const auth = await enforceAccess(adapter);
+      if ("isError" in auth) return auth;
+      try {
+        const key = await adapter.mintApiKey(auth.orgId, name.trim(), currentPrincipal()?.userId);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify(
+                {
+                  status: "ok",
+                  id: key.id,
+                  name: name.trim(),
+                  api_key: key.value,
+                  message: "This key is only shown once. Store it now.",
+                  usage: { header: `Authorization: Bearer ${key.value}` },
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      } catch (e) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text" as const,
+              text: `Failed to create key: ${e instanceof Error ? e.message : String(e)}`,
             },
           ],
         };

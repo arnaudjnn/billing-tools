@@ -145,7 +145,11 @@ export function registerBillingCommands(program: CommandLike, opts: CliOptions) 
       print(await callTool(requireConfig(), "list_invoices", args));
     });
 
-  const keys = program.command("keys").description("List and revoke API keys");
+  const keys = program.command("keys").description("Create, list and revoke API keys");
+  keys
+    .command("create <name>")
+    .description("Create an additional API key with a name of your choosing (shown once)")
+    .action(async (name: string) => print(await callTool(requireConfig(), "create_api_key", { name })));
   keys
     .command("list")
     .description("List API keys")
@@ -200,6 +204,28 @@ export function registerBillingCommands(program: CommandLike, opts: CliOptions) 
     .description("Cancel a pending invitation, freeing the seat it holds")
     .action(async (id: string) =>
       print(await callTool(requireConfig(), "revoke_invitation", { invitation_id: id })),
+    );
+
+  // ── The workspace itself ──────────────────────────────────────────────────
+  const workspace = program.command("workspace").description("Rename or close the workspace");
+  workspace
+    .command("rename <name>")
+    .description("Rename the workspace")
+    .action(async (name: string) => print(await callTool(requireConfig(), "rename_workspace", { name })));
+  workspace
+    .command("close")
+    .description("Cancel the billing and keep the invoices. --delete also removes the workspace")
+    .option("--period-end", "Let them use the period already paid for (cannot be combined with --delete)")
+    .option("--delete", "Remove the workspace once its billing is stopped")
+    .option("--reason <text>", "Recorded on the Stripe customer, so the kept record explains itself")
+    .action(async (o: { periodEnd?: boolean; delete?: boolean; reason?: string }) =>
+      print(
+        await callTool(requireConfig(), "close_workspace", {
+          ...(o.periodEnd ? { cancel_at: "period_end" } : {}),
+          ...(o.delete ? { delete_workspace: true } : {}),
+          ...(o.reason ? { reason: o.reason } : {}),
+        }),
+      ),
     );
 
   // ── Usage & seats ─────────────────────────────────────────────────────────

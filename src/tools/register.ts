@@ -4,7 +4,7 @@ import { resolveConfig } from "../types.js";
 import { registerKeyTools } from "./keys.js";
 import { registerBillingOnlyTools, type TopUpToolOptions } from "./billing.js";
 import { registerManagementTools } from "./management.js";
-import { registerMemberTools, type MemberToolOptions } from "./members.js";
+import { registerMemberTools, registerWorkspaceTools, type MemberToolOptions } from "./members.js";
 import { registerProfileTools } from "./profile.js";
 import { registerSubscriptionTools, type SubscriptionToolOptions } from "./subscription.js";
 import { ensurePlans, normalizePlans, poolSizeOf, type PlanCatalog } from "../plans.js";
@@ -154,6 +154,7 @@ export function registerBillingTools(server: McpServer, opts: RegisterBillingToo
     resolvePlan: opts.resolvePlan,
     ...opts.members,
   });
+  registerWorkspaceTools(server, opts.adapter);
   if (opts.profileTools !== false) registerProfileTools(server, opts.adapter);
   if (opts.plans) {
     // `list_plans` and `get_plan` are READS and always register: "what is on offer"
@@ -227,6 +228,7 @@ function registerPlanTools(
 export const BILLING_TOOL_NAMES = [
   "get_api_key",
   "list_api_keys",
+  "create_api_key",
   "revoke_api_key",
   "get_credit_balance",
   "buy_credits",
@@ -256,6 +258,11 @@ export const BILLING_TOOL_NAMES = [
   "revoke_invitation",
   "change_member_role",
   "remove_member",
+  // The workspace itself (registerWorkspaceTools). `closeWorkspace` was bound and reachable
+  // from no tool, so the one operation with a recurring charge on the other side of getting
+  // it wrong was the app's to remember.
+  "rename_workspace",
+  "close_workspace",
   // Workspace-management tools (registerManagementTools).
   "get_usage",
   "get_usage_limits",

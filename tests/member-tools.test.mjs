@@ -297,6 +297,78 @@ test("a successful removal reports what it cleared", async () => {
   assert.equal(removed, "u2");
 });
 
+// ── the workspace itself ─────────────────────────────────────────────────────
+
+test("close_workspace does NOT delete by default, and says what it kept", async () => {
+  // The function's own default removes the org; the TOOL's does not. A tool call is one line
+  // an agent can emit from a misread instruction, and the recoverable half of this — billing
+  // stopped, invoices and workspace kept — is the half worth doing without being asked.
+  const { __setStripeForTests } = await import("../dist/billing.js");
+  let deleted = false;
+  const rows = [{ userId: "u1", email: null, name: null, roleSlug: "admin", status: "active" }];
+  const adapter = adapterWith(
+    {
+      ...describable(rows),
+      async setMemberRole() {},
+      async removeMember() {},
+      async deleteOrg() {
+        deleted = true;
+      },
+      async getUserMetadata() {
+        return {};
+      },
+      async setUserMetadata() {},
+    },
+    rows,
+  );
+  const { dispatch } = await surface(adapter, { invitations: invitationService() });
+  __setStripeForTests({
+    subscriptions: {
+      // `closeWorkspace` pages with `for await`, per the SDK-pagination rule — so the fake
+      // has to be an async iterable, not a `{ data }` page.
+      async *list() {
+        yield { id: "sub_1", status: "active", cancel_at_period_end: false };
+      },
+      async cancel() {
+        return { id: "sub_1", status: "canceled", canceled_at: 1_760_000_000 };
+      },
+      async update() {
+        return { id: "sub_1", status: "active" };
+      },
+    },
+    customers: {
+      async retrieve() {
+        return { id: "cus_1", metadata: {}, balance: 0, currency: "eur" };
+      },
+      async update() {
+        return { id: "cus_1" };
+      },
+    },
+    invoices: {
+      async *list() {},
+    },
+  });
+
+  const res = parse(await dispatch("close_workspace", {}));
+  assert.equal(res.status, "closed");
+  assert.equal(res.workspace_deleted, false);
+  assert.equal(deleted, false, "the org survives unless asked");
+  assert.deepEqual(res.subscriptions_cancelled, ["sub_1"], "and the billing did stop");
+});
+
+test("rename_workspace registers only where the adapter can write a name", async () => {
+  const rows = [{ userId: "u1", email: null, name: null, roleSlug: "admin", status: "active" }];
+  const without = await surface(adapterWith(describable(rows), rows));
+  assert.ok(!without.tools.has("rename_workspace"));
+
+  const with_ = await surface(
+    adapterWith({ ...describable(rows), async renameOrg() {}, async getOrgName() { return "Old"; } }, rows),
+  );
+  assert.ok(with_.tools.has("rename_workspace"));
+  const res = parse(await with_.dispatch("rename_workspace", { name: "New" }));
+  assert.deepEqual([res.from, res.to], ["Old", "New"], "it reports what it changed");
+});
+
 test("an unknown role is refused by the schema, not by WorkOS", async () => {
   const rows = [{ userId: "u1", email: null, name: null, roleSlug: "admin", status: "active" }];
   const { dispatch } = await surface(

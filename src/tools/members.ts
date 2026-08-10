@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import { enforceAccess, enforceAdmin } from "../auth.js";
+import { closeWorkspace } from "../close-workspace.js";
 import type { InvitationService } from "../invitations.js";
 import {
   changeMemberRole,
@@ -220,6 +221,84 @@ export function registerMemberTools(
       },
     );
   }
+}
+
+/**
+ * The workspace itself: what it is called, and stopping it.
+ *
+ * `closeWorkspace` has existed and been bound for a while and reached no tool, so the one
+ * operation with real money on the other side of it — a subscription that keeps charging a
+ * card for a workspace nobody can see — was the app's to remember to call. Renaming had no
+ * home at all.
+ */
+export function registerWorkspaceTools(server: McpServer, adapter: BillingAdapter) {
+  if (adapter.renameOrg) {
+    server.tool(
+      "rename_workspace",
+      "Rename the workspace. The name appears on invoices, in the members list, and wherever " +
+        "the workspace is chosen.",
+      { name: z.string().min(1).max(120).describe("The new name") },
+      async ({ name }) => {
+        const auth = await enforceAdmin(adapter, "rename_workspace");
+        if ("isError" in auth) return auth;
+        const from = (await adapter.getOrgName?.(auth.orgId)) ?? null;
+        await adapter.renameOrg!(auth.orgId, name.trim());
+        return json({ status: "renamed", from, to: name.trim() });
+      },
+    );
+  }
+
+  server.tool(
+    "close_workspace",
+    `Stop a workspace: cancel its billing, KEEP its invoices, and return each member's metadata
+budget. Deleting the workspace itself is opt-in (delete_workspace), because the invoices are a
+legal record and a deletion cannot be undone.
+
+The ORDER is the point, and it is why this is one tool rather than three calls: if the billing
+cannot be stopped, nothing is removed. A workspace still listed is a nuisance; a subscription
+still charging a card for a workspace whose Stripe pointer has been destroyed is a customer's
+money, indefinitely, with nothing to attribute it to.`,
+    {
+      cancel_at: z
+        .enum(["now", "period_end"])
+        .optional()
+        .describe(
+          `"now" (default) stops the billing immediately with no refund. "period_end" lets them ` +
+            `use what they paid for, and cannot be combined with delete_workspace`,
+        ),
+      delete_workspace: z
+        .boolean()
+        .optional()
+        .describe("Remove the workspace after the billing is stopped. Default false"),
+      reason: z.string().max(200).optional().describe("Recorded on the Stripe customer"),
+    },
+    async ({ cancel_at, delete_workspace, reason }) => {
+      const auth = await enforceAdmin(adapter, "close_workspace");
+      if ("isError" in auth) return auth;
+      try {
+        const res = await closeWorkspace(adapter, auth.orgId, {
+          ...(cancel_at ? { cancelAt: cancel_at } : {}),
+          // Default FALSE here, unlike the function's own default: a tool call is one line
+          // an agent can emit from a misread instruction, and the recoverable half of this
+          // (billing stopped, records kept) is the half worth doing by default.
+          deleteOrg: delete_workspace ?? false,
+          ...(reason ? { reason } : {}),
+        });
+        return json({
+          status: res.orgDeleted ? "closed_and_deleted" : "closed",
+          subscriptions_cancelled: res.cancelled,
+          ends_at: res.endsAt,
+          invoices_kept: res.invoicesKept,
+          members_cleared: res.membersCleared,
+          workspace_deleted: res.orgDeleted,
+          // Non-empty means finish by hand — the caller has to see it, not find it in a log.
+          warnings: res.warnings,
+        });
+      } catch (e) {
+        return err(e instanceof Error ? e.message : String(e));
+      }
+    },
+  );
 }
 
 /** Each refusal says what to do instead — an agent told "last admin" and nothing else asks again. */

@@ -476,6 +476,25 @@ export class WorkOSOrgAdapter implements BillingAdapter {
     await this.workos.organizations.deleteOrganization(orgId);
   }
 
+  async getOrgName(orgId: string): Promise<string | null> {
+    return (await this.workos.organizations.getOrganization(await this.wid(orgId))).name ?? null;
+  }
+
+  /**
+   * Rename the organization.
+   *
+   * WorkOS's update REPLACES the object, so the name has to be sent with whatever else must
+   * survive — the same trap `setSubscription` documents for metadata. Only `name` is passed
+   * here, which is exactly why a Pattern B app renames through its mirror (`renameOrg` there
+   * keeps the local row and the org in step) rather than calling this directly.
+   */
+  async renameOrg(orgId: string, name: string): Promise<void> {
+    await this.workos.organizations.updateOrganization({
+      organization: await this.wid(orgId),
+      name,
+    });
+  }
+
   async isAdmin(orgId: string, userId: string): Promise<boolean> {
     const r = await this.workos.userManagement.listOrganizationMemberships({
       organizationId: await this.wid(orgId),
