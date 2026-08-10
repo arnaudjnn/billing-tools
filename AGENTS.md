@@ -600,6 +600,13 @@ authorities:
 | `accept_plan_quote` | admin | takes it, and pays it |
 | `sell_credits` | **operator** | the same sale with no request behind it |
 
+**The ask for a quote-only plan is told to US, not to them.** `request_plan_change` picks its
+audience from the TARGET: a self-serve plan goes to the workspace's own admins, who can go and
+buy it, and a `sale: "quote"` one goes to `BILLING_OPERATOR_EMAILS` — because there is no
+price yet, and routing that question to the customer's admins tells the wrong people about
+something only we can settle. A deployment with no operators configured tells nobody, which
+beats delivering our side of the conversation to their inbox.
+
 **Gated by the catalogue, like everything else.** `toolCapabilities` gains `quote`, derived
 from `sale: "quote"` on any plan: a catalogue where everything is self-serve has no
 conversation to price, and three tools for one it cannot have is the same false

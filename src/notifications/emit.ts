@@ -1,3 +1,4 @@
+import { operatorConfig } from "../auth.js";
 import { ADMIN_ROLE_SLUG, type BillingAdapter, type OrgMember } from "../types.js";
 import type { Audience, BillingNotification, Notifier, Notify } from "./index.js";
 
@@ -68,6 +69,9 @@ async function withRecipients(
 ): Promise<BillingNotification & { id: string }> {
   if (!audience) return event;
   if (audience.kind === "email") return { ...event, to: [audience.email] };
+  // Our own staff, from the env. A deployment that has configured none gets no delivery,
+  // which is the same honest outcome as a workspace whose admins have no address on file.
+  if (audience.kind === "operators") return { ...event, to: operatorConfig().emails };
 
   const members = await listOrgMembers(adapter, event.orgId);
   const to =

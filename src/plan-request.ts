@@ -264,7 +264,10 @@ export async function requestPlanChange(
   if (!(await write(adapter, orgId, [...list.filter((r) => r.id !== request.id), request]))) {
     return { ok: false, reason: "queue_full" };
   }
-  notifyRequested(input.notify, orgId, request);
+  // WHO can answer this depends on the target. A self-serve plan is the workspace's own
+  // admins — they can go and buy it. A quote-only one has no price yet, so the only people
+  // who can say anything are ours.
+  notifyRequested(input.notify, orgId, request, planModel(input.plans, target)?.sale === "quote");
   return { ok: true, id: request.id, plan: target };
 }
 
@@ -368,13 +371,18 @@ export async function markPlanQuoteAccepted(
 }
 
 /** The rung nobody's money can climb alone: the admins are the only ones who can answer. */
-function notifyRequested(notify: Notify | undefined, orgId: string, request: PlanRequest): void {
+function notifyRequested(
+  notify: Notify | undefined,
+  orgId: string,
+  request: PlanRequest,
+  forOperators = false,
+): void {
   notify?.({
     id: `upgrade-requested:${request.id}`,
     type: "upgrade.requested",
     orgId,
     to: [],
-    audience: { kind: "admins" },
+    audience: forOperators ? { kind: "operators" } : { kind: "admins" },
     data: {
       requestId: request.id,
       member: { id: request.memberId, email: null },

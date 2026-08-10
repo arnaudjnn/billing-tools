@@ -372,3 +372,63 @@ test("an invoice that sells no credits grants none, whatever its balance did", (
   assert.equal(creditsOwedFor({ metadata: {}, starting_balance: -5000 }), 0);
   assert.equal(creditsOwedFor({ starting_balance: -5000 }), 0);
 });
+
+// ── Who is told about an ask for a plan that has no price ────────────────────
+//
+// A self-serve upgrade is the workspace's own admins: they can go and buy it. A quote-only
+// one has no price yet, so the only people who can say anything are ours — and sending it
+// to the customer's admins is telling the wrong people about a question they cannot settle.
+
+import { createEmitter } from "../dist/notifications/emit.js";
+import { requestPlanChange as ask } from "../dist/plan-request.js";
+
+const CATALOGUE = {
+  pro: { sells: { kind: "flat", price: { monthly: 1800 } }, cap: { kind: "pool", credits: 1000 }, sale: "self_serve" },
+  enterprise: { sells: { kind: "flat", price: { monthly: 0 } }, cap: { kind: "wallet" }, sale: "quote" },
+};
+const MEMBERS = [
+  { userId: "u_boss", email: "boss@customer.test", name: "Boss", roleSlug: "admin", status: "active" },
+  { userId: "u_dev", email: "dev@customer.test", name: "Dev", roleSlug: "member", status: "active" },
+];
+const settle = () => new Promise((r) => setTimeout(r, 0));
+
+function collector() {
+  const sent = [];
+  const store = Object.assign(fakeAdapter({ members: ["u_boss", "u_dev"] }), {
+    async listMembers() {
+      return MEMBERS;
+    },
+  });
+  return { sent, store, notify: createEmitter(store, { deliver: async (n) => void sent.push(n) }) };
+}
+
+test("an ask for a QUOTE-only plan goes to the operators, not the customer's admins", async () => {
+  process.env.BILLING_OPERATOR_EMAILS = "ops@ours.test, second@ours.test";
+  const { sent, store, notify } = collector();
+
+  await ask(store, "org_1", { memberId: "u_dev", plans: CATALOGUE, currentPlan: "pro", plan: "enterprise", notify });
+  await settle();
+
+  assert.deepEqual(sent[0].to, ["ops@ours.test", "second@ours.test"]);
+  assert.equal(sent[0].type, "upgrade.requested");
+});
+
+test("an ask for a self-serve plan still goes to the admins who can buy it", async () => {
+  process.env.BILLING_OPERATOR_EMAILS = "ops@ours.test";
+  const { sent, store, notify } = collector();
+
+  await ask(store, "org_1", { memberId: "u_dev", plans: CATALOGUE, currentPlan: null, plan: "pro", notify });
+  await settle();
+
+  assert.deepEqual(sent[0].to, ["boss@customer.test"]);
+});
+
+test("a deployment with no operators tells nobody, rather than telling the customer", async () => {
+  delete process.env.BILLING_OPERATOR_EMAILS;
+  const { sent, store, notify } = collector();
+
+  await ask(store, "org_1", { memberId: "u_dev", plans: CATALOGUE, currentPlan: "pro", plan: "enterprise", notify });
+  await settle();
+
+  assert.deepEqual(sent, [], "silence beats routing our conversation to their inbox");
+});

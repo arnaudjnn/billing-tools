@@ -155,7 +155,15 @@ export type Audience =
   /** One member, by id. "Here is the answer to what you asked." */
   | { kind: "member"; memberId: string }
   /** A literal address — an invitee, who is by definition not a member yet. */
-  | { kind: "email"; email: string };
+  | { kind: "email"; email: string }
+  /**
+   * The DEPLOYMENT's own staff (`BILLING_OPERATOR_EMAILS`), not the workspace's.
+   *
+   * The one audience on our side of the transaction. An ask to move onto a quote-only plan
+   * is not something the customer's own admins can answer — there is no price yet — so
+   * sending it to them is telling the wrong people about a question only we can settle.
+   */
+  | { kind: "operators" };
 
 /**
  * Fire an event. Returns immediately; failures are swallowed.
