@@ -75,8 +75,19 @@ export interface CreateBillingOptions {
   /** MCP transport overrides. `requireAuth` gates the handshake itself — see
    *  `createMcpTransport`. */
   mcp?: { apiKeyPrefix?: string; maxDuration?: number; requireAuth?: boolean };
-  /** Enable MPP machine payments (pay-per-request 402). Omit to leave it off. */
-  machinePayment?: MachinePaymentOptions;
+  /**
+   * Enable MPP machine payments (pay-per-request 402). Omit to leave it off.
+   *
+   * `amount` is optional HERE, unlike in the standalone handler: omitted, a request is
+   * priced at what the tool it is calling costs — `toolCosts[<tool>]`, read from the
+   * path, which is the same map `get_credit_balance` and the REST tool list publish. A
+   * consumer that wrote that function by hand was re-deriving its own rate card, and a
+   * flat fee is wrong in both directions across a catalogue that spans 0 to 80 credits.
+   * Pass a number to charge one price per request regardless of tool.
+   */
+  machinePayment?: Omit<MachinePaymentOptions, "amount"> & {
+    amount?: MachinePaymentOptions["amount"];
+  };
   /** Enable the MCP OAuth 2.1 + Dynamic Client Registration proxy, so MCP
    *  clients (Claude Desktop, Claude.ai) can connect without an API key. When
    *  set, the authorization_code + refresh_token grants are advertised, the
@@ -197,7 +208,19 @@ export function createBilling(opts: CreateBillingOptions) {
   const dispatcher = createDispatcher(register);
 
   const restList = createToolListHandler({ dispatcher, toolCosts: opts.toolCosts });
-  const restDispatch = createToolDispatchHandler({ dispatcher, realm: opts.realm, resourceMetadata });
+  // The payment gate, referenced lazily because it is composed further down (and only
+  // ever called at request time). Wiring it HERE is what makes `billing.restDispatch`
+  // answer an empty wallet with an offer instead of a dead end — the consumer gets it by
+  // configuring `machinePayment`, not by wrapping the handler.
+  const payment = opts.machinePayment
+    ? { requirePayment: (request: Request) => machinePayment!.requirePayment(request) }
+    : undefined;
+  const restDispatch = createToolDispatchHandler({
+    dispatcher,
+    realm: opts.realm,
+    resourceMetadata,
+    payment,
+  });
   const mcp = createMcpTransport({
     register,
     adapter: opts.adapter,
@@ -242,6 +265,16 @@ export function createBilling(opts: CreateBillingOptions) {
   const machinePayment = opts.machinePayment
     ? createMachinePaymentHandler({
         ...opts.machinePayment,
+        // Priced from the rate card this composition already holds: the tool being called
+        // names itself in the path (`/api/v0/<tool>`), so an agent is challenged for what
+        // that call actually costs. Anything unrecognised falls back to 1 — a challenge
+        // for a small wrong amount beats one for 0, which would mean nothing.
+        amount:
+          opts.machinePayment.amount ??
+          ((request: Request) => {
+            const tool = new URL(request.url).pathname.split("/").filter(Boolean).pop() ?? "";
+            return opts.toolCosts?.[tool] || 1;
+          }),
         onPaid: async (challenge, receipt, request) => {
           if (opts.machinePayment?.creditWallet) {
             const orgId = await orgForRequest(request);
@@ -308,7 +341,7 @@ export function createBilling(opts: CreateBillingOptions) {
       })
     : undefined;
   const meterRequest = meter
-    ? createApiMeterGuard(opts.adapter, meter, { realm: opts.realm })
+    ? createApiMeterGuard(opts.adapter, meter, { realm: opts.realm, payment })
     : undefined;
 
   // Every org-scoped library function, with adapter/config/plans/ledger/resolvePlan

@@ -310,10 +310,29 @@ export type ApiMeterGuard<R extends Record<string, number>> = (
 export function createApiMeterGuard<R extends Record<string, number>>(
   adapter: BillingAdapter,
   meter: Meter<R>,
-  cfg?: { realm?: string },
+  cfg?: {
+    realm?: string
+    /**
+     * The MPP gate, when the app accepts machine payments. A money refusal (never a
+     * waitable one) is re-issued as a `WWW-Authenticate: Payment` challenge, and a
+     * caller that settles it is metered again — for real, because paying funds the
+     * meter rather than skipping it.
+     *
+     * The tool surface gets this from `createToolDispatchHandler`; this is the same
+     * offer for a route that is not a tool. Both consumers had written it by hand.
+     */
+    payment?: { requirePayment(request: Request): Promise<Response | { paid: true }> }
+  },
 ): ApiMeterGuard<R> {
   const realm = cfg?.realm ?? "api"
-  return async function meterRequest(req, action, opts) {
+  // `retried` is internal — the public guard takes three arguments, and the fourth only
+  // exists so a paid retry cannot become a loop.
+  const meterRequest = async (
+    req: Request,
+    action: keyof R & string,
+    opts?: { units?: number },
+    retried = false,
+  ): Promise<Response | null> => {
     const token = req.headers
       .get("authorization")
       ?.replace(/^Bearer\s+/i, "")
@@ -345,6 +364,13 @@ export function createApiMeterGuard<R extends Record<string, number>>(
       const waitable = res.reason === "rate_limit_reached" || res.reason === "spend_limit_reached"
       const retryAfter =
         res.retryAt != null ? Math.max(1, Math.ceil((res.retryAt - Date.now()) / 1000)) : null
+      // Money can lift this one, so offer to take it. Once: a caller whose settled
+      // payment still leaves the wallet short gets the ordinary 402, not a loop.
+      if (!waitable && cfg?.payment && !retried) {
+        const paid = await cfg.payment.requirePayment(req)
+        if (paid instanceof Response) return paid
+        return meterRequest(req, action, opts, true)
+      }
       return jsonResponse(
         waitable ? 429 : 402,
         {
@@ -358,6 +384,7 @@ export function createApiMeterGuard<R extends Record<string, number>>(
     }
     return null
   }
+  return (req, action, opts) => meterRequest(req, action, opts)
 }
 
 function jsonResponse(status: number, body: unknown, extraHeaders?: Record<string, string>): Response {

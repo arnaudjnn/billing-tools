@@ -181,3 +181,33 @@ test("billing.cli tracks the composition rather than describing a default", asyn
     "the default cannot count a per-member included window, and must not claim to",
   );
 });
+
+test("MPP is priced from the rate card the composition already publishes", async () => {
+  // `amount` used to be required, so a consumer with a per-tool rate card wrote a function
+  // reading its own cost map off the path — its own rate card, re-derived, in a second
+  // place. `toolCosts` is the map `get_credit_balance` and the REST tool list already
+  // serve; omitting `amount` charges what the tool being called costs.
+  const billing = createBilling({
+    adapter,
+    config,
+    plans: PLANS,
+    toolCosts: { cheap_read: 0, expensive_search: 80 },
+    machinePayment: { currency: "usd" },
+  });
+
+  const priceOf = async (path) =>
+    (await billing.machinePayment.buildChallenges(new Request(`https://api.test${path}`)))[0].amount;
+
+  assert.equal(await priceOf("/api/v0/expensive_search"), 80);
+  // A free tool and an unknown one both fall back to 1: a challenge for 0 is a challenge
+  // that means nothing, and refusing to quote is worse than quoting small.
+  assert.equal(await priceOf("/api/v0/cheap_read"), 1);
+  assert.equal(await priceOf("/api/v0/who_knows"), 1);
+
+  // A flat fee stays available for a consumer that wants one price per request.
+  const flat = createBilling({ adapter, config, plans: PLANS, machinePayment: { amount: 5 } });
+  assert.equal(
+    (await flat.machinePayment.buildChallenges(new Request("https://api.test/api/v0/x")))[0].amount,
+    5,
+  );
+});

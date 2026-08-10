@@ -64,6 +64,23 @@ export function createToolDispatchHandler(opts: {
    * the path that reads the real role.
    */
   principal?: (request: Request) => Principal | null | Promise<Principal | null>;
+  /**
+   * The MPP gate, when the app accepts machine payments. Turns the empty-wallet 402
+   * below into an OFFER: the same refusal comes back carrying a `WWW-Authenticate:
+   * Payment` challenge, and a caller that settles it has its call dispatched.
+   *
+   * This lives here because the 402 is written here. Both consumers had wrapped this
+   * handler to do it — clone the request, dispatch, look for a 402, call
+   * `requirePayment`, dispatch again — which is the same ten lines twice, in the one
+   * place where getting the retry wrong means either charging twice or serving for
+   * free. `createBilling` wires it automatically whenever `machinePayment` is
+   * configured.
+   *
+   * Only the money 402. A 429 is a rate or spend limit and no payment lifts either.
+   */
+  payment?: {
+    requirePayment(request: Request): Promise<Response | { paid: true }>;
+  };
 }) {
   const realm = opts.realm ?? "billing-tools";
   return async (
@@ -79,10 +96,13 @@ export function createToolDispatchHandler(opts: {
     // caller, so `enforceAccess` behaves identically and only `enforceAdmin` sees more.
     const withContext = <T>(fn: () => T): T =>
       principal ? runWithPrincipal({ authHeader, principal }, fn) : runWithAuth(authHeader, fn);
+    // Read the body ONCE, up front. The paid retry below re-dispatches, and a Request
+    // body can only be read once — parsing here (rather than cloning the request) is
+    // what makes the retry a plain second call with the same arguments.
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
     return withContext(async () => {
       try {
-        const body = await request.json().catch(() => ({}));
-        const result = await opts.dispatcher.dispatchTool(tool, body as Record<string, unknown>);
+        const result = await opts.dispatcher.dispatchTool(tool, body);
         if (result && typeof result === "object" && (result as { status?: string }).status === "try_again_later") {
           const retryAfter = (result as { retry_after_seconds?: number }).retry_after_seconds;
           return Response.json(result, {
@@ -119,6 +139,16 @@ export function createToolDispatchHandler(opts: {
                 : message.includes("Unknown tool")
                   ? 404
                   : 500;
+        // An empty wallet is the one refusal a payment can lift, so offer to take one.
+        // Paid, the wallet was credited (`creditWallet`) and the call is dispatched
+        // again — properly metered, because paying funds the meter rather than skipping
+        // it. Unpaid, the caller holds the challenge instead of a dead end.
+        if (status === 402 && opts.payment) {
+          const paid = await opts.payment.requirePayment(request);
+          if (paid instanceof Response) return paid;
+          const result = await opts.dispatcher.dispatchTool(tool, body);
+          return Response.json(result);
+        }
         return Response.json({ error: message }, { status });
       }
     });

@@ -106,3 +106,101 @@ test("payment.md describes the same price the challenge quotes", async () => {
   assert.match(res.headers.get("content-type"), /text\/markdown/);
   assert.match(text, /Acme/);
 });
+
+// ── The 402 that becomes an offer, on the surfaces that WRITE the 402 ─────────
+//
+// Both consumers had hand-written this: dispatch, look for a 402, call requirePayment,
+// dispatch again. It is ten lines, twice, in the one place where getting the retry wrong
+// means either charging twice or serving for free — so it belongs where the 402 is
+// written. These pin the two halves that a wrapper kept getting to decide: that the retry
+// re-runs the CALL (paying funds the meter, it does not skip it), and that only the money
+// refusal is offered a payment.
+
+import { createToolDispatchHandler } from "../dist/routes/rest.js";
+
+const ctx = (tool) => ({ params: Promise.resolve({ tool }) });
+const post = (body = {}) =>
+  new Request("https://api.test/api/v0/do_thing", { method: "POST", body: JSON.stringify(body) });
+
+function dispatcherRefusing(times) {
+  let calls = 0;
+  return {
+    calls: () => calls,
+    args: [],
+    getToolNames: () => ["do_thing"],
+    async dispatchTool(_name, args) {
+      this.args.push(args);
+      calls++;
+      if (calls <= times) throw new Error("Insufficient credits. Buy more to continue.");
+      return { status: "ok" };
+    },
+  };
+}
+
+test("an empty wallet is answered with a challenge, not a dead end", async () => {
+  const dispatcher = dispatcherRefusing(Infinity);
+  const handler = createToolDispatchHandler({
+    dispatcher,
+    payment: createMachinePaymentHandler({ amount: 30, currency: "usd" }),
+  });
+
+  const res = await handler(post({ q: 1 }), ctx("do_thing"));
+  assert.equal(res.status, 402);
+  assert.match(res.headers.get("www-authenticate"), /^Payment .*amount="30"/);
+  assert.equal(res.headers.get("content-type"), "application/problem+json");
+  assert.equal(dispatcher.calls(), 1, "not dispatched again — nothing was paid");
+});
+
+test("a settled payment re-runs the CALL, with the same arguments", async () => {
+  // The retry is a second real dispatch: the wallet was credited, so the call is metered
+  // like any other. Waving it through would serve a request nobody was charged for.
+  const dispatcher = dispatcherRefusing(1);
+  const handler = createToolDispatchHandler({
+    dispatcher,
+    payment: createMachinePaymentHandler({
+      amount: 30,
+      currency: "usd",
+      settle: async () => ({ receipt: "rcpt" }),
+    }),
+  });
+
+  const res = await handler(
+    new Request("https://api.test/api/v0/do_thing", {
+      method: "POST",
+      body: JSON.stringify({ q: 7 }),
+      headers: { authorization: "Payment cred" },
+    }),
+    ctx("do_thing"),
+  );
+
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { status: "ok" });
+  assert.equal(dispatcher.calls(), 2);
+  // A Request body reads once, which is why the handler parses it up front rather than
+  // cloning: the retry has to carry the SAME arguments, not an empty object.
+  assert.deepEqual(dispatcher.args, [{ q: 7 }, { q: 7 }]);
+});
+
+test("no payment configured leaves the 402 exactly as it was", async () => {
+  const dispatcher = dispatcherRefusing(Infinity);
+  const res = await createToolDispatchHandler({ dispatcher })(post(), ctx("do_thing"));
+  assert.equal(res.status, 402);
+  assert.equal(res.headers.get("www-authenticate"), null);
+});
+
+test("a rate limit is never offered a payment — no payment lifts it", async () => {
+  // 429, and the challenge must not appear: a caller that pays for a rate limit has been
+  // charged for nothing.
+  const dispatcher = {
+    getToolNames: () => ["do_thing"],
+    dispatchTool: async () => ({ status: "try_again_later", retry_after_seconds: 42 }),
+  };
+  const res = await createToolDispatchHandler({
+    dispatcher,
+    payment: createMachinePaymentHandler({ amount: 30, currency: "usd" }),
+  })(post(), ctx("do_thing"));
+
+  assert.equal(res.status, 429);
+  assert.equal(res.headers.get("retry-after"), "42");
+  assert.equal(res.headers.get("www-authenticate"), null);
+});
