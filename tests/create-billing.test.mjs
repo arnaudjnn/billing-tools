@@ -211,3 +211,30 @@ test("MPP is priced from the rate card the composition already publishes", async
     5,
   );
 });
+
+test("restDispatch carries the payment challenge, without the app wrapping it", async () => {
+  // The WIRING, which is the part a handler-level test cannot see: configuring
+  // `machinePayment` is what turns the empty-wallet 402 into an offer, on the handler the
+  // app mounts. Both consumers used to wrap `restDispatch` themselves to get this.
+  const billing = createBilling({
+    adapter,
+    config,
+    plans: PLANS,
+    toolCosts: { broke_tool: 42 },
+    machinePayment: { currency: "usd" },
+    registerTools: (server) => {
+      server.tool("broke_tool", "refuses for money", {}, async () => {
+        throw new Error("Insufficient credits. Buy more to continue.");
+      });
+    },
+  });
+
+  const res = await billing.restDispatch(
+    new Request("https://api.test/api/v0/broke_tool", { method: "POST", body: "{}" }),
+    { params: Promise.resolve({ tool: "broke_tool" }) },
+  );
+
+  assert.equal(res.status, 402);
+  // Priced at the tool's own cost, from `toolCosts` — no amount function anywhere.
+  assert.match(res.headers.get("www-authenticate"), /^Payment .*amount="42"/);
+});

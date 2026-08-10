@@ -389,7 +389,37 @@ export interface OrgUsage {
      *  which nothing could ask before: `memberUsage` reports one member at a time and
      *  flags nothing. */
     overage: number;
+    /**
+     * The same average, per WINDOW — the seats' week beside the seats' package, rather
+     * than one number for the cap alone.
+     *
+     * A per-seat plan has no org-scoped week and no pool, so a workspace screen that only
+     * had `percent` above could show a rate limit for the workspace at all only by
+     * flattening every member's week itself. Which is what a consumer did: the same capped
+     * mean, the same summed totals, the same "every seat resets together" shortcut,
+     * written a second time in a page where no API caller could reach it.
+     *
+     * Empty on a pooled plan — `pool` is the workspace's own window there, and averaging
+     * a shared ceiling across the people sharing it says nothing.
+     */
+    windows: OrgUsageWindow[];
   };
+}
+
+/** One window kind, averaged across the seats that have it. */
+export interface OrgUsageWindow {
+  every: UsageWindow["every"];
+  /** The mean of the seats' own percentages, each capped at 100 — same rule as
+   *  `aggregate.percent`, for the same reason. */
+  percent: number;
+  /** The team's totals. Honest for anything that wants them, and NOT the denominator of
+   *  `percent` — a caption is what keeps the two apart on screen. */
+  used: number;
+  limit: number;
+  /** How many seats this average is over. A mean without its N is not a statement. */
+  seats: number;
+  /** Every seat's window resets at the same instant, so the first one speaks for all. */
+  resetsAt: number | null;
 }
 
 /**
@@ -438,6 +468,30 @@ export async function orgUsage(
   const pool = org.pool
     ? { size: org.pool.size, used: org.pool.used, remaining: org.pool.remaining }
     : null;
+
+  // The seats' windows, averaged one kind at a time. Members' caller-scoped windows plus
+  // their pack (which is a cycle window by another name — it is the one an "included"
+  // row shows), grouped by `every` in first-seen order so a renderer gets them in the
+  // order the plan declares them.
+  const byEvery = new Map<UsageWindow["every"], (UsageWindow & { size: number })[]>();
+  if (!pool) {
+    for (const m of rows) {
+      for (const w of [...m.windows, ...(m.pack ? [m.pack] : [])]) {
+        if (w.size <= 0) continue;
+        const bucket = byEvery.get(w.every);
+        if (bucket) bucket.push(w);
+        else byEvery.set(w.every, [w]);
+      }
+    }
+  }
+  const windows: OrgUsageWindow[] = [...byEvery].map(([every, ws]) => ({
+    every,
+    percent: Math.round(ws.reduce((n, w) => n + Math.min(100, (w.used / w.size) * 100), 0) / ws.length),
+    used: ws.reduce((n, w) => n + w.used, 0),
+    limit: ws.reduce((n, w) => n + w.size, 0),
+    seats: ws.length,
+    resetsAt: ws.find((w) => w.resetsAt)?.resetsAt ?? null,
+  }));
   return {
     members: members.filter((m) => m.limit > 0 || m.used > 0),
     aggregate: pool
@@ -452,6 +506,7 @@ export async function orgUsage(
           // Not a mean of anything, so there is no N to report.
           seats: 0,
           overage: members.filter((m) => m.overage).length,
+          windows,
         }
       : {
           percent: measured.length
@@ -462,6 +517,7 @@ export async function orgUsage(
           pool: null,
           seats: measured.length,
           overage: members.filter((m) => m.overage).length,
+          windows,
         },
   };
 }

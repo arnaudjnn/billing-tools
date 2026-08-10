@@ -180,3 +180,47 @@ test("each member is capped by the pool, and says that it is not theirs", async 
   }
   assert.equal(out.members.find((m) => m.id === "u1").percent, 15);
 });
+
+test("the seats' windows are averaged per kind, so a page does not do it", async () => {
+  // A per-seat plan has no org-scoped week: the workspace's week only exists as the mean of
+  // its seats' weeks. A consumer computed exactly this in a page — capped mean, summed
+  // totals, first resetsAt — where no API caller could reach it.
+  __setStripeForTests(stripe());
+  const a = adapter();
+  await assignSeatType(a, "org_1", "u_full", "premium"); // 5 000
+
+  const out = await orgUsage(a, config, {
+    orgId: "org_1",
+    plans: PLANS,
+    plan: "pro",
+    members: [{ id: "u_full" }, { id: "u_idle" }],
+    ledger: ledgerFor({ u_full: 5_000, u_idle: 0 }),
+  });
+
+  const cycle = out.aggregate.windows.find((w) => w.every === "cycle");
+  assert.ok(cycle, "the package IS a window, and the row an included line shows");
+  assert.equal(cycle.seats, 2);
+  assert.equal(cycle.used, 5_000, "the team's totals stay honest");
+  assert.equal(cycle.limit, 6_000);
+  // 100% and 0% is a team at 50 — the same rule as `aggregate.percent`, per window. A sum
+  // would say 83 and hide that one of them is stuck.
+  assert.equal(cycle.percent, 50);
+});
+
+test("a pooled plan averages nothing — the pool IS the workspace's window", async () => {
+  __setStripeForTests(stripe());
+  const a = fakeAdapter({
+    members: ["u1", "u2"],
+    subscription: { plan: "starter", status: "active" },
+  });
+
+  const out = await orgUsage(a, config, {
+    orgId: "org_1",
+    plans: POOLED,
+    plan: "starter",
+    members: [{ id: "u1" }, { id: "u2" }],
+    ledger: ledgerFor({ u1: 300, u2: 100 }),
+  });
+  assert.deepEqual(out.aggregate.windows, [], "a mean of one shared ceiling says nothing");
+  assert.ok(out.aggregate.pool, "this is where a pooled workspace reads its window");
+});
