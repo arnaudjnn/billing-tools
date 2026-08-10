@@ -1,3 +1,15 @@
+## [22.2.1](https://github.com/arnaudjnn/billing-tools/compare/v22.2.0...v22.2.1) (2026-08-10)
+
+
+### Bug Fixes
+
+* **ui:** export useSession from the only path a client component has ([cc72f8b](https://github.com/arnaudjnn/billing-tools/commit/cc72f8bbdad4b0d70aebf78c491eb63cc91a3cd6))
+
+
+### Reverts
+
+* **live:** un-commit the tax-section work that was not mine to take ([b93aadc](https://github.com/arnaudjnn/billing-tools/commit/b93aadc0c79865f16045ef96c53ede449d193dff))
+
 # [22.1.0](https://github.com/arnaudjnn/billing-tools/compare/v22.0.3...v22.1.0) (2026-08-10)
 
 
