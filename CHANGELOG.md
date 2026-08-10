@@ -1,3 +1,10 @@
+## [21.6.1](https://github.com/arnaudjnn/billing-tools/compare/v21.6.0...v21.6.1) (2026-08-10)
+
+
+### Bug Fixes
+
+* **plans:** the credits ratio belongs on the PURE leaf, not beside the engine ([b96e53b](https://github.com/arnaudjnn/billing-tools/commit/b96e53ba26d105e1fefc3f401351f65bd7218610))
+
 # [21.6.0](https://github.com/arnaudjnn/billing-tools/compare/v21.5.0...v21.6.0) (2026-08-10)
 
 
