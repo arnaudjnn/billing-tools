@@ -1,3 +1,17 @@
+# [23.0.0](https://github.com/arnaudjnn/billing-tools/compare/v22.2.1...v23.0.0) (2026-08-10)
+
+
+* feat(quotes)!: custom pricing is a plan change, not a family of its own ([91b678a](https://github.com/arnaudjnn/billing-tools/commit/91b678a19683585d530ab518d0921b1071e596e7))
+
+
+### BREAKING CHANGES
+
+* `request_credit_quote`, `list_credit_quotes` and
+`resolve_credit_quote` are removed, along with `src/credit-quotes.ts` and its
+`btCreditQuotes` store. The ask is `request_plan_change` (now taking `seats` and
+`contact`); the answer is `quote_plan_change`; acceptance is `accept_plan_quote`.
+`OPERATOR_TOOL_NAMES` is now `quote_plan_change` + `sell_credits`.
+
 ## [22.2.1](https://github.com/arnaudjnn/billing-tools/compare/v22.2.0...v22.2.1) (2026-08-10)
 
 
