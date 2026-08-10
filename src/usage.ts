@@ -68,6 +68,15 @@ export interface UsageSeat {
    */
   label: string | null;
   /**
+   * The FULL form on its own — `display.label`, null when the config gave none.
+   *
+   * `label` above is the PILL value and collapses the two, so a caller writing a sentence
+   * ("Passa a Posto Premium") could not get the long name back once a badge existed — one
+   * reached into `model.seatTypes.find(...)?.display?.label` itself to recover it, which is a
+   * consumer reading the catalogue shape to answer a question the resolver is for.
+   */
+  name: string | null;
+  /**
    * The SHORT form on its own — `display.badge`, null when the config gave none.
    *
    * `label` collapses the two, which is right for a pill and wrong for everything else: a
@@ -161,6 +170,7 @@ export function resolveSeat(
   return {
     type,
     label: display ? (resolveLocalized(display.badge ?? display.label, locale) ?? null) : null,
+    name: display?.label ? (resolveLocalized(display.label, locale) ?? null) : null,
     badge: display?.badge ? (resolveLocalized(display.badge, locale) ?? null) : null,
   };
 }

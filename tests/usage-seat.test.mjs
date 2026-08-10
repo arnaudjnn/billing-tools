@@ -50,11 +50,12 @@ test("a sold seat type reports its badge, falling back to the label", () => {
   assert.deepEqual(resolveSeat(model("pro"), "standard"), {
     type: "standard",
     label: "Standard",
+    name: "Standard seat",
     badge: "Standard",
   });
   assert.deepEqual(
     resolveSeat(model("pro"), "premium"),
-    { type: "premium", label: "Premium", badge: null },
+    { type: "premium", label: "Premium", name: "Premium", badge: null },
     "no badge declared: `label` still answers, and `badge` says the config did not",
   );
 });
@@ -64,6 +65,7 @@ test("a plan that sells nothing can still name the seat you hold", () => {
   assert.deepEqual(resolveSeat(model("hobby"), "solo"), {
     type: "solo",
     label: "Solo",
+    name: "Solo seat",
     badge: "Solo",
   });
 });
@@ -72,8 +74,8 @@ test("a seat the plan never declared reports the key and no words", () => {
   // The API seat is the case in the wild: it is drawn by keys and agents, and a
   // plan that funds API usage from the wallet declares no seat type for it. The
   // key is still true, so it is still reported — the app decides what to show.
-  assert.deepEqual(resolveSeat(model("pro"), "api"), { type: "api", label: null, badge: null });
-  assert.deepEqual(resolveSeat(null, "standard"), { type: "standard", label: null, badge: null });
+  assert.deepEqual(resolveSeat(model("pro"), "api"), { type: "api", label: null, name: null, badge: null });
+  assert.deepEqual(resolveSeat(null, "standard"), { type: "standard", label: null, name: null, badge: null });
 });
 
 test("a plan that SELLS seats ignores `seat` — the sold types are the truth", () => {
@@ -82,7 +84,7 @@ test("a plan that SELLS seats ignores `seat` — the sold types are the truth", 
     seat: { key: "solo", display: { label: "Solo" } },
   });
   assert.equal(m.seat, null);
-  assert.deepEqual(resolveSeat(m, "solo"), { type: "solo", label: null, badge: null });
+  assert.deepEqual(resolveSeat(m, "solo"), { type: "solo", label: null, name: null, badge: null });
 });
 
 test("labels resolve per locale, like every other string the config authors", () => {
