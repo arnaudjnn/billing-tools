@@ -157,7 +157,7 @@ export async function checkBillingSetup(opts: {
                 level: "warn",
                 title: "Supplier VAT number on invoices",
                 detail: `${ids.length} account tax id(s) exist (${ids.map((t) => t.value).join(", ")}) but none is the invoice default, so none is printed`,
-                fix: "Pass `makeDefault: true` to `ensureAccountTaxId` — an id that exists but is not the default appears on nothing",
+                fix: "Set it as the invoice default in the Stripe Dashboard (Settings → Invoicing → Default tax IDs). It cannot be done over the API for your own account: `accounts.update` is refused there with \"you may only use it on connected accounts\", which is why `ensureAccountTaxId` reports `isDefault: false` rather than pretending. An id that exists but is not the default appears on nothing",
               }
             : {
                 level: "ok",

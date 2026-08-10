@@ -104,8 +104,17 @@ const toolBodies = SRC.filter(({ path }) => /src\/tools\//.test(path))
 // ── transitive closure ───────────────────────────────────────────────────────
 const reached = new Set();
 const queue = [...roots];
-const callsIn = (body) =>
-  [...FNS.keys()].filter((n) => new RegExp(`\\b${n}\\s*\\(`).test(body));
+// A DEFINITION is not a call. The body slices above run to the next top-level `export`, so
+// one function's body can swallow the *declaration* of the next — and `\bname\s*\(` matches
+// `function name(` just as happily as `name(`. That is how a real gap came to read as covered
+// the moment a section merely imported a neighbour of it. Declaration keywords are stripped
+// before the scan, which keeps the over-inclusion honest: it still credits too much reachable
+// code, never a function nothing calls.
+const DECL = /(?:export\s+)?(?:async\s+)?function\s+\w+/g;
+const callsIn = (body) => {
+  const calls = body.replace(DECL, " ");
+  return [...FNS.keys()].filter((n) => new RegExp(`\\b${n}\\s*\\(`).test(calls));
+};
 for (const body of toolBodies) queue.push(...callsIn(body));
 while (queue.length) {
   const cur = queue.pop();
@@ -160,12 +169,7 @@ const OFFLINE_ONLY = {
 
   // ── GENUINELY UNPROVEN, and used by a consumer ──
   savedCardFromCheckoutSession:
-    "GAP: reads the PaymentMethod off a completed setup session. Used twice in scartoffie; completing a session needs a browser, which is why no section reaches it — the same reason 05a subscribes directly.",
-  createBillingSync:
-    "GAP: the sync route factory, used three times in scartoffie and reached by no section. It polls Stripe and WorkOS events, so a fake proves only the shape of the handler.",
-  createSyncRoute: "GAP: the route wrapper around `createBillingSync`, same reason",
-  createWorkOSOrgMirror:
-    "GAP: Pattern B — the DB-mirror pointer. The live harness is Pattern A (orgId IS the WorkOS org id), so the mirror's reconcile-on-read and idempotent externalId create are proven only by scartoffie's own suite and by production. Covering it here needs a Postgres the harness does not have.",
+    "GAP: the only one left. It reads the PaymentMethod off a COMPLETED setup session, which cannot be completed headlessly. Measured rather than assumed — Stripe answers `setupIntents.confirm` on a Checkout-created intent with \"You cannot confirm SetupIntents created by Checkout.\", so there is no server-side route to a completed session at all. Used twice in scartoffie, and provable by a browser or not at all.",
 };
 
 test("the live coverage ledger accounts for every uncovered function", () => {
@@ -200,21 +204,20 @@ test("the ledger is measuring something", () => {
   assert.ok(toolBodies.length >= 6, `only ${toolBodies.length} tool files reached live`);
 });
 
-test("the GAPS are named, and there are four of them", () => {
+test("the GAP is named, and there is one of it", () => {
   // Pinned so closing one is a deliberate edit here, and opening one cannot pass unnoticed.
   const gaps = Object.entries(OFFLINE_ONLY)
     .filter(([, why]) => why.startsWith("GAP:"))
     .map(([n]) => n)
     .sort();
-  assert.deepEqual(gaps, [
-    "createBillingSync",
-    "createSyncRoute",
-    "createWorkOSOrgMirror",
-    "savedCardFromCheckoutSession",
-  ]);
-  // `updateCheckoutSessionTaxRates` was the fifth and is closed: section 03d re-taxes a real
-  // OPEN session and reads the rate ID back off it. `expireCheckoutSession` left the list at
-  // the same time, as that section's teardown — which is the shape a gap should close in,
-  // something the suite genuinely does rather than an entry somebody deleted.
-  assert.equal(gaps.length, 4);
+  assert.deepEqual(gaps, ["savedCardFromCheckoutSession"]);
+  // It was five. `updateCheckoutSessionTaxRates` went first (section 03d re-taxes a real open
+  // session and reads the rate id back off it), `expireCheckoutSession` with it as that
+  // section's teardown, and then three at once when section 14 mounted the seams a consumer
+  // mounts — two of which had been listed for a reason that was simply WRONG: the Pattern-B
+  // mirror needs two async functions, not a database, and a route factory is a function.
+  //
+  // Which is the point of keeping the list: a bad excuse is visible where an unmeasured gap
+  // is not. The one that remains has Stripe's own refusal as its reason.
+  assert.equal(gaps.length, 1);
 });

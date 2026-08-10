@@ -193,19 +193,35 @@ export async function ensureAccountTaxId(opts: {
       await stripe.taxIds.create({
         type: opts.type as Parameters<typeof stripe.taxIds.create>[0]["type"],
         value: opts.value,
-        owner: { type: "account" },
+        // `self` — the account making the request. This function had never worked: it sent
+        // `owner: { type: "account" }`, which Stripe refuses with "Must provide `account` if
+        // you provide `type=account`", and supplying your OWN account id there is refused
+        // too ("No such account"), because `account` means a CONNECTED account. So the one
+        // call the doctor tells you to run to fix a defective invoice 400'd every time, in
+        // two different ways. It had no test at all — a fake accepts any params, which is
+        // why a live section is what found it and `tests/account-tax-id.test.mjs` now
+        // reproduces both refusals.
+        owner: { type: "self" },
       })
     ).id;
 
+  // Making it the invoice DEFAULT is a Dashboard setting, and this is the honest shape of
+  // that: `accounts.update` is refused on your own account outright — "you may only use it on
+  // connected accounts" — so there is no API that can finish the job. Attempted rather than
+  // skipped, because a PLATFORM using this against a connected account genuinely can; the
+  // refusal for one's own account is reported as `isDefault: false` and never thrown, since
+  // the id itself was created and that is the part no Dashboard visit can do for you.
   let isDefault = false;
   if (opts.makeDefault !== false) {
-    // `accounts.update` needs the account id even for your own account — the
-    // no-argument form updates nothing and typechecks as a string parameter.
-    const account = await stripe.accounts.retrieve();
-    await stripe.accounts.update(account.id, {
-      settings: { invoices: { default_account_tax_ids: [id] } },
-    });
-    isDefault = true;
+    try {
+      const account = await stripe.accounts.retrieve();
+      await stripe.accounts.update(account.id, {
+        settings: { invoices: { default_account_tax_ids: [id] } },
+      });
+      isDefault = true;
+    } catch {
+      isDefault = false;
+    }
   }
   return { id, created: !existing, isDefault };
 }

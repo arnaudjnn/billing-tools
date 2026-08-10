@@ -72,6 +72,11 @@ const SECTIONS = [
   // its OWN composition: a notifier on the run's `billing` would have cost every earlier
   // section the transport's retries against an endpoint that does not exist yet.
   ["13", "notifications, quotes and alerts", () => import("./live/13-notifications-quotes-alerts.mjs")],
+  // 14 runs LAST because 14c writes ACCOUNT-level state — the supplier VAT number, which
+  // every invoice raised after it carries. It also closes three of the four gaps the coverage
+  // ledger named, two of which were listed for a reason that turned out to be wrong: the
+  // Pattern-B mirror needs two async functions, not a database.
+  ["14", "mounted seams", () => import("./live/14-mounted-seams.mjs")],
 ];
 
 async function main() {
