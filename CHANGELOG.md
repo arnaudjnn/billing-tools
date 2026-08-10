@@ -1,3 +1,10 @@
+# [25.1.0](https://github.com/arnaudjnn/billing-tools/compare/v25.0.1...v25.1.0) (2026-08-10)
+
+
+### Features
+
+* **notifications:** an ask with no price is ours to answer, so it comes to us ([01c3bd6](https://github.com/arnaudjnn/billing-tools/commit/01c3bd6a860176dbcb6a9bd0248923966dfaf650))
+
 ## [25.0.1](https://github.com/arnaudjnn/billing-tools/compare/v25.0.0...v25.0.1) (2026-08-10)
 
 
