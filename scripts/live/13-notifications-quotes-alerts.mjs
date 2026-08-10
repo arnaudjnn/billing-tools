@@ -13,13 +13,19 @@
 //
 // Two defects were found writing it, both invisible offline for the same reason:
 //
-//   • `quote.requested` is the one event the library deliberately does NOT address — it names
-//     the deployment's operators, whom the consumer routes. `createEmitter` dropped any event
-//     with an empty `to`, so the one event operators exist to receive was the one event never
-//     delivered. A workspace asking for a price reached nobody.
-//   • `resolve_credit_quote` raised its invoice with no tax at all, while every seat invoice
-//     and every top-up on the same account carried the account's rate. The auto-reload defect
-//     again, on the largest sale the library makes.
+//   • `createEmitter` dropped any event with an empty `to`, which silently discarded the one
+//     event whose recipients the library deliberately does NOT resolve. (The emitter of that
+//     shape has since gone: custom pricing became a plan change, and every event here is
+//     addressed. The guard remains correct and is pinned offline.)
+//   • the negotiated sale raised its invoice with no tax at all, while every seat invoice and
+//     every top-up on the same account carried the account's rate — the auto-reload defect
+//     again, on the largest sale the library makes. `sellCredits` now takes the whole
+//     `ResolvedConfig`, and `accept_plan_quote` below is what proves it live.
+//
+// And it was itself stranded once: this section was written against
+// `request_credit_quote`/`resolve_credit_quote`, which `feat(quotes)!` replaced with
+// `request_plan_change` → `quote_plan_change` → `accept_plan_quote` hours later. A full run
+// is what said so.
 
 import http from "node:http";
 
@@ -31,7 +37,7 @@ import { verifyNotification, webhookNotifier } from "../../dist/notifications/in
 import { grantTopUp, METADATA_VALUE_LIMIT } from "../../dist/topup.js";
 
 import { defer, ignoreMissing, note, ok, retry, section } from "../lib/harness.mjs";
-import { PRO_PLAN, RUN } from "../lib/scratch-stripe.mjs";
+import { PRO_PLAN, RUN, STARTER_PLAN } from "../lib/scratch-stripe.mjs";
 
 const FORBIDDEN = /Forbidden \(403\)/;
 
@@ -125,29 +131,42 @@ export async function run(ctx) {
   const memberEmail = members.find((m) => m.userId === memberUserId)?.email ?? null;
 
   // ── 13a — the ask, and a signed POST that really left the process ──────────
-  section("13a — a workspace asks for a price, and the operators are told over HTTP");
-  const asked = await asAdmin("request_credit_quote", {
-    volume_amount: 20_000,
-    volume_unit: "searches",
-    volume_per: "month",
-    term: "annual",
-    seats: 12,
-    budget: 4000,
-    payment_method: "invoice",
-    purchase_order: `PO-${RUN}`,
-    note: "e2e live",
+  //
+  // Custom pricing is a PLAN CHANGE, not a family of its own: `request_plan_change` already
+  // means "I want to move up", already keeps one open ask per workspace, and already tells
+  // the people who can answer. What the operator adds is a price.
+  section("13a — a workspace asks to move up, and the admins are told over HTTP");
+  // The ask needs a plan ABOVE the current one, and section 08 leaves the plan wherever its
+  // last move put it — so pin it to Starter first.
+  await adapter.setSubscription?.(orgId, {
+    plan: STARTER_PLAN,
+    status: "active",
+    subscriptionId: null,
+    periodEnd: null,
   });
-  ok("the quote is recorded", asked.value?.status === "requested", asked.error?.slice(0, 90));
-  const quoteId = asked.value?.quote?.id;
-  ok("in the terms it was asked in", asked.value?.quote?.volume?.unit === "searches");
 
-  const requestedId = `quote-requested:${quoteId}`;
-  const [requested] = await delivered((n) => n.id === requestedId, "quote.requested");
-  ok("the operators' event arrived", requested.type === "quote.requested");
-  // The point of the fix: this event carries no `audience`, because its recipients are on OUR
-  // side of the transaction and the consumer routes them. An empty `to` is its shape.
-  ok("with an empty `to`, which is its shape and not a failed lookup", requested.to.length === 0);
-  ok("and an id derived from the quote", requested.id === requestedId, requested.id);
+  const asked = await asAdmin("request_plan_change", { plan: PRO_PLAN, note: "e2e live" });
+  ok("the ask is recorded", asked.value?.status === "requested", asked.error?.slice(0, 90));
+  const requestId = asked.value?.id;
+  ok("naming the plan asked for", asked.value?.plan === PRO_PLAN, asked.value?.plan);
+
+  const requestedId = `upgrade-requested:${requestId}`;
+  const [requested] = await delivered((n) => n.id === requestedId, "upgrade.requested");
+  ok("the event arrived", requested.type === "upgrade.requested");
+  // Recipients resolved from REAL WorkOS memberships — the half of the emitter's contract no
+  // fake can supply: "email the admins" is a membership question, and answering it in a
+  // consumer means answering it once per consumer.
+  ok(
+    "addressed to the admins, by their real addresses",
+    adminEmail ? requested.to.includes(adminEmail) : requested.to.length > 0,
+    `${requested.to.join(",")} (expected ${adminEmail})`,
+  );
+  ok(
+    "with the asker's own email filled in, which the call site could not do",
+    requested.data?.member?.email === adminEmail,
+    requested.data?.member?.email ?? "null",
+  );
+  ok("and an id derived from the request", requested.id === requestedId, requested.id);
 
   const wire = rawFor(requestedId);
   const headers = {
@@ -173,93 +192,145 @@ export async function run(ctx) {
     verifyNotification(secret, headers, wire.raw, { now: Number(headers.timestamp) + 10 * 60_000 }) === false,
   );
 
-  // ── 13b — who may ask, who may answer ─────────────────────────────────────
-  section("13b — an admin asks, an operator answers, and a member does neither");
-  const memberAsk = await asMember("request_credit_quote", { credits: 1000 });
-  ok("a member cannot commit the workspace to a price", FORBIDDEN.test(memberAsk.error ?? ""), memberAsk.error?.slice(0, 60));
-
-  const memberReads = await asMember("list_credit_quotes", {});
+  // ── 13b — who may ask, who may price ──────────────────────────────────────
+  section("13b — an admin asks, an OPERATOR prices, and nobody else does either");
+  const priced = { workspace_id: orgId, request_id: requestId, credits: 1000, price_per_credit: 1 };
+  const memberPrices = await asMember("quote_plan_change", priced);
+  ok("a member cannot price a deal", FORBIDDEN.test(memberPrices.error ?? ""), memberPrices.error?.slice(0, 60));
+  // The one gate in this library that fails CLOSED, and this is why: an admin of the
+  // customer's own workspace pricing their own deal is not a permission that should exist.
+  const adminPrices = await asAdmin("quote_plan_change", priced);
   ok(
-    "but the queue is member-visible, like every other read",
-    (memberReads.value?.quotes ?? []).some((q) => q.id === quoteId),
-    memberReads.error?.slice(0, 60),
+    "and neither can an admin of the workspace being quoted",
+    FORBIDDEN.test(adminPrices.error ?? ""),
+    adminPrices.error?.slice(0, 70),
   );
+  const memberAccepts = await asMember("accept_plan_quote", { request_id: requestId });
+  ok("accepting is the admin's, because it pays", FORBIDDEN.test(memberAccepts.error ?? ""), memberAccepts.error?.slice(0, 60));
 
-  const secondAsk = await asAdmin("request_credit_quote", { credits: 1000 });
+  const secondAsk = await asAdmin("request_plan_change", { plan: PRO_PLAN });
   ok(
-    "one open quote per workspace",
-    secondAsk.value?.status === "already_pending" && secondAsk.value?.quote?.id === quoteId,
+    "one open ask per workspace",
+    secondAsk.value?.status === "already_pending",
     JSON.stringify(secondAsk.value ?? secondAsk.error).slice(0, 80),
   );
 
-  // The one gate in this library that fails CLOSED — an admin of the customer's own workspace
-  // is not an operator, however admin they are.
-  const adminAnswers = await asAdmin("resolve_credit_quote", {
-    workspace_id: orgId,
-    quote_id: quoteId,
-    outcome: "approved",
-    credits: 1000,
-    amount: 10,
-  });
-  ok(
-    "approving your own discount is not a permission that exists",
-    FORBIDDEN.test(adminAnswers.error ?? ""),
-    adminAnswers.error?.slice(0, 70),
-  );
-
-  // ── 13c — the answer: a real invoice, at a price and a rate ────────────────
-  section("13c — the operator approves, and Stripe raises the negotiated invoice");
+  // ── 13c — the price, and the invoice it becomes ─────────────────────────────
+  section("13c — the operator prices it, and accepting raises the negotiated invoice");
   const CREDITS = 600_000;
-  const AMOUNT_MAJOR = 4000;
-  const approved = await asOperator("resolve_credit_quote", {
+  // Minor units per credit. 0.7 of a cent × 600 000 = 420 000 minor = €4 200 — a price no
+  // published rate produces, which is the whole point of the conversation.
+  const PER_CREDIT = 0.7;
+  const EXPECTED_MINOR = Math.round(CREDITS * PER_CREDIT);
+  const quoted = await asOperator("quote_plan_change", {
     workspace_id: orgId,
-    quote_id: quoteId,
-    outcome: "approved",
+    request_id: requestId,
     credits: CREDITS,
-    amount: AMOUNT_MAJOR,
-    days_until_due: 45,
+    price_per_credit: PER_CREDIT,
     note: "e2e negotiated",
   });
-  ok("the machine credential is accepted", approved.value?.status === "approved", approved.error?.slice(0, 90));
-  const invoiceId = approved.value?.quote?.answer?.invoiceId;
-  ok("and it raised an invoice", Boolean(invoiceId), JSON.stringify(approved.value?.quote?.answer ?? {}).slice(0, 90));
+  ok("the machine credential is accepted", !quoted.error, quoted.error?.slice(0, 90));
+  const quoteRecord = quoted.value?.request?.quote;
+  ok(
+    "and the total is computed HERE, not by the customer",
+    quoteRecord?.totalMinor === EXPECTED_MINOR,
+    `${quoteRecord?.credits} × ${quoteRecord?.unitPriceMinor} = ${quoteRecord?.totalMinor}, expected ${EXPECTED_MINOR}`,
+  );
+
+  const [answer] = await delivered(
+    (n) => n.type === "quote.resolved" && String(n.id).startsWith(`quote-sent:${requestId}:`),
+    "quote.resolved",
+  );
+  ok(
+    "the price is delivered to the admin who asked",
+    adminEmail ? answer.to.includes(adminEmail) : answer.to.length > 0,
+    `${answer.to.join(",")} (expected ${adminEmail})`,
+  );
+  // The id carries the quote's own timestamp, so a RE-quote is a new event rather than a
+  // redelivery of the old price.
+  ok("and its id names the quote, not just the request", /^quote-sent:.+:.+/.test(answer.id), answer.id);
+
+  const accepted = await asAdmin("accept_plan_quote", {
+    request_id: requestId,
+    purchase_order: `PO-${RUN}`,
+    days_until_due: 45,
+  });
+  // `sellCredits` defaults to `method: "auto"` — it CHARGES the card the workspace already
+  // saved and only emails a bill when there is none. This fixture attaches one, so the
+  // negotiated deal settles immediately; both outcomes are correct and the section asserts
+  // whichever it got rather than assuming, because which one it is depends on the customer.
+  const settled = accepted.value?.status;
+  ok(
+    "the admin accepts, and the deal settles",
+    settled === "charged" || settled === "invoiced",
+    settled ?? accepted.error?.slice(0, 90),
+  );
+  const invoiceId = accepted.value?.invoice_id;
+  ok("with an invoice behind it either way", Boolean(invoiceId), JSON.stringify(accepted.value ?? {}).slice(0, 80));
 
   if (invoiceId) {
-    defer(`quote invoice ${invoiceId}`, () => stripe.invoices.voidInvoice(invoiceId).catch(ignoreMissing));
-    const inv = await stripe.invoices.retrieve(invoiceId, { expand: ["total_taxes"] });
+    // Only a document that was never PAID can be voided, and `auto` means this one usually
+    // was. A paid invoice is a legally meaningful record and Stripe refuses to void it — the
+    // right answer is not a refund (that is a credit note with tax consequences, and the
+    // operator's decision), it is to leave it: deleting the test customer in teardown takes
+    // its invoices with it. Voiding only what is voidable, rather than catching the error,
+    // because a swallowed teardown failure is how a run reports a clean teardown and leaves
+    // objects behind.
+    defer(`quote invoice ${invoiceId}`, async () => {
+      const doc = await stripe.invoices.retrieve(invoiceId).catch(() => null);
+      if (!doc || doc.status === "paid" || doc.status === "void") return;
+      await stripe.invoices.voidInvoice(invoiceId).catch(ignoreMissing);
+    });
+    const inv = await stripe.invoices.retrieve(invoiceId);
 
+    ok("the amount invoiced is the negotiated price", inv.subtotal === EXPECTED_MINOR, `${inv.subtotal}`);
     // The whole reason this path exists: what they PAY and what they GET are different
     // numbers. Everywhere else in the library they are the same one, deliberately.
-    ok("the amount invoiced is the negotiated price", inv.subtotal === AMOUNT_MAJOR * 100, `${inv.subtotal}`);
     ok(
       "and what a payment will grant is the negotiated quantity",
       inv.metadata?.credits === String(CREDITS),
       `credits=${inv.metadata?.credits}`,
     );
-    ok("it is payable by a human, on terms", inv.collection_method === "send_invoice" && inv.due_date > 0);
+    // A sales document, not a receipt — whichever way it settled. Charged off the saved card
+    // it is `charge_automatically` and already paid; with no card it is `send_invoice` on the
+    // net terms the acceptance asked for.
+    if (settled === "charged") {
+      ok(
+        "charged off the saved card, and the document is a PAID invoice",
+        inv.collection_method === "charge_automatically" && inv.status === "paid",
+        `${inv.collection_method} / ${inv.status}`,
+      );
+    } else {
+      ok(
+        "emailed as a payable invoice, on the terms asked for",
+        inv.collection_method === "send_invoice" && inv.due_date > 0,
+        `${inv.collection_method} / due ${inv.due_date}`,
+      );
+    }
     ok(
       "the PO is on the invoice, where procurement looks for it",
       (inv.custom_fields ?? []).some((f) => f.name === "PO" && f.value === `PO-${RUN}`),
       JSON.stringify(inv.custom_fields ?? []),
     );
 
-    // The defect this section found. A domestic Italian sale, on an account whose every other
-    // charge carries 22% — read off the invoice rather than off the request.
-    const line = inv.lines?.data?.[0];
-    const rates = line?.tax_rates ?? line?.taxes?.map((t) => t.tax_rate_details) ?? [];
+    // The defect this section found when it was first written: `sellCredits` resolved no tax
+    // at all, so the largest sale the library makes went out at 0% while every seat invoice
+    // and every top-up on the same account carried 22%.
     ok("the negotiated invoice is TAXED", inv.total > inv.subtotal, `${inv.subtotal} → ${inv.total}`);
     ok(
       "at the same rate the deployment charges everywhere else",
       inv.total === Math.round(inv.subtotal * 1.22),
       `total ${inv.total}, expected ${Math.round(inv.subtotal * 1.22)}`,
     );
+    const line = inv.lines?.data?.[0];
+    const rates = line?.tax_rates ?? line?.taxes?.map((t) => t.tax_rate_details) ?? [];
     const rateId = typeof rates[0] === "string" ? rates[0] : rates[0]?.id ?? rates[0]?.tax_rate;
     if (rateId) {
       const rate = await stripe.taxRates.retrieve(rateId);
       // The display name is not decoration: it is the legally mandatory mention, and per CJEU
       // C-247/21 an omitted one cannot be cured afterwards.
       ok(
-        "and the rate carries a display name, which is the mandatory mention",
+        "and the rate carries the mandatory mention as its display name",
         Boolean(rate.display_name) && rate.percentage === 22,
         `${rate.percentage}% "${rate.display_name}"`,
       );
@@ -267,24 +338,6 @@ export async function run(ctx) {
       note("no tax rate id on the line — reported above by the total alone");
     }
   }
-
-  const resolvedId = `quote-approved:${quoteId}`;
-  const [answer] = await delivered((n) => n.id === resolvedId, "quote.resolved");
-  ok("the answer is delivered", answer.type === "quote.resolved");
-  // Addressed, unlike the ask: it goes to the admin who asked, and the emitter resolved that
-  // from a real WorkOS membership listing.
-  ok(
-    "to the admin who asked, by their real address",
-    adminEmail ? answer.to.includes(adminEmail) : answer.to.length > 0,
-    `${answer.to.join(",")} (expected ${adminEmail})`,
-  );
-  ok(
-    "and the member's own email is filled in, which the call site could not do",
-    answer.data?.member?.email === adminEmail,
-    answer.data?.member?.email ?? "null",
-  );
-  // The outcome is IN the id: a denial is not a redelivery of an approval.
-  ok("the id names the outcome", answer.id === `quote-approved:${quoteId}`, answer.id);
 
   // ── 13d — a retried delivery is byte-identical, because the id is derived ───
   section("13d — a receiver that was briefly down gets the same event, not a new one");
