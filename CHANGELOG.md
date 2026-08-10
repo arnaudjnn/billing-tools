@@ -1,3 +1,10 @@
+# [21.8.0](https://github.com/arnaudjnn/billing-tools/compare/v21.7.0...v21.8.0) (2026-08-10)
+
+
+### Features
+
+* **alerts:** "you are nearly out", from the one call that can see it for free ([3387c94](https://github.com/arnaudjnn/billing-tools/commit/3387c9400501c58d13667a43b5dd5a70cfec0e4a))
+
 # [21.7.0](https://github.com/arnaudjnn/billing-tools/compare/v21.6.2...v21.7.0) (2026-08-10)
 
 
