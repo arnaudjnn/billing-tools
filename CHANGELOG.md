@@ -1,3 +1,15 @@
+# [22.0.0](https://github.com/arnaudjnn/billing-tools/compare/v21.8.0...v22.0.0) (2026-08-10)
+
+
+* feat(quotes)!: sell credits at a price nobody published ([258cbf7](https://github.com/arnaudjnn/billing-tools/commit/258cbf792ae8bf1be96e68d72baa6b7530dd0097))
+
+
+### BREAKING CHANGES
+
+* `Principal` gains an optional `email`, and `runWithAuth` takes an
+optional third argument carrying the operator token. Both are additive for existing
+callers; the surface count moves from 46 to 49 tools.
+
 # [21.8.0](https://github.com/arnaudjnn/billing-tools/compare/v21.7.0...v21.8.0) (2026-08-10)
 
 
