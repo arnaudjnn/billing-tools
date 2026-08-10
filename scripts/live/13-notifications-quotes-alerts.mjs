@@ -291,20 +291,43 @@ export async function run(ctx) {
       inv.metadata?.credits === String(CREDITS),
       `credits=${inv.metadata?.credits}`,
     );
-    // A sales document, not a receipt — whichever way it settled. Charged off the saved card
-    // it is `charge_automatically` and already paid; with no card it is `send_invoice` on the
-    // net terms the acceptance asked for.
+    // THREE outcomes, not two, and `status: "invoiced"` covers two of them. `method: "auto"`
+    // reads the wallet first, so a card on file means `charge_automatically`; if that charge
+    // DECLINES the finalized invoice is left behind rather than the sale being lost, payable
+    // from its hosted page. Only a customer with no card at all gets `send_invoice`.
+    //
+    // Which one this run gets depends on an earlier section: 11 leaves a deliberately failing
+    // card on the shared customer, so a full run lands on the decline and a solo `E2E_ONLY=13`
+    // lands on the charge. Asserting the outcome it GOT — with the invariant that holds across
+    // all three — rather than the one convenient to assume.
+    note(
+      `settled as ${settled} / ${inv.collection_method} / invoice ${inv.status}` +
+        (settled === "invoiced" && inv.collection_method === "charge_automatically"
+          ? " — the card on file declined, which is section 11's card"
+          : ""),
+    );
+    ok(
+      "the sale is never LOST: the document is paid, or finalized and payable",
+      inv.status === "paid" || (inv.status === "open" && Boolean(inv.hosted_invoice_url)),
+      `${inv.status}, hosted ${inv.hosted_invoice_url ? "yes" : "no"}`,
+    );
     if (settled === "charged") {
       ok(
-        "charged off the saved card, and the document is a PAID invoice",
+        "charged off the saved card, so the document is a PAID invoice",
         inv.collection_method === "charge_automatically" && inv.status === "paid",
         `${inv.collection_method} / ${inv.status}`,
       );
+    } else if (inv.collection_method === "send_invoice") {
+      ok(
+        "no card on file, so it is emailed on the terms asked for",
+        inv.due_date > 0,
+        `due ${inv.due_date}`,
+      );
     } else {
       ok(
-        "emailed as a payable invoice, on the terms asked for",
-        inv.collection_method === "send_invoice" && inv.due_date > 0,
-        `${inv.collection_method} / due ${inv.due_date}`,
+        "the card declined, and the invoice survives it rather than the sale being lost",
+        inv.collection_method === "charge_automatically" && inv.status === "open",
+        `${inv.collection_method} / ${inv.status}`,
       );
     }
     ok(
