@@ -1,3 +1,10 @@
+# [21.2.0](https://github.com/arnaudjnn/billing-tools/compare/v21.1.0...v21.2.0) (2026-08-10)
+
+
+### Features
+
+* **usage:** the workspace's week is the library's average, not a page's ([2cc6178](https://github.com/arnaudjnn/billing-tools/commit/2cc61783f82c11de9a4873ba5932f8ac2cb515dd))
+
 # [21.1.0](https://github.com/arnaudjnn/billing-tools/compare/v21.0.0...v21.1.0) (2026-08-10)
 
 
