@@ -1128,3 +1128,15 @@ export { INVOICE_LOCALES, type InvoiceLocale } from "./locales.js";
 
 // Tax-ID types Stripe accepts (leaf module: safe for the browser).
 export { TAX_ID_TYPES, splitTaxIdType, type TaxIdType } from "./tax-id-types.js";
+
+// The session, from the ONE place a client component may read it. `session.tsx` has held
+// `useSession` since it was written and this barrel never re-exported it, so the hook was
+// importable from nowhere: `@arnaudjnn/billing-tools/ui` is the only path a consumer's
+// client component has, and a hook it cannot reach is a hook that does not exist.
+export {
+  SessionProvider,
+  useSession,
+  ANONYMOUS_SESSION,
+  type BillingSession,
+  type SessionUser,
+} from "./session.js";

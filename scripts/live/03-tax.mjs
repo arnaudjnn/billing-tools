@@ -10,9 +10,15 @@
 // deterministically, and live would add only latency and a dependency on a member state's
 // uptime.
 
-import { invalidateTaxRates, resolveTax, taxRatesFor } from "../../dist/tax.js";
-import { eur, note, ok, section, skip } from "../lib/harness.mjs";
-import { RUN } from "../lib/scratch-stripe.mjs";
+import { createCheckoutSession, expireCheckoutSession } from "../../dist/checkout.js";
+import {
+  invalidateTaxRates,
+  resolveTax,
+  taxRatesFor,
+  updateCheckoutSessionTaxRates,
+} from "../../dist/tax.js";
+import { defer, eur, note, ok, section, skip } from "../lib/harness.mjs";
+import { RUN, STARTER_PLAN } from "../lib/scratch-stripe.mjs";
 
 const REGIME = { originCountry: "IT", registrations: [{ country: "IT" }], oss: true };
 const NOTES = {
@@ -121,6 +127,86 @@ export async function run(ctx) {
   // The distinction that matters: out-of-scope is a complete answer; `approximate` is a
   // refusal. Only the second blocks a charge.
   ok("and NOT approximate — 0% here is an answer, not a guess", jp.approximate !== true);
+
+  // ── the retax handoff ─────────────────────────────────────────────────────
+  //
+  // The one step in the tax story that a fake cannot reach, and the only one that MUTATES a
+  // live object a customer is looking at.
+  //
+  // A seat session has to be created before the customer types an address, so it goes out at
+  // the seller's DOMESTIC rate and is corrected once the billing country is known. That
+  // correction is `updateCheckoutSessionTaxRates`, and it is the work Stripe Tax would
+  // otherwise do for 0.5% — so if it silently does nothing, every cross-border customer pays
+  // the seller's own rate and the seller owes the difference. Nothing had ever called it
+  // against a real session.
+  section("03d — an open session is re-taxed once the customer's country is known");
+  const session = await createCheckoutSession({
+    plans: ctx.plans,
+    plan: STARTER_PLAN,
+    interval: "monthly",
+    seats: { standard: 1 },
+    returnUrl: "https://e2e.test/done",
+    customerId,
+    currency: "eur",
+    config: ctx.config,
+    // Elements, not hosted: `checkout.sessions.update` can rewrite line items on a
+    // `ui_mode: custom` session, which is exactly the "the session is a live object the
+    // browser mutates" design the retax depends on. It is also what a consumer doing this
+    // actually runs.
+    taxRates: domesticRates.rateIds,
+  });
+  defer(`checkout session ${session.sessionId}`, () => expireCheckoutSession(session.sessionId));
+
+  const ratesOnSession = async () => {
+    const s = await stripe.checkout.sessions.retrieve(session.sessionId, { expand: ["line_items"] });
+    const item = s.line_items?.data?.[0];
+    return {
+      total: s.amount_total,
+      net: s.amount_subtotal,
+      rates: (item?.taxes ?? []).map((t) => t.rate?.id ?? t.rate).filter(Boolean),
+    };
+  };
+
+  const atCreation = await ratesOnSession();
+  ok(
+    "it goes out at the seller's own rate, because no address exists yet",
+    atCreation.rates.includes(domesticRates.rateIds[0]),
+    `${atCreation.rates.join(",")} — total ${eur(atCreation.total)}`,
+  );
+
+  // The customer types a country the seller is NOT registered in. Under OSS that is the
+  // CUSTOMER's rate — 19% in Germany, against 22% at creation.
+  const de = await taxRatesFor({ ...REGIME, country: "DE", notes: NOTES });
+  ok("a German consumer resolves to their own rate", (await resolveTax({ ...REGIME, country: "DE" })).percent === 19);
+
+  await updateCheckoutSessionTaxRates(session.sessionId, de.rateIds);
+  const afterRetax = await ratesOnSession();
+  ok(
+    "the OPEN session now carries the customer's rate instead",
+    afterRetax.rates.includes(de.rateIds[0]) && !afterRetax.rates.includes(domesticRates.rateIds[0]),
+    `${afterRetax.rates.join(",")} — total ${eur(afterRetax.total)}`,
+  );
+  ok(
+    "and the total the browser renders moved with it",
+    afterRetax.total < atCreation.total,
+    `${eur(atCreation.total)} → ${eur(afterRetax.total)} (22% → 19%)`,
+  );
+
+  // The branch the code comments single out and nothing had executed: an EMPTY list must
+  // CLEAR the rate. Leaving the previous country's rate applied is how an out-of-scope sale
+  // gets charged 22% it does not owe.
+  await updateCheckoutSessionTaxRates(session.sessionId, []);
+  const cleared = await ratesOnSession();
+  ok(
+    "an out-of-scope customer has the rate REMOVED, not merely replaced",
+    cleared.rates.length === 0,
+    `${cleared.rates.length} rate(s) — total ${eur(cleared.total)}`,
+  );
+  ok(
+    "so the total charged is exactly the net",
+    cleared.total === cleared.net,
+    `${eur(cleared.net)} net → ${eur(cleared.total)} total`,
+  );
 
   note("the decision table itself (OSS, registrations, US nexus, EL/GR) is covered offline");
 }
