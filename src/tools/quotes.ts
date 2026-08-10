@@ -52,6 +52,13 @@ order. One open quote per workspace.`,
       payment_method: z.enum(["invoice", "card"]).default("invoice"),
       purchase_order: z.string().max(30).optional().describe("Your PO number, if procurement needs one on the invoice"),
       note: z.string().max(280).optional().describe("What you are doing with it"),
+      first_name: z.string().max(80).optional(),
+      last_name: z.string().max(80).optional(),
+      work_email: z
+        .string()
+        .email()
+        .optional()
+        .describe("Address on the company's own domain — who we answer, and where"),
     },
     async (a) => {
       // An admin, because a quote commits the workspace to a conversation about money — and
@@ -74,6 +81,15 @@ order. One open quote per workspace.`,
         ...(a.needed_by ? { neededBy: a.needed_by } : {}),
         ...(a.purchase_order ? { purchaseOrder: a.purchase_order } : {}),
         ...(a.note ? { note: a.note } : {}),
+        ...(a.work_email
+          ? {
+              contact: {
+                firstName: a.first_name ?? "",
+                lastName: a.last_name ?? "",
+                email: a.work_email,
+              },
+            }
+          : {}),
       });
 
       if (!res.ok) {
@@ -82,7 +98,7 @@ order. One open quote per workspace.`,
         }
         return err(
           res.reason === "nothing_asked"
-            ? "Say how much you need: `credits`, or `volume_amount` with `volume_unit`."
+            ? "Say something to go on: `credits`, `volume_amount`, `seats`, or a `work_email` to answer."
             : "This workspace's quote history is full. Ask an operator to settle the open one first.",
         );
       }
@@ -100,6 +116,61 @@ order. One open quote per workspace.`,
       const auth = await enforceAccess(adapter);
       if ("isError" in auth) return auth;
       return json({ quotes: await listCreditQuotes(adapter, auth.orgId) });
+    },
+  );
+
+  server.tool(
+    "sell_credits",
+    `Sell a workspace credits at a NEGOTIATED price (platform operators only). Raises a
+Stripe invoice for \`amount\` and grants \`credits\` when it is paid — the two are
+deliberately independent, which is the whole point: every other path here prices credits at
+the list rate. Needs no quote on file, so an operator can price a conversation that started
+anywhere.`,
+    {
+      workspace_id: z.string().describe("Whose wallet the credits land in when it is paid"),
+      credits: z.number().int().positive().describe("What they get"),
+      amount: z.number().positive().describe("What they pay, in whole currency units"),
+      description: z.string().max(120).optional().describe("What the invoice line says"),
+      days_until_due: z.number().int().positive().optional().describe("Net terms. Default 30"),
+      purchase_order: z.string().max(30).optional().describe("Their PO, printed on the invoice"),
+      reference: z
+        .string()
+        .max(60)
+        .optional()
+        .describe("Your own idempotency key — the same one reuses the invoice rather than raising a second"),
+    },
+    async (a) => {
+      // Cross-org by design: the argument names a workspace that is not the caller's, which
+      // is exactly why this is the one gate in the library that fails closed.
+      const operator = enforceOperator("selling credits");
+      if ("isError" in operator) return operator;
+
+      const customerId = await getBillingCustomerId(adapter, a.workspace_id);
+      if (!customerId) return err("That workspace has no billing account.");
+
+      // Tax is resolved from `config.tax` inside, like every other charge on the account:
+      // a negotiated invoice is still a real invoice, and it carries the same rate and the
+      // same mandatory mention as one raised by `buy_credits`.
+      const sale = await sellCredits(customerId, a.workspace_id, opts.config, {
+        credits: a.credits,
+        amountMinor: Math.round(a.amount * 100),
+        ...(a.description ? { description: a.description } : {}),
+        ...(a.days_until_due ? { daysUntilDue: a.days_until_due } : {}),
+        ...(a.purchase_order ? { purchaseOrder: a.purchase_order } : {}),
+        ...(a.reference ? { idempotencyKey: `sell:${a.reference}` } : {}),
+      });
+      if (sale.status === "refused") return err(sale.message);
+
+      return json({
+        status: "invoiced",
+        invoice_id: sale.invoiceId,
+        invoice_url: sale.hostedInvoiceUrl,
+        due_at: sale.dueAt,
+        emailed: sale.emailed,
+        // Said plainly, because an operator reading "sold" would reasonably assume the
+        // credits are already there. They are not: the invoice.paid branch grants them.
+        credits_on_payment: a.credits,
+      });
     },
   );
 

@@ -294,6 +294,7 @@ export const BILLING_TOOL_NAMES = [
   "request_credit_quote",
   "list_credit_quotes",
   "resolve_credit_quote",
+  "sell_credits",
   // The billing account itself (registerProfileTools).
   "get_billing_profile",
   "set_billing_profile",

@@ -310,8 +310,8 @@ test("the two shapes differ by exactly the seven tools", () => {
   // The three CREDIT-QUOTE tools are on both sides for the same reason as the member ones:
   // any deployment can be asked for a volume price, and `sale: "quote"` describes the plan
   // that EXPECTS the question rather than the only one allowed to be asked it.
-  assert.equal(gtm.size, 41);
-  assert.equal(scart.size, 49);
+  assert.equal(gtm.size, 42);
+  assert.equal(scart.size, 50);
 });
 
 test("no catalogue means no declaration to read, so every group registers", () => {

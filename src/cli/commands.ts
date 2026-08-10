@@ -230,6 +230,38 @@ export function registerBillingCommands(program: CommandLike, opts: CliOptions) 
     .command("list")
     .description("This workspace's quotes, asked and answered")
     .action(async () => print(await callTool(requireConfig(), "list_credit_quotes")));
+  // Cross-org, and the reason it lives under `quotes` rather than beside `buy`: this is
+  // the SELLER's side of the counter. `buy` is what a customer does at the list price.
+  quotes
+    .command("sell <workspace_id>")
+    .description("Sell a workspace credits at a negotiated price (platform operators only)")
+    // `option`, not `requiredOption`: `CommandLike` is the structural type that keeps
+    // commander out of a consumer's dependencies, and it has no required variant. The
+    // check below is the guard, and the tool re-checks anyway.
+    .option("--credits <n>", "What they get")
+    .option("--amount <amount>", "What they pay, in whole currency units")
+    .option("--description <text>", "What the invoice line says")
+    .option("--days-until-due <n>", "Net terms (default 30)")
+    .option("--po <number>", "Their purchase-order number, printed on the invoice")
+    .option("--reference <key>", "Your own idempotency key — the same one reuses the invoice")
+    .action(async (workspaceId: string, o: Record<string, string>) => {
+      if (!o.credits || !o.amount) {
+        console.error("Both --credits (what they get) and --amount (what they pay) are required.");
+        process.exitCode = 1;
+        return;
+      }
+      print(
+        await callTool(requireConfig(), "sell_credits", {
+          workspace_id: workspaceId,
+          credits: Number(o.credits),
+          amount: Number(o.amount),
+          ...(o.description ? { description: o.description } : {}),
+          ...(o.daysUntilDue ? { days_until_due: Number(o.daysUntilDue) } : {}),
+          ...(o.po ? { purchase_order: o.po } : {}),
+          ...(o.reference ? { reference: o.reference } : {}),
+        }),
+      );
+    });
   quotes
     .command("answer <workspace_id> <quote_id>")
     .description("Approve or deny a quote (platform operators only)")

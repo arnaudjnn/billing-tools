@@ -571,10 +571,23 @@ constant is right for a top-up (a customer typing an amount and an agent calling
 must not be quoted differently) and it is exactly wrong for the only conversation that matters
 commercially.
 
-**Three tools, two authorities.** `request_credit_quote` is the workspace ADMIN's;
-`list_credit_quotes` is a member-visible read; `resolve_credit_quote` is the deployment
-OPERATOR's. That split is the point — "approve my own discount" is not a permission that
-should exist.
+**Four tools, two authorities.** `request_credit_quote` is the workspace ADMIN's;
+`list_credit_quotes` is a member-visible read; `resolve_credit_quote` and **`sell_credits`**
+are the deployment OPERATOR's. That split is the point — "approve my own discount" is not a
+permission that should exist.
+
+**`sell_credits` is the cross-org one, and needs no quote on file.** It names a workspace
+that is not the caller's and invoices it at a negotiated price, which is exactly why the gate
+below fails closed. `resolve_credit_quote` is the same sale with a request attached; this is
+for a conversation that started somewhere else — a call, an email, a conference — where
+making the customer file a form first would be theatre.
+
+**Volume is NOT required.** A person who has not priced the product cannot name a credit
+figure, and a form that demands one goes unfilled — "twelve people, talk to me" is a real
+ask. `nothing_asked` now means no credits, no volume, no seats AND nobody to answer. The
+`contact` (work email + name) exists because a WorkOS account email is whatever somebody
+registered with, and the first thing a salesperson needs is an address on the company's own
+domain.
 
 **The ask is shaped for a salesperson, not for the schema.** Credits OR a volume in the
 customer's own unit ("20 000 searches per month" — making a buyer convert to credits is asking

@@ -246,3 +246,33 @@ test("an untaxed deployment stays untaxed, explicitly", async () => {
   assert.equal(sent.item.tax_rates, undefined);
   assert.equal(sent.invoice.automatic_tax, undefined);
 });
+
+test("a lead is a valid ask: a contact and a headcount, with no volume named", async () => {
+  // The form a human fills is four fields — work email, name, seats — because somebody who
+  // has not priced the product cannot name a credit figure, and demanding one is how a
+  // quote form goes unfilled. "Twelve people, talk to me" is a perfectly good ask.
+  const a = fakeAdapter({ members: ["u_admin"] });
+  const res = await requestCreditQuote(a, "org_1", {
+    memberId: "u_admin",
+    term: "annual",
+    paymentMethod: "invoice",
+    seats: 12,
+    contact: { firstName: "Giulia", lastName: "Rossi", email: "giulia@acme.it" },
+  });
+
+  assert.equal(res.ok, true);
+  assert.equal(res.quote.seats, 12);
+  assert.equal(res.quote.contact.email, "giulia@acme.it");
+  assert.equal(res.quote.credits, undefined, "nothing invented on their behalf");
+});
+
+test("but a request naming nothing at all is still refused", async () => {
+  const a = fakeAdapter({ members: ["u_admin"] });
+  const res = await requestCreditQuote(a, "org_1", {
+    memberId: "u_admin",
+    term: "annual",
+    paymentMethod: "invoice",
+  });
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, "nothing_asked", "no size, no volume, nobody to answer");
+});

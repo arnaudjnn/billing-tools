@@ -45,6 +45,15 @@ export interface VolumeQuote {
   createdAt: string;
   status: "pending" | "approved" | "denied";
 
+  /**
+   * WHO to answer, when it is not simply the account they signed up with.
+   *
+   * A person's WorkOS email is whatever they registered with — a personal address as often
+   * as not — and the one thing a salesperson needs before anything else is a work address
+   * on the company's own domain. Their name matters for the same reason: an answer that
+   * opens "Ciao" beats one addressed to a workspace id.
+   */
+  contact?: { firstName: string; lastName: string; email: string };
   /** How much they want. Credits when they think in credits. */
   credits?: number;
   /**
@@ -170,8 +179,13 @@ export async function requestCreditQuote(
   | { ok: false; reason: "already_pending" | "queue_full" | "nothing_asked"; pending?: VolumeQuote }
 > {
   const { memberId, notify, id, now, ...ask } = input;
-  // A quote with neither a quantity nor a volume is a question nobody can answer.
-  if (!ask.credits && !ask.volume) return { ok: false, reason: "nothing_asked" };
+  // Something to go on. Volume is the richest answer and it is NOT required: a form that
+  // demands a credit figure from somebody who has not priced the product yet is a form
+  // that goes unfilled, and "twelve people, talk to me" is a perfectly good ask. What
+  // cannot be answered is a request that names no size, no volume and nobody.
+  if (!ask.credits && !ask.volume && !ask.seats && !ask.contact) {
+    return { ok: false, reason: "nothing_asked" };
+  }
 
   const list = await read(adapter, orgId);
   const open = list.find((q) => q.status === "pending");
