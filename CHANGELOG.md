@@ -1,3 +1,10 @@
+# [25.2.0](https://github.com/arnaudjnn/billing-tools/compare/v25.1.0...v25.2.0) (2026-08-10)
+
+
+### Features
+
+* **notifications:** the operators event carries the form and the contact ([0880f3e](https://github.com/arnaudjnn/billing-tools/commit/0880f3e913fecc30c5c3f1d4528a22a4798229e8))
+
 # [25.1.0](https://github.com/arnaudjnn/billing-tools/compare/v25.0.1...v25.1.0) (2026-08-10)
 
 
