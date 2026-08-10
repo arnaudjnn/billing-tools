@@ -1,4 +1,4 @@
-import { runWithAuth, runWithPrincipal, type Principal } from "../auth.js";
+import { operatorFromRequest, runWithAuth, runWithPrincipal, type Principal } from "../auth.js";
 import { ToolValidationError } from "../dispatch.js";
 
 // Framework-light REST factories (standard Request/Response; works in Next app
@@ -19,12 +19,27 @@ function wwwAuth(realm: string, resourceMetadata?: string): string {
 export function createToolListHandler(opts: {
   dispatcher: Dispatcher;
   toolCosts?: Record<string, number>;
+  /**
+   * Names to withhold from a caller who is not a platform operator.
+   *
+   * The dispatcher keeps them — an operator calls them through this same surface — so this
+   * is what a caller is TOLD exists, not what exists. `createBilling` passes
+   * `OPERATOR_TOOL_NAMES`.
+   */
+  operatorTools?: readonly string[];
+  /** How this deployment decides. Defaults to the env-configured operator check. */
+  isOperator?: (request: Request) => boolean | Promise<boolean>;
 }) {
   return async (request: Request): Promise<Response> => {
     const authHeader = request.headers.get("authorization");
+    const hidden = opts.operatorTools?.length
+      ? (await (opts.isOperator?.(request) ?? operatorFromRequest(request)))
+        ? []
+        : opts.operatorTools
+      : [];
     return runWithAuth(authHeader, async () => {
       try {
-        const names = opts.dispatcher.getToolNames();
+        const names = opts.dispatcher.getToolNames().filter((n) => !hidden.includes(n));
         return Response.json({
           tools: names.map((name) => ({ name, cost: opts.toolCosts?.[name] ?? 0 })),
         });

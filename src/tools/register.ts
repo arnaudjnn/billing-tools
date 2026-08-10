@@ -120,6 +120,14 @@ export interface RegisterBillingToolsOptions {
    * configured no notifier.
    */
   notify?: Notify;
+  /**
+   * Register the OPERATOR tools (`sell_credits`, `resolve_credit_quote`). Default true.
+   *
+   * Set false to build the CUSTOMER's tool set. Not a security boundary — `enforceOperator`
+   * is, wherever those tools exist — but a list that advertises "price somebody else's
+   * workspace" to somebody who can never do it is a list that sends agents at a 403.
+   */
+  operatorTools?: boolean;
 }
 
 // Register the billing-tools surface (auth/key management + credit billing) on
@@ -168,7 +176,11 @@ export function registerBillingTools(server: McpServer, opts: RegisterBillingToo
   // The commercial conversation. Registered for every catalogue rather than gated on
   // `sale: "quote"`: a deployment can be asked for a volume price on any plan, and the one
   // that sells a quote-only tier is simply the one that expects it.
-  registerQuoteTools(server, opts.adapter, { config, notify: opts.notify });
+  registerQuoteTools(server, opts.adapter, {
+    config,
+    notify: opts.notify,
+    ...(opts.operatorTools === false ? { operatorTools: false as const } : {}),
+  });
   if (opts.profileTools !== false) registerProfileTools(server, opts.adapter);
   if (opts.plans) {
     // `list_plans` and `get_plan` are READS and always register: "what is on offer"
@@ -238,6 +250,15 @@ function registerPlanTools(
     },
   );
 }
+
+/**
+ * The two a customer never sees. Both name a workspace that is not the caller's.
+ *
+ * The REST tool list and the MCP transport hide them from everybody else; the gate that
+ * actually refuses them is `enforceOperator`, at call time, and it does not care whether
+ * they were advertised.
+ */
+export const OPERATOR_TOOL_NAMES = ["resolve_credit_quote", "sell_credits"] as const;
 
 export const BILLING_TOOL_NAMES = [
   "get_api_key",

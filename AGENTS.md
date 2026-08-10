@@ -578,6 +578,19 @@ commercially.
 are the deployment OPERATOR's. That split is the point — "approve my own discount" is not a
 permission that should exist.
 
+**Neither is advertised to a customer.** The REST tool list filters `OPERATOR_TOOL_NAMES`
+out for a caller who is not an operator, and the MCP transport builds TWO memoised tool sets
+— the customer's and the operator's — rather than one, because `createMcpHandler` registers
+once and serves every connection from that server, so "hide this from this caller" cannot be
+decided inside it. Two registrations per process is the same arithmetic the REST dispatcher
+already makes.
+
+This is an honesty boundary, not a security one: `enforceOperator` is the boundary, it runs
+at call time, and it does not care what was advertised. The DISPATCHER keeps both tools
+registered for exactly that reason — an operator calls them through the same REST surface a
+customer reads the list from. What changes is what a caller is TOLD exists, and the reason
+to change it is that an agent reading a tool list will try what it finds there.
+
 **`sell_credits` is the cross-org one, and needs no quote on file.** It names a workspace
 that is not the caller's and invoices it at a negotiated price, which is exactly why the gate
 below fails closed. `resolve_credit_quote` is the same sale with a request attached; this is

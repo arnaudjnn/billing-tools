@@ -16,6 +16,7 @@ export {
   registerBillingTools,
   installInputLogging,
   BILLING_TOOL_NAMES,
+  OPERATOR_TOOL_NAMES,
   type RegisterBillingToolsOptions,
 } from "../tools/register.js";
 export {

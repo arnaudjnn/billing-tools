@@ -1,6 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { BillingAdapter } from "../types.js";
-import { runWithAuth, runWithPrincipal, runWithResolvedOrg, type Principal } from "../auth.js";
+import {
+  operatorFromRequest,
+  runWithAuth,
+  runWithPrincipal,
+  runWithResolvedOrg,
+  type Principal,
+} from "../auth.js";
 
 // MCP transport factory (uses mcp-handler, an optional peer dep — imported
 // lazily so apps that don't mount MCP don't need it). Handles both the
@@ -8,7 +14,16 @@ import { runWithAuth, runWithPrincipal, runWithResolvedOrg, type Principal } fro
 // implements resolveOauthOrg, a pre-resolved OAuth JWT path.
 
 export interface McpTransportOptions {
-  register: (server: McpServer) => void;
+  /**
+   * Register the tools on a fresh server.
+   *
+   * `ctx.operator` says which SET to build: the operator tools name a workspace that is not
+   * the caller's, so a customer's `tools/list` must not advertise them. A consumer whose
+   * register function takes only the server keeps working — the extra argument is ignored.
+   */
+  register: (server: McpServer, ctx: { operator: boolean }) => void;
+  /** Whether this request is a platform operator's. Defaults to the env-configured check. */
+  isOperator?: (request: Request) => boolean | Promise<boolean>;
   adapter: BillingAdapter;
   realm?: string;
   /** Prefix that marks a raw API key (vs an OAuth JWT). Default "sk_". */
@@ -50,15 +65,28 @@ function wwwAuth(realm: string, resourceMetadata?: string): string {
 export function createMcpTransport(opts: McpTransportOptions) {
   const realm = opts.realm ?? "billing-tools";
   const apiKeyPrefix = opts.apiKeyPrefix ?? "sk_";
-  let handlerPromise: Promise<(req: Request) => Promise<Response>> | null = null;
+  // TWO handlers, memoised, rather than one built per request.
+  //
+  // `createMcpHandler` registers the tools once and serves every connection from that one
+  // server, so "hide these from this caller" cannot be decided inside it. Building a
+  // handler per request would pay the registration cost on every call; building two — the
+  // customer's set and the operator's — pays it twice per process, which is the same
+  // arithmetic the REST dispatcher already makes.
+  const handlers = new Map<boolean, Promise<(req: Request) => Promise<Response>>>();
 
-  async function getHandler(): Promise<(req: Request) => Promise<Response>> {
-    if (!handlerPromise) {
-      handlerPromise = import("mcp-handler").then(({ createMcpHandler }) =>
-        createMcpHandler((server) => opts.register(server), {}, { basePath: "/", maxDuration: opts.maxDuration ?? 60 }),
+  async function getHandler(operator: boolean): Promise<(req: Request) => Promise<Response>> {
+    let existing = handlers.get(operator);
+    if (!existing) {
+      existing = import("mcp-handler").then(({ createMcpHandler }) =>
+        createMcpHandler(
+          (server) => opts.register(server, { operator }),
+          {},
+          { basePath: "/", maxDuration: opts.maxDuration ?? 60 },
+        ),
       );
+      handlers.set(operator, existing);
     }
-    return handlerPromise;
+    return existing;
   }
 
   async function withAuthHeader(res: Response, rm?: string): Promise<Response> {
@@ -69,7 +97,7 @@ export function createMcpTransport(opts: McpTransportOptions) {
   }
 
   async function handler(request: Request): Promise<Response> {
-    const mcp = await getHandler();
+    const mcp = await getHandler(await (opts.isOperator?.(request) ?? operatorFromRequest(request)));
     const authHeader = request.headers.get("authorization");
     const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
     const rm =

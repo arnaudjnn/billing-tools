@@ -114,6 +114,24 @@ export function operatorConfig(): { emails: string[]; token: string | null } {
 }
 
 /**
+ * Is this REQUEST an operator's, judged without the auth context.
+ *
+ * `enforceOperator` reads AsyncLocalStorage, which is right at call time and unavailable to
+ * the two places that have to decide what to ADVERTISE — the REST tool list and the MCP
+ * transport picking which tool set to build. Both hold the raw request, so they ask here.
+ */
+export function operatorFromRequest(
+  request: Request,
+  principal?: { email?: string } | null,
+): boolean {
+  const { emails, token } = operatorConfig();
+  const presented = request.headers.get("x-operator-token")?.trim();
+  if (token && presented && presented === token) return true;
+  const email = principal?.email?.trim().toLowerCase();
+  return Boolean(email && emails.includes(email));
+}
+
+/**
  * The platform's own staff — and the ONE gate in this library that fails CLOSED.
  *
  * Everywhere else, an unanswerable question allows: `enforceAdmin` lets an org API key

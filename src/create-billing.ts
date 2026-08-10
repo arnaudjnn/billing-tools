@@ -1,7 +1,11 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { BillingAdapter, BillingConfig } from "./types.js";
 import { resolveConfig } from "./types.js";
-import { registerBillingTools, type RegisterBillingToolsOptions } from "./tools/register.js";
+import {
+  registerBillingTools,
+  OPERATOR_TOOL_NAMES,
+  type RegisterBillingToolsOptions,
+} from "./tools/register.js";
 import { createDispatcher } from "./dispatch.js";
 import { createToolListHandler, createToolDispatchHandler } from "./routes/rest.js";
 import { createMcpTransport } from "./routes/mcp.js";
@@ -267,7 +271,7 @@ export function createBilling(opts: CreateBillingOptions) {
 
   // ONE registrar used by both the dispatcher (REST shadow server) and the live
   // MCP server, so the two surfaces expose an identical tool set.
-  const register = (server: McpServer) => {
+  const register = (server: McpServer, ctx?: { operator: boolean }) => {
     registerBillingTools(server, {
       adapter: opts.adapter,
       config: resolved,
@@ -283,13 +287,22 @@ export function createBilling(opts: CreateBillingOptions) {
       usageLedger: ledger,
       members: { ...opts.members, invitations: invitationsWithEvents },
       notify,
+      // Absent ctx means "everything" — that is the REST dispatcher, which must be able to
+      // RUN an operator tool for an operator; what a caller is told exists is decided by
+      // the list handler and the MCP transport, and what they may actually do is decided by
+      // `enforceOperator` at call time either way.
+      ...(ctx && !ctx.operator ? { operatorTools: false as const } : {}),
     });
     opts.registerTools?.(server);
   };
 
   const dispatcher = createDispatcher(register);
 
-  const restList = createToolListHandler({ dispatcher, toolCosts: opts.toolCosts });
+  const restList = createToolListHandler({
+    dispatcher,
+    toolCosts: opts.toolCosts,
+    operatorTools: OPERATOR_TOOL_NAMES,
+  });
   // The payment gate, referenced lazily because it is composed further down (and only
   // ever called at request time). Wiring it HERE is what makes `billing.restDispatch`
   // answer an empty wallet with an offer instead of a dead end — the consumer gets it by

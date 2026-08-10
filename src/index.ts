@@ -672,4 +672,9 @@ export {
   type QuoteAsk,
 } from "./credit-quotes.js";
 export { sellCredits } from "./billing.js";
-export { currentOperatorToken, enforceOperator, operatorConfig } from "./auth.js";
+export {
+  currentOperatorToken,
+  enforceOperator,
+  operatorConfig,
+  operatorFromRequest,
+} from "./auth.js";

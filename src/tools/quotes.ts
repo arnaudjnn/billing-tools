@@ -25,6 +25,16 @@ const err = (text: string) => ({ isError: true as const, content: [{ type: "text
 export interface QuoteToolOptions {
   config: ResolvedConfig;
   notify?: Notify;
+  /**
+   * Register the OPERATOR half (`sell_credits`, `resolve_credit_quote`). Default true.
+   *
+   * `false` builds the customer's tool set: the two are still enforced by
+   * `enforceOperator` wherever they exist, so this is not a security boundary — it is an
+   * honesty one. A customer's tool list advertising "sell a workspace credits at a
+   * negotiated price" describes a capability they will never have, and an agent reading
+   * that list will try it.
+   */
+  operatorTools?: boolean;
 }
 
 export function registerQuoteTools(server: McpServer, adapter: BillingAdapter, opts: QuoteToolOptions) {
@@ -118,6 +128,8 @@ order. One open quote per workspace.`,
       return json({ quotes: await listCreditQuotes(adapter, auth.orgId) });
     },
   );
+
+  if (opts.operatorTools === false) return;
 
   server.tool(
     "sell_credits",

@@ -276,3 +276,63 @@ test("but a request naming nothing at all is still refused", async () => {
   assert.equal(res.ok, false);
   assert.equal(res.reason, "nothing_asked", "no size, no volume, nobody to answer");
 });
+
+// ── What a customer is TOLD exists ───────────────────────────────────────────
+//
+// The gate is `enforceOperator`, at call time, and it does not care what was advertised.
+// This is the other half: a tool list that offers "price somebody else's workspace" to a
+// customer describes a capability they will never have, and an agent reading that list
+// will spend a call finding out.
+
+import { registerBillingTools, OPERATOR_TOOL_NAMES } from "../dist/tools/register.js";
+import { createToolListHandler } from "../dist/routes/rest.js";
+
+function registeredNames(opts = {}) {
+  const names = new Set();
+  const server = { tool: (name) => void names.add(name) };
+  registerBillingTools(server, {
+    adapter: { async validateApiKey() { return { orgId: "org_1" }; }, async getOrgMetadata() { return {}; }, async setOrgMetadata() {} },
+    config: { baseUrl: "https://x.test" },
+    ...opts,
+  });
+  return names;
+}
+
+test("the customer's tool set leaves the operator half out", () => {
+  const all = registeredNames();
+  const customer = registeredNames({ operatorTools: false });
+
+  for (const name of OPERATOR_TOOL_NAMES) {
+    assert.ok(all.has(name), `${name} should exist in the full set`);
+    assert.equal(customer.has(name), false, `${name} must not be advertised to a customer`);
+  }
+  // And nothing else moved: hiding two tools is not an excuse to drop a third.
+  assert.equal(customer.size, all.size - OPERATOR_TOOL_NAMES.length);
+  assert.ok(customer.has("request_credit_quote"), "the ASK is the customer's own");
+});
+
+test("the REST list hides them from a caller who is not an operator", async () => {
+  const dispatcher = { getToolNames: () => ["get_credit_balance", ...OPERATOR_TOOL_NAMES] };
+  const list = createToolListHandler({
+    dispatcher,
+    toolCosts: {},
+    operatorTools: OPERATOR_TOOL_NAMES,
+  });
+
+  process.env.BILLING_OPERATOR_TOKEN = "optok_list";
+  const asCustomer = await (await list(new Request("https://x.test/api/v0"))).json();
+  assert.deepEqual(
+    asCustomer.tools.map((t) => t.name),
+    ["get_credit_balance"],
+  );
+
+  const asOperator = await (
+    await list(new Request("https://x.test/api/v0", { headers: { "x-operator-token": "optok_list" } }))
+  ).json();
+  assert.deepEqual(asOperator.tools.map((t) => t.name).sort(), [
+    "get_credit_balance",
+    "resolve_credit_quote",
+    "sell_credits",
+  ]);
+  delete process.env.BILLING_OPERATOR_TOKEN;
+});
