@@ -16,7 +16,8 @@
 // name in it. That is the point: an uncovered function is allowed, a SILENTLY uncovered one is
 // not. Writing this found four dead exports (the `default_incomplete` subscription trio and
 // the hook that drove it — deleted, not registered) and three consumer-facing functions on the
-// money path that no live section has ever called.
+// money path that no live section had ever called. One of those three, the retax handoff, is
+// now covered by section 03d — and this file is what said it was not.
 
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -150,8 +151,6 @@ const OFFLINE_ONLY = {
   webhookUrlFromArgv: "parses argv and reads BILLING_WEBHOOK_URL; no request, and tests/doctor-runner.test.mjs pins the parsing both consumers had drifted on",
 
   // ── GENUINELY UNPROVEN, and used by a consumer ──
-  updateCheckoutSessionTaxRates:
-    "GAP: the retax handoff — re-taxing an OPEN session once the typed country differs from the guess. A real Stripe mutation on the money path, used twice in scartoffie, and no live section has ever called it. It is the work Stripe Tax would otherwise do for 0.5%, so getting it wrong means a session priced at the wrong rate.",
   savedCardFromCheckoutSession:
     "GAP: reads the PaymentMethod off a completed setup session. Used twice in scartoffie; completing a session needs a browser, which is why no section reaches it — the same reason 05a subscribes directly.",
   createBillingSync:
@@ -159,8 +158,6 @@ const OFFLINE_ONLY = {
   createSyncRoute: "GAP: the route wrapper around `createBillingSync`, same reason",
   createWorkOSOrgMirror:
     "GAP: Pattern B — the DB-mirror pointer. The live harness is Pattern A (orgId IS the WorkOS org id), so the mirror's reconcile-on-read and idempotent externalId create are proven only by scartoffie's own suite and by production. Covering it here needs a Postgres the harness does not have.",
-  expireCheckoutSession:
-    "closes an abandoned session; Stripe expires open sessions itself in ~24h and an unconfirmed one has created nothing, so there is no state a live assertion could read",
 };
 
 test("the live coverage ledger accounts for every uncovered function", () => {
@@ -195,7 +192,7 @@ test("the ledger is measuring something", () => {
   assert.ok(toolBodies.length >= 6, `only ${toolBodies.length} tool files reached live`);
 });
 
-test("the GAPS are named, and there are five of them", () => {
+test("the GAPS are named, and there are four of them", () => {
   // Pinned so closing one is a deliberate edit here, and opening one cannot pass unnoticed.
   const gaps = Object.entries(OFFLINE_ONLY)
     .filter(([, why]) => why.startsWith("GAP:"))
@@ -206,6 +203,10 @@ test("the GAPS are named, and there are five of them", () => {
     "createSyncRoute",
     "createWorkOSOrgMirror",
     "savedCardFromCheckoutSession",
-    "updateCheckoutSessionTaxRates",
   ]);
+  // `updateCheckoutSessionTaxRates` was the fifth and is closed: section 03d re-taxes a real
+  // OPEN session and reads the rate ID back off it. `expireCheckoutSession` left the list at
+  // the same time, as that section's teardown — which is the shape a gap should close in,
+  // something the suite genuinely does rather than an entry somebody deleted.
+  assert.equal(gaps.length, 4);
 });

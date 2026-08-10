@@ -157,13 +157,23 @@ export async function run(ctx) {
   });
   defer(`checkout session ${session.sessionId}`, () => expireCheckoutSession(session.sessionId));
 
+  // The applied rates are NOT on `line_items` from a session retrieve — measured, not
+  // assumed: that shape carries `amount_tax` and no `taxes` array at all. They come from
+  // `listLineItems` with `data.taxes.rate` expanded, which is the only place the rate ID is
+  // readable. Asserting on the total alone would pass for a session taxed at the right
+  // PERCENTAGE by the wrong rate object, and the rate object is what carries the mandatory
+  // mention onto the invoice.
   const ratesOnSession = async () => {
-    const s = await stripe.checkout.sessions.retrieve(session.sessionId, { expand: ["line_items"] });
-    const item = s.line_items?.data?.[0];
+    const s = await stripe.checkout.sessions.retrieve(session.sessionId);
+    const items = await stripe.checkout.sessions.listLineItems(session.sessionId, {
+      expand: ["data.taxes.rate"],
+    });
+    const item = items.data[0];
     return {
       total: s.amount_total,
       net: s.amount_subtotal,
-      rates: (item?.taxes ?? []).map((t) => t.rate?.id ?? t.rate).filter(Boolean),
+      tax: item?.amount_tax ?? 0,
+      rates: (item?.taxes ?? []).map((t) => (typeof t.rate === "string" ? t.rate : t.rate?.id)).filter(Boolean),
     };
   };
 
@@ -171,7 +181,7 @@ export async function run(ctx) {
   ok(
     "it goes out at the seller's own rate, because no address exists yet",
     atCreation.rates.includes(domesticRates.rateIds[0]),
-    `${atCreation.rates.join(",")} — total ${eur(atCreation.total)}`,
+    `${atCreation.rates.join(",")} — ${eur(atCreation.total)} incl ${eur(atCreation.tax)} tax`,
   );
 
   // The customer types a country the seller is NOT registered in. Under OSS that is the
@@ -184,7 +194,7 @@ export async function run(ctx) {
   ok(
     "the OPEN session now carries the customer's rate instead",
     afterRetax.rates.includes(de.rateIds[0]) && !afterRetax.rates.includes(domesticRates.rateIds[0]),
-    `${afterRetax.rates.join(",")} — total ${eur(afterRetax.total)}`,
+    `${afterRetax.rates.join(",")} — ${eur(afterRetax.total)} incl ${eur(afterRetax.tax)} tax`,
   );
   ok(
     "and the total the browser renders moved with it",
@@ -200,7 +210,7 @@ export async function run(ctx) {
   ok(
     "an out-of-scope customer has the rate REMOVED, not merely replaced",
     cleared.rates.length === 0,
-    `${cleared.rates.length} rate(s) — total ${eur(cleared.total)}`,
+    `${cleared.rates.length} rate(s), ${eur(cleared.tax)} tax`,
   );
   ok(
     "so the total charged is exactly the net",
