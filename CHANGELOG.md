@@ -1,3 +1,14 @@
+# [25.0.0](https://github.com/arnaudjnn/billing-tools/compare/v24.0.1...v25.0.0) (2026-08-10)
+
+
+* fix(credits)!: an invoice ate the customer's own credits, and quote tools ignored the catalogue ([1ace761](https://github.com/arnaudjnn/billing-tools/commit/1ace761ace479c10b4c498400ab12a0995de1dd4))
+
+
+### BREAKING CHANGES
+
+* `ToolCapabilities` gains `quote`. A catalogue with no `sale: "quote"`
+plan no longer registers `accept_plan_quote`, `quote_plan_change` or `sell_credits`.
+
 ## [24.0.1](https://github.com/arnaudjnn/billing-tools/compare/v24.0.0...v24.0.1) (2026-08-10)
 
 
