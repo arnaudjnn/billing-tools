@@ -802,6 +802,10 @@ export function useBillingTaxId(): BillingTaxIdState {
   };
 }
 
+/** Where a session is in its lifecycle. Shared with the consumer's own render, which is why
+ *  it is exported: a form that submits while `syncing` submits a stale total. */
+export type CheckoutStatus = "idle" | "syncing" | "ready" | "error";
+
 // ── useCheckoutSession ───────────────────────────────────────────────────────
 // The lifecycle around BillingCheckoutSessionProvider: as the basket changes,
 // open the Checkout Session that prices it, hand back the one to mount, and say
@@ -970,140 +974,11 @@ export function useCheckoutSession(opts: {
   };
 }
 
-// ── useCheckout ──────────────────────────────────────────────────────────────
-// Owns the subscription LIFECYCLE for an embedded checkout so the consumer app
-// writes none of it: as the basket changes it creates the pending subscription,
-// then re-prices that same one (createSubscription → updateSubscription), and
-// cancels it on unmount (cancelSubscription). Debounced, race-guarded, and
-// staleness-gated — the client secret it hands back always matches the CURRENT
-// basket, so a stale amount can never be confirmed.
-//
-// The Stripe calls happen on the server (secret key), so the app passes them as
-// `create`/`update`/`cancel` — thin actions over billing-tools' checkout helpers.
-// The app owns the UI + copy (its natural home) and just renders from the state
-// this returns: wrap the form in <BillingCheckoutProvider clientSecret={…}> once
-// `status === "ready"`.
-
-export type CheckoutSync =
-  | { ok: true; clientSecret: string; subscriptionId: string }
-  | { ok: false; error: string };
-
-export type CheckoutStatus = "idle" | "syncing" | "ready" | "error";
-
-export function useCheckout(opts: {
-  /** Identity of the current basket (seats + interval). The hook re-syncs
-   *  whenever it changes; the app computes it, so the hook needs no pricing. */
-  basket: string;
-  /** Create the pending subscription for the current basket. */
-  create: () => Promise<CheckoutSync>;
-  /** Re-price the existing pending subscription (falls back to create if absent). */
-  update?: (subscriptionId: string) => Promise<CheckoutSync>;
-  /** Cancel the pending subscription on unmount / abandon. */
-  cancel?: (subscriptionId: string) => Promise<void>;
-  /** Debounce before syncing a CHANGED basket, ms. Default 500 (so holding a
-   *  stepper doesn't fire per click). The first sync never waits — nobody has
-   *  touched anything yet, so the delay would be pure spinner. */
-  debounceMs?: number;
-  /** Skip syncing while true — e.g. an empty basket below the minimum. */
-  paused?: boolean;
-}): {
-  clientSecret: string | null;
-  subscriptionId: string | null;
-  status: CheckoutStatus;
-  error: string | null;
-} {
-  const { basket, create, update, cancel, debounceMs = 500, paused = false } = opts;
-
-  const [state, setState] = React.useState<
-    { basket: string; clientSecret: string; subscriptionId: string } | null
-  >(null);
-  const [status, setStatus] = React.useState<CheckoutStatus>("idle");
-  const [error, setError] = React.useState<string | null>(null);
-
-  const latest = React.useRef(0);
-  // The live subscription to update/cancel. Kept in a ref so a change mid-flight
-  // still targets the right object.
-  const subIdRef = React.useRef<string | null>(null);
-  if (state) subIdRef.current = state.subscriptionId;
-
-  React.useEffect(() => {
-    if (paused) return;
-    const ticket = ++latest.current;
-    setStatus("syncing");
-    setError(null);
-    const run = async () => {
-      const existing = subIdRef.current;
-      const r = existing && update ? await update(existing) : await create();
-      if (ticket !== latest.current) return; // superseded by a newer basket
-      if (r.ok) {
-        subIdRef.current = r.subscriptionId;
-        setState({ basket, clientSecret: r.clientSecret, subscriptionId: r.subscriptionId });
-        setStatus("ready");
-      } else {
-        setError(r.error);
-        setStatus("error");
-      }
-    };
-    // Only a CHANGED basket waits out the debounce; the first sync is a page
-    // load, not a customer drumming on the stepper.
-    if (!subIdRef.current) {
-      void run();
-      return;
-    }
-    const timer = setTimeout(run, debounceMs);
-    return () => clearTimeout(timer);
-    // Keyed by the basket it prices; the callbacks are treated as stable.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [basket, paused]);
-
-  // Abandon: cancel the still-pending subscription when the flow unmounts.
-  React.useEffect(() => {
-    return () => {
-      const id = subIdRef.current;
-      if (id && cancel) void cancel(id);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Only surface the secret when it matches the CURRENT basket; while a change is
-  // in flight the previous secret is withheld (status stays "syncing").
-  const current = state?.basket === basket ? state : null;
-  return {
-    clientSecret: current?.clientSecret ?? null,
-    subscriptionId: current?.subscriptionId ?? null,
-    status: current ? "ready" : status,
-    error,
-  };
-}
-
-// The session hook. Re-exported here so `@arnaudjnn/billing-tools/ui` is the
-// single client entry point; the server half is `resolveSession()` from the
-// package root.
-export {
-  SessionProvider,
-  useSession,
-  ANONYMOUS_SESSION,
-  type BillingSession,
-  type SessionUser,
-} from "./session.js";
-
-// ── useCheckoutTax ───────────────────────────────────────────────────────────
-// Keeps an open Checkout Session's tax correct as the buyer types their address.
-//
-// This is the client half of computing tax locally instead of paying for Stripe
-// Tax. The session is created with the seller's domestic rate, because at
-// creation nobody knows where the buyer is; the rate is only knowable once the
-// address element has a country. Without this hook the session keeps the rate it
-// was born with, and a German buyer is charged Italian VAT.
-//
-// The server work — resolve the rate, apply it to the line items — is the app's
-// `retax` action over `taxRatesFor` + `updateCheckoutSessionTaxRates`. It runs
-// inside `runServerUpdate` so Stripe re-reads the session afterwards and every
-// total on screen (`useCheckoutTotals`) refreshes with it.
-//
-// Note what this deliberately does NOT do: write the tax id to the customer.
-// `updateTaxIdInfo` belongs to `useBillingTaxId`, and only when a number was
-// actually collected — an app that shows no tax field must not push an empty one.
+// `useCheckout` used to live here: a hook owning the create → re-price → cancel lifecycle of
+// a `default_incomplete` subscription. It went with that path (see the header of
+// `checkout.ts`), because what it orchestrated no longer exists and nothing mounted it —
+// `useCheckoutSession` below is the Checkout-Session equivalent, and it is what both
+// consumers use.
 
 export type CheckoutTaxInput = {
   country: string;
