@@ -336,3 +336,39 @@ test("an oversized metadata bag is dropped, and the ask survives without it", as
   const [filed] = await (await import("../dist/plan-request.js")).listPlanRequests(a, "org_1");
   assert.equal(filed.metadata, undefined);
 });
+
+// ── An invoice eats the customer's own credits, and this is the arithmetic that stops it ──
+//
+// Measured on a real account before this existed: 600 000 credits at €4 200 invoiced for
+// €4 195, because Stripe applied the 500 credits the customer was already holding.
+// `subtotal 420000, starting_balance -500, amount_due 419500, ending_balance 0` — they paid
+// less money AND lost credits they had already bought, which is the one outcome nobody
+// would have agreed to. There is no per-invoice flag to refuse it (it happens at
+// finalization), so the fix is to grant back what the invoice ate.
+
+import { creditsOwedFor } from "../dist/billing.js";
+
+test("an invoice that consumed a credit balance grants the balance back", () => {
+  assert.equal(
+    creditsOwedFor({ metadata: { credits: "600000" }, starting_balance: -500 }),
+    600_500,
+    "sold plus eaten — the customer ends where the deal said they would",
+  );
+});
+
+test("an untouched balance grants exactly what was sold", () => {
+  assert.equal(creditsOwedFor({ metadata: { credits: "600000" }, starting_balance: 0 }), 600_000);
+  assert.equal(creditsOwedFor({ metadata: { credits: "1000" } }), 1_000);
+});
+
+test("a POSITIVE starting balance is a debt, not a credit, and grants nothing extra", () => {
+  // Stripe uses the sign for direction: negative is money the customer holds, positive is
+  // money they owe. Treating the second as a credit would hand out free credits.
+  assert.equal(creditsOwedFor({ metadata: { credits: "1000" }, starting_balance: 250 }), 1_000);
+});
+
+test("an invoice that sells no credits grants none, whatever its balance did", () => {
+  // Every subscription invoice on the account passes through the same branch.
+  assert.equal(creditsOwedFor({ metadata: {}, starting_balance: -5000 }), 0);
+  assert.equal(creditsOwedFor({ starting_balance: -5000 }), 0);
+});

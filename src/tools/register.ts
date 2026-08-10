@@ -173,14 +173,16 @@ export function registerBillingTools(server: McpServer, opts: RegisterBillingToo
     ...opts.members,
   });
   registerWorkspaceTools(server, opts.adapter);
-  // The commercial conversation. Registered for every catalogue rather than gated on
-  // `sale: "quote"`: a deployment can be asked for a volume price on any plan, and the one
-  // that sells a quote-only tier is simply the one that expects it.
-  registerQuoteTools(server, opts.adapter, {
-    config,
-    notify: opts.notify,
-    ...(opts.operatorTools === false ? { operatorTools: false as const } : {}),
-  });
+  // Custom pricing, gated by the catalogue exactly as seats are: `sale: "quote"` is a plan
+  // saying "this one is priced by a human", and a catalogue with none has no conversation
+  // for these to carry.
+  if (caps.quote) {
+    registerQuoteTools(server, opts.adapter, {
+      config,
+      notify: opts.notify,
+      ...(opts.operatorTools === false ? { operatorTools: false as const } : {}),
+    });
+  }
   if (opts.profileTools !== false) registerProfileTools(server, opts.adapter);
   if (opts.plans) {
     // `list_plans` and `get_plan` are READS and always register: "what is on offer"

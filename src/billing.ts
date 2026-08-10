@@ -682,6 +682,34 @@ export type PurchaseResult =
  * step with the first, an unpaid quote hands over nothing, and a refund reverses through the
  * same machinery as any other invoice.
  */
+/**
+ * What a credit invoice must ACTUALLY grant, once Stripe has taken its bite.
+ *
+ * Stripe applies a customer's credit balance to any invoice it finalizes, and this
+ * library's wallet IS that balance — so an invoice for 600 000 credits at €4 200 was
+ * settled €5 cheaper out of the 500 credits the customer was already holding. Measured on
+ * a real account: `subtotal 420000, starting_balance -500, amount_due 419500,
+ * ending_balance 0`. They pay less money and LOSE credits they had already bought, which
+ * is the one outcome nobody would agree to.
+ *
+ * There is no per-invoice flag to refuse that — it happens at finalization. So the fix is
+ * on the other side: grant what was sold PLUS whatever the invoice ate, which puts the
+ * customer exactly where the deal said they would be. `starting_balance` is negative when
+ * a credit was applied, and is in minor units, which is the same unit as a credit.
+ *
+ * The same arithmetic serves every invoiced purchase — a quote, a `buy_credits --method
+ * invoice`, an auto-reload — which is why it lives here rather than at three call sites.
+ */
+export function creditsOwedFor(invoice: {
+  metadata?: { credits?: string | null } | null;
+  starting_balance?: number | null;
+}): number {
+  const sold = parseInt(invoice.metadata?.credits ?? "0", 10);
+  if (!Number.isFinite(sold) || sold <= 0) return 0;
+  const eaten = invoice.starting_balance && invoice.starting_balance < 0 ? -invoice.starting_balance : 0;
+  return sold + eaten;
+}
+
 export async function sellCredits(
   stripeCustomerId: string,
   orgId: string,

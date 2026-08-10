@@ -754,6 +754,15 @@ export interface ToolCapabilities {
   lifecycle: boolean;
   /** `get_usage`, `get_usage_limits` — any plan includes or paces usage. */
   usage: boolean;
+  /**
+   * Custom pricing: `accept_plan_quote` for the customer, `quote_plan_change` and
+   * `sell_credits` for an operator.
+   *
+   * Declared by `sale: "quote"` on any plan — a catalogue that sells everything
+   * self-serve has no conversation to price, and three tools for one it cannot have is
+   * the same false advertisement `seats` already refuses to make.
+   */
+  quote: boolean;
 }
 
 /** Every group on. What a consumer that passes no catalogue keeps getting. */
@@ -764,6 +773,7 @@ export const ALL_TOOL_CAPABILITIES: ToolCapabilities = {
   seats: true,
   lifecycle: true,
   usage: true,
+  quote: true,
 };
 
 export function toolCapabilities(plans: PlanCatalog): ToolCapabilities {
@@ -780,6 +790,10 @@ export function toolCapabilities(plans: PlanCatalog): ToolCapabilities {
     // a plan that paces an uncapped wallet still needs the usage tools to say
     // when. Enterprise (`cap: wallet` + a weekly limit) is exactly that shape.
     usage: any((m) => m.cap.kind !== "wallet" || m.limits.rate.length > 0),
+    // The plan that cannot be bought is the plan somebody has to be quoted for. A
+    // catalogue where everything is self-serve has no such conversation, and the tools
+    // that carry one would be three more things a caller is told about and refused.
+    quote: any((m) => m.sale === "quote"),
   };
 }
 

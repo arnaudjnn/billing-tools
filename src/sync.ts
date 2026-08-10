@@ -1,6 +1,6 @@
 import type Stripe from "stripe";
 import { pollStripeEvents, pollWorkOSEvents } from "./events.js";
-import { grantCredits, getStripe } from "./billing.js";
+import { creditsOwedFor, grantCredits, getStripe } from "./billing.js";
 import {
   grantFor,
   planForPriceId,
@@ -295,8 +295,10 @@ export function createStripeEventHandler(opts: {
       // It is not a subscription grant, so it is settled here and returns — before the
       // reason filter below, which is what dropped it entirely: the customer paid the
       // invoice Stripe emailed them and nothing credited the wallet.
-      const purchased = parseInt(invoice.metadata?.credits ?? "0", 10);
-      if (Number.isFinite(purchased) && purchased > 0 && invoice.customer) {
+      // Sold PLUS eaten: Stripe settles an invoice out of the customer's credit balance,
+      // and that balance is this library's wallet. See `creditsOwedFor`.
+      const purchased = creditsOwedFor(invoice);
+      if (purchased > 0 && invoice.customer) {
         await grantCredits(
           invoice.customer,
           purchased,

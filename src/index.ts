@@ -663,7 +663,11 @@ export {
 // Selling credits at a price nobody published — the Enterprise conversation, as a record.
 // `sellCredits` is the money half: the ONE path here where the amount invoiced and the
 // credits granted are allowed to be different numbers.
-export { sellCredits } from "./billing.js";
+// `creditsOwedFor` beside it: what an invoice must actually grant once Stripe has settled
+// part of it out of the customer's own credit balance. Exported because a consumer that
+// handles `invoice.paid` itself needs the same arithmetic, and getting it wrong destroys
+// credits somebody paid for.
+export { creditsOwedFor, sellCredits } from "./billing.js";
 export { markPlanQuoteAccepted, quotePlanRequest } from "./plan-request.js";
 export {
   currentOperatorToken,

@@ -586,6 +586,12 @@ authorities:
 | `accept_plan_quote` | admin | takes it, and pays it |
 | `sell_credits` | **operator** | the same sale with no request behind it |
 
+**Gated by the catalogue, like everything else.** `toolCapabilities` gains `quote`, derived
+from `sale: "quote"` on any plan: a catalogue where everything is self-serve has no
+conversation to price, and three tools for one it cannot have is the same false
+advertisement the seat group already refuses to make. gtm-tools registers none of them;
+scartoffie registers all three because its Enterprise tier is quote-only.
+
 **`metadata` is a BAG, not fields.** The library acts on none of it: one consumer asks for
 `totalEstimatedSeats`, the next will want a region, a use case, a contract start. Typing each
 one would make this package the place a consumer edits to add a question to its own form,
@@ -616,6 +622,17 @@ mention missing from the invoice most likely to be audited. The currency AND the
 declaration both come off that one object, so neither can be a second answer: manual rates
 ride the ITEM, `automatic_tax` rides the invoice, exactly as `purchaseCredits` does. Measured
 live in `scripts/live/13-*.mjs` at €4 200 → €5 124 with `22% "IVA"` on the rate.
+
+**An invoice EATS the customer's own credits, and `creditsOwedFor` is what gives them back.**
+Stripe applies a customer's credit balance to any invoice it finalizes, and this library's
+wallet IS that balance. Measured on a real account: a €4 200 sale of 600 000 credits came out
+`subtotal 420000, starting_balance -500, amount_due 419500, ending_balance 0` — the customer
+would have paid €5 less and LOST the 500 credits they were already holding, which is the one
+outcome nobody would agree to. There is no per-invoice flag to refuse it, so the fix is on
+the other side: `invoice.paid` grants what was sold PLUS what the invoice consumed. The rule
+lives beside `grantCredits` because it belongs to every invoiced purchase — a quote, a
+`buy_credits --method invoice`, an auto-reload — not to the quote path that happened to
+expose it.
 
 **The credits are granted by payment, never by acceptance.** `metadata.credits` on the
 invoice is the negotiated quantity and the amount is the negotiated price — the one place in

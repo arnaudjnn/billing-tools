@@ -35,6 +35,14 @@ const PLANS = {
     replenish: { purchase: {}, autoReload: { threshold: 500, reloadTo: 5000 }, request: {} },
     sale: "self_serve",
   },
+  // `sale: "quote"` is an axis VALUE this catalogue was missing, and the custom-pricing
+  // tools are gated on it exactly as the seat tools are on `sells: seats`. Without a
+  // quote-only plan here, "every axis" was not every axis.
+  enterprise: {
+    sells: { kind: "flat", price: { monthly: 0 } },
+    cap: { kind: "wallet" },
+    sale: "quote",
+  },
 };
 
 // The two real consumers, reduced to the axes that decide the tool surface. These
@@ -72,6 +80,16 @@ const SCARTOFFIE = {
     limits: { members: 100 },
     sale: "self_serve",
   },
+  // The real catalogue's third plan, and the reason this consumer has the custom-pricing
+  // tools while gtm-tools does not: a tier whose price is a conversation.
+  enterprise: {
+    sells: { kind: "seats", intervals: ["yearly"], seatTypes: { standard: { price: { monthly: 1800, yearly: 21600 }, min: 1 } } },
+    grant: { kind: "none" },
+    cap: { kind: "wallet" },
+    replenish: { purchase: {}, autoReload: { threshold: 5000, reloadTo: 50000 } },
+    limits: { members: null, rate: [{ every: "week", credits: 200000 }] },
+    sale: "quote",
+  },
 };
 
 const SEAT_TOOLS = ["list_seats", "assign_seat_type"];
@@ -80,6 +98,7 @@ const SEAT_TOOLS = ["list_seats", "assign_seat_type"];
 // above rather than folded in with them. It used to register unconditionally, so a
 // catalogue that sells no seat at any price advertised "ask for a bigger one", a tool whose
 // best possible answer there is a refusal.
+const QUOTE_TOOLS = ["accept_plan_quote", "quote_plan_change", "sell_credits"];
 const SEAT_ASK = "request_seat_change";
 const TOP_UP_TOOLS = [
   "list_top_up_requests",
@@ -299,7 +318,7 @@ test("the two shapes differ by exactly the seven tools", () => {
   const gtm = names({ plans: GTM_TOOLS });
   const scart = names({ plans: SCARTOFFIE });
   const extra = [...scart].filter((n) => !gtm.has(n)).sort();
-  assert.deepEqual(extra, [...SEAT_TOOLS, SEAT_ASK, ...TOP_UP_TOOLS].sort());
+  assert.deepEqual(extra, [...SEAT_TOOLS, SEAT_ASK, ...TOP_UP_TOOLS, ...QUOTE_TOOLS].sort());
   // 49 − 8. Both numbers are quoted in AGENTS.md, so both are asserted here. The six member
   // tools are on both sides on purpose: who is in a workspace is not something a CATALOGUE
   // can decide, so they are gated on the adapter and the invitation service instead.
@@ -307,11 +326,11 @@ test("the two shapes differ by exactly the seven tools", () => {
   // the answer on exactly the plans that have no per-member allowance to top up, which is
   // the pooled catalogue's only rung.
   //
-  // The CUSTOM-PRICING tools are on both sides for the same reason as the member ones: any
-  // deployment can be asked for a volume price, and `sale: "quote"` describes the plan that
-  // EXPECTS the question rather than the only one allowed to be asked it. The ASK itself is
-  // not among them — it is `request_plan_change`, which was already on both sides.
-  assert.equal(gtm.size, 41);
+  // The CUSTOM-PRICING tools are gated too: gtm-tools sells everything self-serve, so it has
+  // no conversation to price and is told about none of them. The ASK is not among them — it
+  // is `request_plan_change`, which is on both sides, because wanting a bigger plan is the
+  // same act whether or not the target has a published price.
+  assert.equal(gtm.size, 38);
   assert.equal(scart.size, 49);
 });
 

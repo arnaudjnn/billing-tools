@@ -1,5 +1,6 @@
 import type Stripe from "stripe";
-import { getStripe, grantCredits } from "../billing.js";
+import {
+  creditsOwedFor, getStripe, grantCredits } from "../billing.js";
 
 // Stripe webhook handler. Grants credits on one-time top-up completion.
 // Subscription events are intentionally NOT handled here — subscription/plan
@@ -98,7 +99,9 @@ export function createStripeWebhookHandler(opts: WebhookOptions = {}) {
       // emailed invoice was paid by the customer and credited to nobody.
       const invoice = event.data.object as Stripe.Invoice & { customer?: string | null };
       const customerId = customerIdOf(invoice.customer as string | { id: string });
-      const credits = creditsOn(event);
+      // What was SOLD, plus whatever the customer's own balance was made to pay — see
+      // `creditsOwedFor`. Without the second half, buying credits destroys credits.
+      const credits = creditsOwedFor(invoice);
       if (customerId && credits) {
         await grantCredits(
           customerId,
