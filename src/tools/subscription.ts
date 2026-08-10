@@ -333,8 +333,16 @@ the ask for whoever can. The plan defaults to the next one up.`,
         .max(140)
         .optional()
         .describe("A line for the owner, e.g. why"),
+      metadata: z
+        .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
+        .optional()
+        .describe(
+          "Anything this deployment's own form collects — e.g. {\"totalEstimatedSeats\": 12}. " +
+            "Stored verbatim and acted on by nothing here; kept small, since the whole queue " +
+            "shares one metadata value",
+        ),
     },
-    async ({ plan, note }) => {
+    async ({ plan, note, metadata }) => {
       const auth = await enforceAccess(adapter);
       if ("isError" in auth) return auth;
       // Whoever is asking is who it is FROM: unlike a top-up there is no `member_id`
@@ -348,6 +356,7 @@ the ask for whoever can. The plan defaults to the next one up.`,
         memberId,
         plans: opts.plans,
         notify: opts.notify,
+        ...(metadata ? { metadata } : {}),
         currentPlan: current,
         ...(plan ? { plan } : {}),
         ...(note ? { note } : {}),

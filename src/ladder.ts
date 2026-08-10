@@ -179,10 +179,17 @@ export interface PlanRequest {
   /** Why they are asking, in their words. Optional, capped at 140 chars by the caller. */
   note?: string;
   /**
-   * How many people they expect. The one number a customer knows before seeing a price —
-   * which is why it is the only field the Enterprise form asks for.
+   * Whatever the deployment's own form collected, verbatim.
+   *
+   * A bag rather than fields, because the library ACTS on none of it: `totalEstimatedSeats`
+   * is what one consumer asks for and the next will want a region, a use case, a contract
+   * start. Typing each one here would make this package the place a consumer edits to add a
+   * question to its own form, which is the opposite of what a seam is for.
+   *
+   * Kept small on purpose — the whole queue shares one 600-character metadata value, so an
+   * oversized bag is dropped rather than allowed to evict somebody's pending ask.
    */
-  seats?: number;
+  metadata?: Record<string, string | number | boolean>;
   /**
    * Who to answer, when it is not simply the account they signed up with.
    *

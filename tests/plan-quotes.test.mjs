@@ -152,7 +152,7 @@ test("an untaxed deployment stays untaxed, explicitly", async () => {
   assert.equal(sent.invoice.automatic_tax, undefined);
 });
 
-test("the Enterprise ask is a PLAN request, with seats and a contact on it", async () => {
+test("the Enterprise ask is a PLAN request, with the form's own fields on it", async () => {
   // No second verb, no second store. A quote-only plan is one a customer cannot buy
   // self-serve, and asking to move to it is the same act as asking to move to any other —
   // which is why it queues where every other upgrade ask already queued.
@@ -165,13 +165,15 @@ test("the Enterprise ask is a PLAN request, with seats and a contact on it", asy
     },
     currentPlan: "pro",
     plan: "enterprise",
-    seats: 12,
+    // A BAG, not fields: the library acts on none of it, and the next consumer will want a
+    // region or a start date rather than a headcount.
+    metadata: { totalEstimatedSeats: 12 },
     contact: { firstName: "Giulia", lastName: "Rossi", email: "giulia@acme.it" },
   });
 
   assert.equal(res.ok, true);
   const [filed] = await (await import("../dist/plan-request.js")).listPlanRequests(a, "org_1");
-  assert.equal(filed.seats, 12, "the one number a customer knows before seeing a price");
+  assert.deepEqual(filed.metadata, { totalEstimatedSeats: 12 });
   assert.equal(filed.contact.email, "giulia@acme.it");
   assert.equal(filed.status, "pending", "nothing is priced yet");
 });
@@ -310,4 +312,27 @@ test("a declined card leaves the finalized invoice behind, payable", async () =>
   assert.equal(res.status, "invoiced");
   assert.equal(res.invoiceId, "in_1");
   assert.equal(res.emailed, false, "it was never sent — it was meant to be charged");
+});
+
+
+test("an oversized metadata bag is dropped, and the ask survives without it", async () => {
+  // The whole queue shares one 600-character value. A bag big enough to evict somebody's
+  // pending request must not: losing the form's extras is recoverable, losing the question
+  // is not.
+  const a = fakeAdapter({ members: ["u_admin"] });
+  const plans = {
+    pro: { sells: { kind: "flat", price: { monthly: 1800 } }, cap: { kind: "pool", credits: 1000 }, sale: "self_serve" },
+    enterprise: { sells: { kind: "flat", price: { monthly: 0 } }, cap: { kind: "wallet" }, sale: "quote" },
+  };
+  const res = await requestPlanChange(a, "org_1", {
+    memberId: "u_admin",
+    plans,
+    currentPlan: "pro",
+    plan: "enterprise",
+    metadata: { essay: "x".repeat(400) },
+  });
+
+  assert.equal(res.ok, true, "the ask is filed regardless");
+  const [filed] = await (await import("../dist/plan-request.js")).listPlanRequests(a, "org_1");
+  assert.equal(filed.metadata, undefined);
 });

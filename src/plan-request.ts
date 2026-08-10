@@ -207,8 +207,8 @@ export async function requestPlanChange(
     /** Defaults to the next plan up. */
     plan?: string;
     note?: string;
-    /** How many people they expect — the Enterprise form's only field. */
-    seats?: number;
+    /** Whatever the consumer's form collected. See `PlanRequest["metadata"]`. */
+    metadata?: Record<string, string | number | boolean>;
     /** Who to answer. Taken from the signed-in user by the consumer, never typed. */
     contact?: PlanRequest["contact"];
     id?: string;
@@ -258,7 +258,7 @@ export async function requestPlanChange(
     status: "pending",
     createdAt: new Date(input.now ?? Date.now()).toISOString(),
     ...(input.note ? { note: input.note.slice(0, 140) } : {}),
-    ...(input.seats ? { seats: Math.round(input.seats) } : {}),
+    ...(fitMetadata(input.metadata) ?? {}),
     ...(input.contact ? { contact: input.contact } : {}),
   };
   if (!(await write(adapter, orgId, [...list.filter((r) => r.id !== request.id), request]))) {
@@ -266,6 +266,23 @@ export async function requestPlanChange(
   }
   notifyRequested(input.notify, orgId, request);
   return { ok: true, id: request.id, plan: target };
+}
+
+/**
+ * Keep a metadata bag small enough that it cannot evict somebody's pending ask.
+ *
+ * The queue lives in ONE 600-character value, and `pack` sheds notes and settled records to
+ * fit — but a single oversized bag would push a real request out on every write. So a bag
+ * that does not fit is DROPPED and the ask survives without it: losing the form's extras is
+ * recoverable, losing the question is not.
+ */
+const METADATA_LIMIT = 300;
+
+function fitMetadata(
+  metadata: Record<string, string | number | boolean> | undefined,
+): { metadata: Record<string, string | number | boolean> } | null {
+  if (!metadata || !Object.keys(metadata).length) return null;
+  return JSON.stringify(metadata).length <= METADATA_LIMIT ? { metadata } : null;
 }
 
 /**

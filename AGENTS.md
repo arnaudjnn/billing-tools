@@ -580,10 +580,18 @@ authorities:
 
 | | who | what |
 |---|---|---|
-| `request_plan_change` | admin | the ask. `seats` optional; `contact` comes from the SIGNED-IN user, never typed |
+| `request_plan_change` | admin | the ask. `metadata` is the consumer's own form, verbatim; `contact` comes from the SIGNED-IN user, never typed |
 | `quote_plan_change` | **operator** | a quantity and a price PER CREDIT |
 | `accept_plan_quote` | admin | takes it, and pays it |
 | `sell_credits` | **operator** | the same sale with no request behind it |
+
+**`metadata` is a BAG, not fields.** The library acts on none of it: one consumer asks for
+`totalEstimatedSeats`, the next will want a region, a use case, a contract start. Typing each
+one would make this package the place a consumer edits to add a question to its own form,
+which is the opposite of what a seam is for. Bounded at 300 characters and DROPPED rather
+than truncated when it does not fit — the whole queue shares one 600-character metadata
+value, so an oversized bag would evict somebody's pending ask, and losing the extras is
+recoverable where losing the question is not.
 
 **Per credit, not per deal.** That is what a negotiation is actually about — "we can do
 0.7¢" survives the customer changing how much they want, and a total does not. The total is

@@ -268,8 +268,8 @@ export function createBoundApi(deps: BoundApiDeps) {
         pending: async (orgId: string, memberId: string) =>
           pendingPlanRequest(adapter, orgId, memberId, { plans, currentPlan: await planOf(orgId) }),
         /**
-         * `seats` and `contact` are what a QUOTE-only target needs: how many people they
-         * expect, and who to answer. The contact is taken from the signed-in user by the
+         * `metadata` and `contact` are what a QUOTE-only target needs: whatever the form
+         * collected, and who to answer. The contact is taken from the signed-in user by the
          * consumer — it is never typed into a form, because the account already knows it.
          */
         ask: async (
@@ -278,7 +278,8 @@ export function createBoundApi(deps: BoundApiDeps) {
           opts: {
             plan?: string;
             note?: string;
-            seats?: number;
+            /** Whatever the consumer's own form collected. The library acts on none of it. */
+            metadata?: Record<string, string | number | boolean>;
             contact?: { firstName: string; lastName: string; email: string };
           } = {},
         ) =>
