@@ -871,6 +871,23 @@ export function validateBasket(
 }
 
 /**
+ * A basket that may not be bought, thrown from the paths that would buy it.
+ *
+ * `changePlan` wraps the same `problems` in a `PlanChangeError("invalid_basket")` because
+ * it can refuse for half a dozen other reasons and the caller branches on the code; a
+ * Checkout Session has exactly this one refusal, so it gets its own type rather than a
+ * plain Error a consumer has to string-match.
+ */
+export class InvalidBasketError extends Error {
+  readonly problems: BasketProblem[];
+  constructor(problems: BasketProblem[], message?: string) {
+    super(message ?? problems.map((p) => describeBasketProblem(p)).join("; "));
+    this.name = "InvalidBasketError";
+    this.problems = problems;
+  }
+}
+
+/**
  * One-line summary of a basket problem, for an error a customer may read.
  *
  * English unless a `messages` bundle says otherwise — the same bundle the pricing

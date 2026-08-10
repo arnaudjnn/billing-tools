@@ -182,3 +182,122 @@ test("requiring a tax id is part of a reused session's identity", async () => {
   const { params } = await open({ uiMode: "hosted", taxIdRequired: true, reuse: true });
   assert.equal(params.tax_id_collection.required, "if_supported");
 });
+
+// ── The basket, refused before a session exists ──────────────────────────────
+//
+// `changePlan` has validated the basket since it was written; this path had not. So the
+// two ways of buying the SAME basket disagreed, and the one that disagreed was the FIRST
+// purchase — where a stepper in a browser was the only thing enforcing a limit. Every
+// declared ceiling was enforced on an upgrade and by nothing at all on signup.
+
+const LIMITED = {
+  team: {
+    sells: {
+      kind: "seats",
+      minSeats: 2,
+      maxSeats: 5,
+      seatTypes: {
+        standard: { price: { monthly: 2000, yearly: 20000 }, min: 1 },
+        // Declared unique. Nothing stopped a request buying fifty.
+        lead: { price: { monthly: 9000, yearly: 90000 }, max: 1 },
+      },
+    },
+    grant: { kind: "none" },
+    cap: { kind: "wallet" },
+    sale: "self_serve",
+    limits: { members: 4 },
+  },
+  legacy: {
+    sells: { kind: "seats", seatTypes: { standard: { price: { monthly: 1000, yearly: 10000 } } } },
+    grant: { kind: "none" },
+    cap: { kind: "wallet" },
+    sale: "legacy",
+  },
+};
+
+__setPlanPricesForTests(
+  new Map([
+    [lookupKeyFor("pro", "monthly", "standard"), "price_std"],
+    [lookupKeyFor("team", "monthly", "standard"), "price_team_std"],
+    [lookupKeyFor("team", "monthly", "lead"), "price_team_lead"],
+  ]),
+);
+
+const openLimited = async (seats, extra = {}) => {
+  const stripe = fakeStripe();
+  __setStripeForTests(stripe);
+  try {
+    await createCheckoutSession({
+      plans: LIMITED,
+      plan: "team",
+      interval: "monthly",
+      seats,
+      returnUrl: "https://t.local/done",
+      customerId: "cus_1",
+      currency: "eur",
+      metadata: { org_id: "org_1" },
+      ...extra,
+    });
+    return { error: null, created: stripe.sessions.length };
+  } catch (e) {
+    return { error: e, created: stripe.sessions.length };
+  }
+};
+
+test("a seat type declared unique cannot be bought fifty times", async () => {
+  const { error, created } = await openLimited({ standard: 1, lead: 50 });
+  assert.equal(created, 0, "no session is opened for a basket that may not be bought");
+  assert.equal(error?.name, "InvalidBasketError");
+  assert.deepEqual(
+    error.problems.map((p) => p.code),
+    ["seat_type_limit", "seat_limit", "member_limit"],
+    "every ceiling the catalogue declares, not just the first",
+  );
+});
+
+test("the total minimum and the member limit are both enforced, not one or the other", async () => {
+  // A stepper reading `maxSeats ?? limits.members` picks ONE of these; the catalogue
+  // declares both and the tighter one is what the plan actually sells.
+  const below = await openLimited({ standard: 1 });
+  assert.deepEqual(below.error.problems, [{ code: "below_minimum", min: 2, got: 1 }]);
+
+  const overMembers = await openLimited({ standard: 5 });
+  assert.deepEqual(
+    overMembers.error.problems,
+    [{ code: "member_limit", max: 4, got: 5 }],
+    "5 is inside maxSeats and outside limits.members",
+  );
+});
+
+test("a plan kept only for existing subscribers cannot be bought by anybody new", async () => {
+  const stripe = fakeStripe();
+  __setStripeForTests(stripe);
+  await assert.rejects(
+    () =>
+      createCheckoutSession({
+        plans: LIMITED,
+        plan: "legacy",
+        interval: "monthly",
+        seats: { standard: 1 },
+        returnUrl: "https://t.local/done",
+        customerId: "cus_1",
+      }),
+    (e) => e.name === "InvalidBasketError" && e.problems[0].code === "not_purchasable",
+  );
+  assert.equal(stripe.sessions.length, 0);
+});
+
+test("an invalid basket is not REMEMBERED either", async () => {
+  // The refusal is before the reuse cache. Behind it, one crafted request would poison the
+  // key for every later caller asking for the same basket.
+  const first = await openLimited({ standard: 1, lead: 50 }, { reuse: true });
+  assert.equal(first.error?.name, "InvalidBasketError");
+  const second = await openLimited({ standard: 1, lead: 50 }, { reuse: true });
+  assert.equal(second.error?.name, "InvalidBasketError", "still refused, not served from cache");
+});
+
+test("a valid basket still opens exactly one session", async () => {
+  const { error, created } = await openLimited({ standard: 2, lead: 1 });
+  assert.equal(error, null, error?.message);
+  assert.equal(created, 1);
+});

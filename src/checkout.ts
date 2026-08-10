@@ -8,6 +8,7 @@ import {
   type PlanCatalog,
 } from "./plans.js";
 import type { BillingInterval } from "./plans.js";
+import { describeBasketProblem, InvalidBasketError, validateBasket } from "./plan-model.js";
 import { defaultPaymentMethodConfig } from "./payment-method-config.js";
 import { taxFor } from "./tax.js";
 import type { BillingConfig } from "./types.js";
@@ -252,6 +253,27 @@ export async function createCheckoutSession(opts: {
    */
   config?: BillingConfig;
 }): Promise<CheckoutSessionResult> {
+  // A basket the catalogue does not permit never becomes a session — refused BEFORE the
+  // reuse cache, so an invalid one is not remembered either.
+  //
+  // `changePlan` has validated since it was written, and this path had not, which made the
+  // two ways of buying the same basket disagree: every declared limit — `maxSeats`, a seat
+  // type's own `max`, `limits.members`, the plan's `sale` — was enforced on an UPGRADE and
+  // by nothing at all on a first purchase. A stepper is a UI, so the only gate on the money
+  // path was a number the browser sent. Fifty of a seat declared unique was one crafted
+  // request away, and it would have been a real subscription at a real price.
+  const problems = validateBasket(opts.plans, {
+    plan: opts.plan,
+    interval: opts.interval,
+    seats: opts.seats,
+  });
+  if (problems.length) {
+    throw new InvalidBasketError(
+      problems,
+      problems.map((problem) => describeBasketProblem(problem, opts.config?.messages)).join("; "),
+    );
+  }
+
   const key = reuseKeyFor(opts);
   if (key) {
     const ttl =
