@@ -68,6 +68,10 @@ const SECTIONS = [
   // 12 creates its own throwaway workspace, because it REMOVES people — and the run's org is
   // every other section's fixture.
   ["12", "members", () => import("./live/12-members.mjs")],
+  // 13 runs a real HTTP endpoint and points the shipped webhook transport at it, so it builds
+  // its OWN composition: a notifier on the run's `billing` would have cost every earlier
+  // section the transport's retries against an endpoint that does not exist yet.
+  ["13", "notifications, quotes and alerts", () => import("./live/13-notifications-quotes-alerts.mjs")],
 ];
 
 async function main() {

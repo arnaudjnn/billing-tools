@@ -149,10 +149,11 @@ is what makes a negotiated price possible. Denying records the decision and char
       // behind it is a promise nobody can collect on; an invoice with no record is a bill
       // the customer can still pay, and the next approval is refused as a duplicate by
       // Stripe's idempotency key rather than billing them twice.
-      const sale = await sellCredits(customerId, a.workspace_id, {
+      // `config` carries the currency AND the tax declaration, so the negotiated invoice is
+      // taxed by whatever decided every other charge on this account.
+      const sale = await sellCredits(customerId, a.workspace_id, opts.config, {
         credits: a.credits,
         amountMinor: Math.round(a.amount * 100),
-        currency: opts.config.currency,
         description: `${a.credits.toLocaleString("en-US")} credits`,
         ...(a.days_until_due ? { daysUntilDue: a.days_until_due } : {}),
         ...(open.purchaseOrder ? { purchaseOrder: open.purchaseOrder } : {}),

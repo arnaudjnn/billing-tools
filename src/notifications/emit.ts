@@ -45,7 +45,14 @@ export function createEmitter(
       // Nothing to tell anybody: an adapter that cannot list members, a workspace whose
       // admins have no address on file. Sending to nobody is not an error, but it is not
       // worth a round trip either.
-      if (!resolved.to.length) return;
+      //
+      // Only for an ADDRESSED event. An event carrying no audience was never this library's
+      // to address — `quote.requested` names the deployment's own operators, whom the
+      // consumer routes to an ops inbox, a Slack channel, a CRM — so an empty `to` there is
+      // the intended shape, not a failed lookup. Dropping it on the same test meant the one
+      // event the operators exist to receive was the one event never delivered, and a
+      // workspace asking for a price reached nobody.
+      if (audience && !resolved.to.length) return;
       await notifier.deliver({ ...resolved, at: Date.now() });
     })().catch(fail);
   };

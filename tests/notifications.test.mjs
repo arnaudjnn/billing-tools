@@ -188,6 +188,29 @@ test("nobody to tell is not a delivery", async () => {
   assert.deepEqual(sent, [], "a POST to nobody is a round trip for nothing");
 });
 
+test("an UNADDRESSED event is still delivered — an empty `to` is its shape, not a failed lookup", async () => {
+  const sent = [];
+  const notify = createEmitter(adapterWith(MEMBERS), { deliver: async (n) => void sent.push(n) });
+
+  // `quote.requested` is the one event whose audience is on our side of the transaction: it
+  // names the deployment's OPERATORS, whom the consumer routes (an ops inbox, a Slack
+  // channel, a CRM), so it carries no `audience` and an empty `to`. Testing it on the same
+  // "nobody to tell" guard as an admins lookup that found nobody meant the one event the
+  // operators exist to receive was the one event never sent, and a workspace asking for a
+  // price reached nobody at all.
+  notify({
+    id: "quote-requested:q_1",
+    type: "quote.requested",
+    orgId: "org_1",
+    to: [],
+    data: { quoteId: "q_1", member: { id: "u_1", email: null }, quote: {} },
+  });
+  await settle();
+
+  assert.equal(sent.length, 1, "the operator ask must reach the transport");
+  assert.deepEqual(sent[0].to, [], "and it is the consumer that decides where it goes");
+});
+
 test("a broken notifier cannot break the thing it is describing", async () => {
   const errors = [];
   const notify = createEmitter(

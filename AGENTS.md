@@ -505,6 +505,16 @@ off the hot path — one `adapter.listMembers`, which also fills in the member's
 where the event names one. An adapter that cannot list members tells nobody rather than
 throwing, and nobody-to-tell skips the round trip entirely.
 
+**But nobody-to-tell only applies to an ADDRESSED event.** `quote.requested` is the one event
+whose recipients are on OUR side of the transaction — the deployment's operators, whom the
+consumer routes to an ops inbox, a Slack channel, a CRM — so it carries no `audience` and an
+empty `to` deliberately. Dropping it on the same "nobody to tell" test meant the one event
+operators exist to receive was the one event **never delivered**: a workspace asking for a
+price reached nobody, and nothing errored. Invisible offline because every test of the
+emitter passed an audience, and invisible in the tool tests because they hand
+`requestCreditQuote` a spy instead of a real emitter. So the guard now reads `audience &&
+!to.length`, and `scripts/live/13-*.mjs` asserts the POST arrives with `to: []`.
+
 **Ids are stable and derived, never random or timestamped.** `invite:<invitationId>`,
 `topup-requested:<requestId>`, `topup-approved:<requestId>`, `upgrade-requested:<requestId>`.
 A receiver dedupes on that id, so a retry, a re-delivery or two replicas send one email — and
@@ -592,6 +602,16 @@ the wallet through the `invoice.paid` branch that already exists with the
 `credit:invoice:<id>` key it already uses. So there is no second crediting path to keep in
 step, an unpaid quote hands over nothing, and a refund reverses like any other invoice. The
 tool says `credits_on_payment` rather than `credits`, because "approved" reads like "granted".
+
+**And it is TAXED like every other charge, because it takes `config` rather than a currency.**
+`sellCredits` resolved no tax at all and its one caller passed none, so the largest sale the
+library makes went out at 0% while every seat invoice and every top-up on the same account
+carried the account's rate — the auto-reload defect, on an Enterprise deal, with the mandatory
+mention missing from the one invoice most likely to be audited. It now takes the
+`ResolvedConfig` (the currency AND the tax declaration are both read from it, so neither can be
+a second answer) and resolves `taxFor` when the caller passes no `tax`: manual rates ride the
+ITEM, `automatic_tax` rides the invoice, exactly as `purchaseCredits` does. Measured live at
+€4 000 → €4 880 with `22% "IVA"` on the rate.
 
 **`VolumeQuote`, not `CreditQuote`** — that name belongs to the tax estimate
 `quoteCreditPurchase` returns. Two records with one name in a single barrel is how somebody
@@ -755,13 +775,14 @@ Money localises through `Intl` (`locale` + `currency`), with `formatMoney` as th
 
 `tests/` is vitest against fakes, and it stubs exactly the two things that break in a real environment: `getStripe` and WorkOS. So it can prove the tax decision table exhaustively and cannot prove that a rate reached an invoice, that a WorkOS role slug resolves to a refusal, or that a quoted upgrade total equals the charged one.
 
-**`pnpm e2e:live` is that second half** (`scripts/e2e-live.mjs` + `scripts/live/NN-*.mjs`, one file per section: keys, roles, tax, invoices, lifecycle, seats/top-ups/usage, mid-cycle documents, plan moves, roles/isolation, workspace close, refusals/dunning, members). Test keys only — refused otherwise — every object prefixed `live<ts>` and torn down LIFO in a `finally`. `E2E_ENV_FILE` picks the environment, `E2E_ONLY=02,05` a subset. **Never in CI**, because it creates real objects in whichever account the keys name.
+**`pnpm e2e:live` is that second half** (`scripts/e2e-live.mjs` + `scripts/live/NN-*.mjs`, one file per section: keys, roles, tax, invoices, lifecycle, seats/top-ups/usage, mid-cycle documents, plan moves, roles/isolation, workspace close, refusals/dunning, members, notifications/quotes/alerts). Test keys only — refused otherwise — every object prefixed `live<ts>` and torn down LIFO in a `finally`. `E2E_ENV_FILE` picks the environment, `E2E_ONLY=02,05` a subset. **Never in CI**, because it creates real objects in whichever account the keys name.
 
 - **`ensurePlans` is made structurally UNREACHABLE, not merely avoided.** It archives every managed price the catalogue it is handed does not name, so a harness holding a partial catalogue archives the real product's prices — which has happened. `scratch-stripe.mjs` installs the price map via `__setPlanPricesForTests`, which `resolvePlanPrices` checks first, so no plan path can reach Stripe's price list. Two corollaries: **never dispatch `list_plans`** (the one tool calling `ensurePlans` directly — the roles matrix excludes it by name and asserts the exclusion), and do not tag scratch prices `managedBy: "billing-tools"`, so a concurrent real `ensurePlans` cannot see them. Its header is the most important comment in the harness.
 - **A teardown error is a FAILED RUN, not a line in the log.** `.catch(() => {})` around a cleanup call turns a real failure into a `✓` — a run once reported a clean teardown while leaving six active prices and a test clock behind, and the state that left took a while to explain. Use `ignoreMissing`, which tolerates only "it was already gone" (deleting a test clock deletes its customers, so their own teardown legitimately 404s) and rethrows everything else.
 - **TaxRates are deliberately KEPT.** They are immutable, account-level, and reused by real charges; archiving them would break the account. Same reasoning makes section 04 read-only about `default_account_tax_ids` — it reports a missing supplier tax id with the exact call to run rather than writing account-wide state.
 - **One instance of an event is not coverage.** Sections 07 and 08 exist because a single measured upgrade was reported as "upgrades are covered": the matrix of twelve moves a customer can actually make then found three defects, every one in a path nothing had executed — including the DEFAULT proration policy. Each scenario gets its own clock and customer (`scripts/lib/scenario.mjs`), because a test clock cannot be wound backwards, a leftover subscription makes the next `changePlan` refuse, and a failure in case 9 that was caused by case 1 is the thing a matrix exists to prevent.
 - **A green assertion can be green for the wrong reason, and that is the failure mode to hunt.** Three caught here: a declined-card scenario attached the bad card BEFORE the first payment, so the subscription expired and every assertion passed while measuring nothing about an upgrade; a seat-removal case changed two things at once and blamed the library for the resulting charge; and a visibility check read `member_id` where the record says `memberId`, producing a confident FALSE finding. Assert the precondition you depend on, in the test.
+- **A seam whose fake is a one-line function is the one a live section is worth most.** Section 13 runs a real `http.createServer` on localhost and points `webhookNotifier` at it, because a fake notifier — a function that pushes onto an array — can show none of what actually breaks: that a POST left the process, that the signature a receiver verifies is the one the sender wrote, that a 503 is retried byte-for-byte so a derived id really does dedupe, that a **down** endpoint leaves the grant it was describing in place, or that an alert record fits inside the WorkOS metadata value every other write on that org shares. It builds its OWN `createBilling`, because a notifier on the shared one would charge every earlier section the transport's retries against an endpoint that does not exist yet. Two defects on the first run, both of them the "a fake accepts anything" shape: the unaddressed `quote.requested` never delivered, and the negotiated invoice untaxed.
 - **An "allowed" role assertion is the ABSENCE of a refusal.** Every admin-gated tool calls `enforceAdmin` first, so the matrix passes deliberately inert arguments (`plan: "__no_such_plan__"`, `pm_does_not_exist`) and asserts no `Forbidden` — which keeps 33 probes read-only instead of 33 real mutations. The structural assertion beside them, that every gated tool is probed, is worth more than any single one: it catches a 14th gate added without a probe.
 
 ## Build & release

@@ -13,6 +13,7 @@ import { test } from "vitest";
 
 import { answerCreditQuote, listCreditQuotes, requestCreditQuote } from "../dist/credit-quotes.js";
 import { enforceOperator, runWithAuth, runWithPrincipal } from "../dist/auth.js";
+import { __setStripeForTests, sellCredits } from "../dist/billing.js";
 import { fakeAdapter, WORKOS_MAX_VALUE } from "./helpers.mjs";
 
 const ask = (over = {}) => ({
@@ -175,4 +176,73 @@ test("a deployment with no operators configured has nobody who can approve, and 
   );
   assert.equal(out.isError, true);
   assert.match(out.content[0].text, /configured no operators/);
+});
+
+// ── The money half: what Stripe is actually SENT ─────────────────────────────
+
+/** Enough of Stripe for one sale, recording the params rather than answering questions. */
+function saleStripe(sent) {
+  return {
+    customers: { retrieve: async () => ({ id: "cus_1", email: "ap@customer.test" }) },
+    invoiceItems: {
+      create: async (params) => {
+        sent.item = params;
+        return { id: "ii_1" };
+      },
+    },
+    invoices: {
+      create: async (params) => {
+        sent.invoice = params;
+        return { id: "in_1" };
+      },
+      finalizeInvoice: async () => ({ id: "in_1", hosted_invoice_url: "https://pay.test/in_1" }),
+      sendInvoice: async () => ({ id: "in_1", hosted_invoice_url: "https://pay.test/in_1", due_date: 1 }),
+    },
+  };
+}
+
+test("a negotiated invoice carries the deployment's tax, resolved rather than skipped", async () => {
+  const sent = {};
+  __setStripeForTests(saleStripe(sent));
+
+  // Nothing about tax is passed in. Until this, nothing resolved it either: the largest sale
+  // the library makes went out at 0% while every seat invoice and every top-up on the same
+  // account carried the account's rate — the auto-reload defect, on an Enterprise deal.
+  const res = await sellCredits("cus_1", "org_1", { currency: "eur", tax: { mode: "stripe" } }, {
+    credits: 600_000,
+    amountMinor: 400_000,
+    purchaseOrder: "PO-4471",
+  });
+
+  assert.equal(res.status, "invoiced");
+  assert.equal(sent.item.currency, "eur", "the currency comes from the config, not a default");
+  assert.deepEqual(sent.invoice.automatic_tax, { enabled: true });
+  // What the payment grants, which is the whole reason the two numbers differ.
+  assert.deepEqual(sent.invoice.metadata, { org_id: "org_1", credits: "600000" });
+  assert.deepEqual(sent.invoice.custom_fields, [{ name: "PO", value: "PO-4471" }]);
+});
+
+test("manual rates ride the ITEM, and exclude `automatic_tax` — Stripe rejects both", async () => {
+  const sent = {};
+  __setStripeForTests(saleStripe(sent));
+
+  await sellCredits("cus_1", "org_1", { currency: "eur", tax: { mode: "none" } }, {
+    credits: 1000,
+    amountMinor: 900,
+    tax: { taxRates: ["txr_it_22"] },
+  });
+
+  assert.deepEqual(sent.item.tax_rates, ["txr_it_22"]);
+  assert.equal(sent.invoice.automatic_tax, undefined);
+});
+
+test("an untaxed deployment stays untaxed, explicitly", async () => {
+  const sent = {};
+  __setStripeForTests(saleStripe(sent));
+  await sellCredits("cus_1", "org_1", { currency: "eur", tax: { mode: "none" } }, {
+    credits: 1000,
+    amountMinor: 900,
+  });
+  assert.equal(sent.item.tax_rates, undefined);
+  assert.equal(sent.invoice.automatic_tax, undefined);
 });

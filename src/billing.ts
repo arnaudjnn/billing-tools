@@ -685,12 +685,12 @@ export type PurchaseResult =
 export async function sellCredits(
   stripeCustomerId: string,
   orgId: string,
+  config: ResolvedConfig,
   input: {
     /** What they get. */
     credits: number;
-    /** What they pay, in minor units of `currency`. Deliberately unrelated to `credits`. */
+    /** What they pay, in minor units of `config.currency`. Deliberately unrelated to `credits`. */
     amountMinor: number;
-    currency?: string;
     /** Shown on the invoice — the deal, in the customer's own words. */
     description?: string;
     /** Net terms. Procurement rarely pays on receipt; 30 is the usual answer here. */
@@ -698,7 +698,12 @@ export async function sellCredits(
     /** Their PO, on the invoice rather than in an email, because that is what unblocks
      *  payment. */
     purchaseOrder?: string;
-    taxRates?: string[] | null;
+    /**
+     * Resolved tax for this charge. Omitted, it is resolved from `config.tax` — an approved
+     * quote is a real invoice and must carry the same rate, and the same mandatory mention,
+     * as every other charge on the account.
+     */
+    tax?: ChargeTax;
     /** Reuse an existing invoice for a retried approval rather than raising a second one. */
     idempotencyKey?: string;
   },
@@ -711,7 +716,7 @@ export async function sellCredits(
     return { status: "refused", reason: "invalid_amount", message: "Credits and amount must both be positive." };
   }
   const stripe = getStripe();
-  const currency = input.currency ?? "usd";
+  const currency = config.currency;
   const customer = await stripe.customers.retrieve(stripeCustomerId);
   const email = !("deleted" in customer && customer.deleted) ? customer.email : null;
   if (!email) {
@@ -722,6 +727,12 @@ export async function sellCredits(
     };
   }
 
+  // Resolved here rather than left to the caller, for the reason `config.tax` exists at all:
+  // a negotiated invoice that went out at 0% while every other charge on the account carried
+  // 22% would be the auto-reload defect again, on the largest sale the library makes.
+  const tax = input.tax ?? (await taxFor(stripeCustomerId, config.tax));
+  const taxRates = tax.taxRates?.length ? tax.taxRates : null;
+
   const key = input.idempotencyKey ?? `sell:${stripeCustomerId}:${credits}:${amountMinor}`;
   const description = input.description ?? `${credits.toLocaleString("en-US")} credits`;
   await stripe.invoiceItems.create(
@@ -730,7 +741,7 @@ export async function sellCredits(
       currency,
       amount: amountMinor,
       description,
-      ...(input.taxRates?.length ? { tax_rates: input.taxRates } : {}),
+      ...(taxRates ? { tax_rates: taxRates } : {}),
     },
     { idempotencyKey: `${key}:item` },
   );
@@ -745,6 +756,7 @@ export async function sellCredits(
       description,
       // On the invoice, where procurement looks for it.
       ...(input.purchaseOrder ? { custom_fields: [{ name: "PO", value: input.purchaseOrder.slice(0, 30) }] } : {}),
+      ...(!taxRates && tax.automaticTax ? { automatic_tax: { enabled: true } } : {}),
       // What the webhook grants when this is paid — and the ONE place in this library where
       // it is not simply the amount.
       metadata: { org_id: orgId, credits: String(credits) },
