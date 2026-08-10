@@ -1,3 +1,14 @@
+# [24.0.0](https://github.com/arnaudjnn/billing-tools/compare/v23.1.0...v24.0.0) (2026-08-10)
+
+
+* refactor(quotes)!: the ask carries a metadata BAG, not fields ([fd5f664](https://github.com/arnaudjnn/billing-tools/commit/fd5f6645021726e940b94ddf923bc917305435c1))
+
+
+### BREAKING CHANGES
+
+* `PlanRequest.seats` and the `seats` option on `request_plan_change`
+/ `api.subscription.requests.ask` are replaced by `metadata`.
+
 # [23.1.0](https://github.com/arnaudjnn/billing-tools/compare/v23.0.0...v23.1.0) (2026-08-10)
 
 
