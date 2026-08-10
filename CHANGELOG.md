@@ -1,3 +1,10 @@
+# [21.7.0](https://github.com/arnaudjnn/billing-tools/compare/v21.6.2...v21.7.0) (2026-08-10)
+
+
+### Features
+
+* **notifications:** the library can finally tell somebody ([93e5cc4](https://github.com/arnaudjnn/billing-tools/commit/93e5cc478c723658fc940c673748f6a4150f068d))
+
 ## [21.6.2](https://github.com/arnaudjnn/billing-tools/compare/v21.6.1...v21.6.2) (2026-08-10)
 
 
