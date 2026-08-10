@@ -1,3 +1,10 @@
+# [21.1.0](https://github.com/arnaudjnn/billing-tools/compare/v21.0.0...v21.1.0) (2026-08-10)
+
+
+### Features
+
+* **mpp:** the 402 offers payment where the 402 is WRITTEN ([15f9bb7](https://github.com/arnaudjnn/billing-tools/commit/15f9bb73a76c771288257a30966fef018c593cba))
+
 # [21.0.0](https://github.com/arnaudjnn/billing-tools/compare/v20.1.1...v21.0.0) (2026-08-07)
 
 
