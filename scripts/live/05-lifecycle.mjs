@@ -14,6 +14,8 @@
 // because a consumer changing a plan is not thinking about VAT. The third of those found a
 // real defect (see 05f).
 
+import { createCheckoutSession } from "../../dist/checkout.js";
+import { InvalidBasketError } from "../../dist/plan-model.js";
 import { taxRatesFor } from "../../dist/tax.js";
 import { advanceClock, eur, note, ok, section } from "../lib/harness.mjs";
 import { FREE_PLAN, PRO_PLAN, STARTER_PLAN } from "../lib/scratch-stripe.mjs";
@@ -47,6 +49,57 @@ export async function run(ctx) {
     "and hands back a URL a caller with no browser can open",
     typeof first.checkoutUrl === "string" && first.checkoutUrl.startsWith("https://checkout.stripe.com/"),
     first.checkoutUrl?.slice(0, 48),
+  );
+
+  // ── the basket, refused before a session exists ───────────────────────────
+  //
+  // `changePlan` has validated the basket since it was written; `createCheckoutSession`
+  // never had, so every ceiling the catalogue declares was enforced on an upgrade and by
+  // nothing at all on a FIRST purchase — where a browser stepper was the only gate. The
+  // offline test asserts the throw; only a real account can show that NOTHING was created,
+  // which is the half that matters: a session opened for an over-limit basket is a payment
+  // form a customer can complete.
+  section("05a2 — a basket the catalogue forbids opens no session at Stripe");
+  const sessionsBefore = (await stripe.checkout.sessions.list({ customer: customerId, limit: 100 })).data.length;
+
+  const refused = async (label, opts, codes) => {
+    let error = null;
+    try {
+      await createCheckoutSession({
+        plans: ctx.plans,
+        interval: "monthly",
+        returnUrl: "https://e2e.test/done",
+        uiMode: "hosted",
+        customerId,
+        currency: ctx.config.currency,
+        config: ctx.config,
+        ...opts,
+      });
+    } catch (e) {
+      error = e;
+    }
+    ok(
+      label,
+      error instanceof InvalidBasketError &&
+        codes.every((c) => error.problems.some((p) => p.code === c)),
+      error ? `${error.name}: ${(error.problems ?? []).map((p) => p.code).join(",")}` : "no refusal",
+    );
+  };
+
+  // 11 seats against `limits.members: 10`. Nothing in the request is malformed — Stripe
+  // would happily have taken it.
+  await refused("more seats than the plan admits members", { plan: STARTER_PLAN, seats: { standard: 11 } }, ["member_limit"]);
+  // A seat type this plan does not sell. The price map has it (Pro does), so this is the
+  // catalogue refusing, not a missing price.
+  await refused("a seat type the plan does not sell", { plan: STARTER_PLAN, seats: { premium: 1 } }, ["unknown_seat_type"]);
+  // And a plan nobody may buy.
+  await refused("a plan that is not for sale", { plan: FREE_PLAN, seats: { standard: 1 } }, ["not_purchasable"]);
+
+  const sessionsAfter = (await stripe.checkout.sessions.list({ customer: customerId, limit: 100 })).data.length;
+  ok(
+    "and Stripe was never asked — no session exists for any of them",
+    sessionsAfter === sessionsBefore,
+    `${sessionsBefore} → ${sessionsAfter}`,
   );
 
   // A hosted session cannot be COMPLETED without a browser — Stripe exposes no API for it.
