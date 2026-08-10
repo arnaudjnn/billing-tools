@@ -1,3 +1,10 @@
+## [25.2.1](https://github.com/arnaudjnn/billing-tools/compare/v25.2.0...v25.2.1) (2026-08-10)
+
+
+### Bug Fixes
+
+* **payments:** a bank asking for confirmation is not a declined card ([bf11114](https://github.com/arnaudjnn/billing-tools/commit/bf11114fd22028ca3408f175d54f9d5a2ec4af54))
+
 # [25.2.0](https://github.com/arnaudjnn/billing-tools/compare/v25.1.0...v25.2.0) (2026-08-10)
 
 
