@@ -458,6 +458,34 @@ export function requestBounds(model: PlanModel | null): {
 }
 
 /**
+ * Credits for a share of an allowance — the `replenish.request` axis's own unit
+ * ("a quarter more" means the same thing on a 1 000-credit seat and a 5 000-credit one).
+ *
+ * This IS the arithmetic `grantExtraAllowance` and `requestExtraAllowance` apply, exported
+ * so the dialog that offers "+25%" quotes the number the grant will be. It existed once in
+ * the engine and three more times in a consumer's grant dialog, which is three chances for
+ * the quoted figure and the granted one to disagree.
+ */
+export function creditsForPercent(basis: number, percent: number): number {
+  if (basis <= 0 || percent <= 0) return 0;
+  return Math.round((basis * percent) / 100);
+}
+
+/** The inverse, for a control that shows what a typed amount is as a share of the pack.
+ *  0 when the basis is unknown or empty — never NaN or Infinity, which a form renders. */
+export function percentForCredits(basis: number, credits: number): number {
+  if (basis <= 0 || credits <= 0) return 0;
+  return Math.round((credits * 100) / basis);
+}
+
+/** The smallest whole percent worth at least `minCredits` — what a percent stepper's own
+ *  floor is when the purchase path has a minimum. 0 when the basis is unknown. */
+export function minPercentFor(basis: number, minCredits: number): number {
+  if (basis <= 0 || minCredits <= 0) return 0;
+  return Math.ceil((minCredits * 100) / basis);
+}
+
+/**
  * The auto-reload offer a plan makes, or null when it makes none.
  *
  * Null on purpose, with no invented numbers: unlike `purchaseBounds`, whose tool schema

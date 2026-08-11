@@ -11,7 +11,15 @@ process.env.STRIPE_SECRET_KEY ??= "sk_test_fake";
 import assert from "node:assert/strict";
 import { test } from "vitest";
 
-import { autoReloadDefaults, planModel, purchaseBounds, requestBounds } from "../dist/entries/plans.js";
+import {
+  autoReloadDefaults,
+  creditsForPercent,
+  minPercentFor,
+  percentForCredits,
+  planModel,
+  purchaseBounds,
+  requestBounds,
+} from "../dist/entries/plans.js";
 import { runWithResolvedOrg } from "../dist/auth.js";
 import { createDispatcher } from "../dist/dispatch.js";
 import { registerBillingTools } from "../dist/tools/register.js";
@@ -84,6 +92,31 @@ test("autoReloadDefaults returns the declared offer verbatim, enabledByDefault f
 test("a plan offering no auto-reload answers null — a card must not prefill invented numbers", () => {
   assert.equal(autoReloadDefaults(planModel(PLANS, "pro")), null);
   assert.equal(autoReloadDefaults(null), null);
+});
+
+// ── percent↔credits: ONE arithmetic, shared by the engine and any dialog ─────
+
+test("creditsForPercent round-trips through percentForCredits at the preset percents", () => {
+  for (const basis of [1000, 5000, 2104]) {
+    for (const percent of [25, 50, 100]) {
+      assert.equal(percentForCredits(basis, creditsForPercent(basis, percent)), percent);
+    }
+  }
+});
+
+test("minPercentFor is the smallest percent worth at least the minimum", () => {
+  const basis = 1000;
+  const min = 5 * 100; // a 5-unit purchase floor, in credits
+  const p = minPercentFor(basis, min);
+  assert.ok(creditsForPercent(basis, p) >= min);
+  assert.ok(p === 1 || creditsForPercent(basis, p - 1) < min);
+});
+
+test("an unknown or empty basis answers 0, never NaN or Infinity — a form renders the result", () => {
+  assert.equal(creditsForPercent(0, 25), 0);
+  assert.equal(percentForCredits(0, 250), 0);
+  assert.equal(minPercentFor(0, 500), 0);
+  assert.equal(percentForCredits(-1, 250), 0);
 });
 
 // ── and the tools enforce the ORG's plan, not the widest in the catalogue ────

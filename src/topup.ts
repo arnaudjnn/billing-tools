@@ -1,6 +1,13 @@
 import type { BillingAdapter } from "./types.js";
 import type { Notify } from "./notifications/index.js";
-import { cycleWindowFor, packSizeOf, planModel, requestBounds, type PlanCatalog } from "./plan-model.js";
+import {
+  creditsForPercent,
+  cycleWindowFor,
+  packSizeOf,
+  planModel,
+  requestBounds,
+  type PlanCatalog,
+} from "./plan-model.js";
 import { getSeatType } from "./seats.js";
 
 // Top-up requests, stored entirely in the org's metadata via the adapter (no new
@@ -408,7 +415,7 @@ export async function grantExtraAllowance(
   // hand out several weeks' worth under a weekly heading.
   const basis = input.basis ?? packSize;
   const amount =
-    input.amount ?? (input.percent != null ? Math.round((basis * input.percent) / 100) : NaN);
+    input.amount ?? (input.percent != null ? creditsForPercent(basis, input.percent) : NaN);
   if (!Number.isFinite(amount) || amount <= 0) {
     return { ok: false, reason: "invalid_amount", packSize };
   }
@@ -531,7 +538,7 @@ export async function requestExtraAllowance(
 
   const percent = input.percent ?? requestBounds(model).percent;
   const basis = input.basis ?? packSize;
-  const amount = input.amount ?? Math.round((basis * percent) / 100);
+  const amount = input.amount ?? creditsForPercent(basis, percent);
   if (!Number.isFinite(amount) || amount <= 0) return { ok: false, reason: "invalid_amount", packSize };
 
   let period: { start?: string | null; end?: string | null } | null = null;

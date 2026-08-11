@@ -21,7 +21,7 @@ import { beforeEach, test } from "vitest";
 
 import { __setStripeForTests } from "../dist/billing.js";
 import { fundingFor, resolveAllowance, topUpTargetOf } from "../dist/allowance.js";
-import { planModel } from "../dist/plan-model.js";
+import { creditsForPercent, planModel } from "../dist/plan-model.js";
 import { grantExtraAllowance, requestExtraAllowance } from "../dist/topup.js";
 import { fakeAdapter } from "./helpers.mjs";
 
@@ -130,6 +130,9 @@ test("a grant on the week actually unblocks the caller", async () => {
   });
   assert.equal(res.ok, true);
   assert.equal(res.granted, 125, "25% of the WEEK (500), not of the 1 000 pack");
+  // The engine grants exactly what the exported helper quotes — one arithmetic,
+  // so a dialog previewing `creditsForPercent` can never disagree with the grant.
+  assert.equal(res.granted, creditsForPercent(target.basis, 25));
 
   const after = await state(adapter, ledgerFor({ week: 600, month: 600 }));
   const week = after.limits.find((l) => l.every === "week");
