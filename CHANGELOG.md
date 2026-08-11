@@ -1,3 +1,22 @@
+# [25.3.0](https://github.com/arnaudjnn/billing-tools/compare/v25.2.3...v25.3.0) (2026-08-11)
+
+
+### Bug Fixes
+
+* **cli:** gate the topup commands on the request capability, not seats ([c833bef](https://github.com/arnaudjnn/billing-tools/commit/c833bef91dda4b562f496e96287c03a84e185a55))
+
+
+### Features
+
+* **i18n:** a Messages key per structured refusal reason, and describeReason to read them ([01cc237](https://github.com/arnaudjnn/billing-tools/commit/01cc237bfdf85dce651b372d3ae9cffe6e3291d1))
+* **i18n:** formatMinor — the money formatter derivePlanViews already used, exported ([38d4a24](https://github.com/arnaudjnn/billing-tools/commit/38d4a24183dd047b7f07b9e975105df22c1835fb))
+* **members:** lastAdminId — the list-shaped read of isLastAdmin ([8eea374](https://github.com/arnaudjnn/billing-tools/commit/8eea374fe15292909f60ee77c40b4890f8c7846a))
+* **plans:** autoReloadDefaults reads the plan's auto-reload offer ([c91067d](https://github.com/arnaudjnn/billing-tools/commit/c91067d7efd47818b09ba5d01ae8a52a5f759347))
+* **plans:** percent↔credits helpers, consumed by grant and request top-ups ([115743f](https://github.com/arnaudjnn/billing-tools/commit/115743facc9dfe4094d7c2b8c0ff0058e16e6ec1))
+* **plans:** priceBasket and basketBounds — the display half of validateBasket ([6fddd0f](https://github.com/arnaudjnn/billing-tools/commit/6fddd0f51ffdc84efc6dc34eb510d295a4deffbb))
+* **tax:** taxFor also returns the TaxDecision it already computed ([5f644e3](https://github.com/arnaudjnn/billing-tools/commit/5f644e38f5da3dc67301afcb99ffe06cd4606d3f))
+* **usage:** visibleWindows can drop a pack's duplicates without re-adding the row ([b84a981](https://github.com/arnaudjnn/billing-tools/commit/b84a981c9c9170de8da9bef669069431a61e32b5))
+
 ## [25.2.3](https://github.com/arnaudjnn/billing-tools/compare/v25.2.2...v25.2.3) (2026-08-11)
 
 
