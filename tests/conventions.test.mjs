@@ -455,6 +455,9 @@ test("the CLI registers the same groups the tools do", async () => {
   assert.ok(!flat.has("seats"), "a flat catalogue must not ship a `seats` command");
   assert.ok(!flat.has("assign-seat"), "…nor `assign-seat`");
   assert.ok(!flat.has("topup"), "…nor the top-up queue: `replenish.request` is unset");
+  // The gap this line was written for: the CLI shipped `quotes` on a catalogue whose REST
+  // and MCP surfaces both hid it. Three surfaces, two answers, is worse than either.
+  assert.ok(!flat.has("quotes"), "…nor `quotes`: nothing here is sold by conversation");
   // What it must still have: the wallet, the reads, and the lifecycle it does sell.
   for (const v of ["balance", "buy", "invoices", "usage", "plans", "plan", "spend", "cards"]) {
     assert.ok(flat.has(v), `\`${v}\` must survive gating (got: ${[...flat].sort().join(", ")})`);
@@ -463,12 +466,20 @@ test("the CLI registers the same groups the tools do", async () => {
   const seats = verbsFor(SEATS);
   assert.ok(seats.has("seats") && seats.has("assign-seat") && seats.has("topup"),
     "a seat catalogue with `request` must ship all three");
+  assert.ok(!seats.has("quotes"), "…and still no `quotes`, because it sells no quote-only plan");
+
+  // A catalogue WITH one gets it, so the gate is a gate and not a deletion.
+  const quoted = verbsFor({
+    ...FLAT,
+    enterprise: { sells: { kind: "flat", price: { monthly: 0 } }, cap: { kind: "wallet" }, sale: "quote" },
+  });
+  assert.ok(quoted.has("quotes"), "a quote-only plan is what the command group is FOR");
 
   // Omitting the catalogue means "the caller did not say", never "nothing applies" —
   // the same rule registerBillingTools follows, so an existing consumer that passes
   // no plans keeps every command it had.
   const ungated = verbsFor(null);
-  for (const v of ["seats", "assign-seat", "topup", "plan", "plans"]) {
+  for (const v of ["seats", "assign-seat", "topup", "quotes", "plan", "plans"]) {
     assert.ok(ungated.has(v), `no catalogue must register everything, missing \`${v}\``);
   }
 });

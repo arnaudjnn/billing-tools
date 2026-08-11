@@ -194,9 +194,22 @@ export function registerBillingCommands(program: CommandLike, opts: CliOptions) 
       print(await callTool(requireConfig(), "remove_member", { member_id: memberId })),
     );
 
+  // Gated exactly as the TOOLS are, by the same `toolCapabilities`. A flat/pooled
+  // catalogue registers no seat or top-up tools, so these commands could only ever
+  // answer "Unknown tool" — and a customer cannot tell that from holding it wrong.
+  // No catalogue passed means "the caller did not say", so everything registers.
+  const caps = opts.plans ? toolCapabilities(opts.plans) : null;
+  const has = (key: "seats" | "request" | "lifecycle" | "quote") => !caps || caps[key];
+
   // ── Custom pricing ────────────────────────────────────────────────────────
   // The ASK is `plan request` (request_plan_change), the same verb as any other upgrade.
   // What is here is the answer, its acceptance, and the sale that needs no request.
+  // Gated like `seats` and `topup`: a catalogue that sells everything self-serve has no
+  // conversation to price, and a command group for one it cannot have is the same false
+  // advertisement the TOOL surface already refuses to make. Without this the CLI listed
+  // `quotes` on a deployment whose REST and MCP surfaces both hid it — three surfaces, two
+  // answers, which is worse than either.
+  if (has("quote")) {
   const quotes = program.command("quotes").description("Custom pricing: quote one, accept one, sell one");
   quotes
     .command("accept <request_id>")
@@ -266,6 +279,8 @@ export function registerBillingCommands(program: CommandLike, opts: CliOptions) 
       );
     });
 
+  }
+
   const invites = program.command("invitations").description("Pending invitations");
   invites
     .command("list")
@@ -315,12 +330,6 @@ export function registerBillingCommands(program: CommandLike, opts: CliOptions) 
       print(await callTool(requireConfig(), "get_usage", args));
     });
 
-  // Gated exactly as the TOOLS are, by the same `toolCapabilities`. A flat/pooled
-  // catalogue registers no seat or top-up tools, so these commands could only ever
-  // answer "Unknown tool" — and a customer cannot tell that from holding it wrong.
-  // No catalogue passed means "the caller did not say", so everything registers.
-  const caps = opts.plans ? toolCapabilities(opts.plans) : null;
-  const has = (key: "seats" | "request" | "lifecycle") => !caps || caps[key];
 
   if (has("seats")) {
     program
