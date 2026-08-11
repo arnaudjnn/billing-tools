@@ -1,3 +1,10 @@
+## [25.3.1](https://github.com/arnaudjnn/billing-tools/compare/v25.3.0...v25.3.1) (2026-08-11)
+
+
+### Bug Fixes
+
+* **cli:** plan request-seat is gated on seats, one level below where the group check looks ([577e143](https://github.com/arnaudjnn/billing-tools/commit/577e143c1ba6b12e57cb96ff550a912a3820526b))
+
 # [25.3.0](https://github.com/arnaudjnn/billing-tools/compare/v25.2.3...v25.3.0) (2026-08-11)
 
 
