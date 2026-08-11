@@ -506,6 +506,31 @@ test("the CLI registers the same groups the tools do", async () => {
     "a seat catalogue with `request` must ship all three");
   assert.ok(!seats.has("quotes"), "…and still no `quotes`, because it sells no quote-only plan");
 
+  // `seats` and `request` are independent capabilities, and the tools gate the five
+  // top-up tools on `request` alone — so must the CLI, in both directions. The topup
+  // group used to ride inside the seats gate, where the SEATS fixture (which has both)
+  // could never notice: a flat plan with a per-seat cap and `request` registered the
+  // tools and hid all five commands.
+  const requestNoSeats = verbsFor({
+    team: {
+      sells: { kind: "flat", price: { monthly: 2000, yearly: 20000 } },
+      cap: { kind: "per_seat", perSeat: 1000 },
+      replenish: { purchase: {}, request: {} },
+      sale: "self_serve",
+    },
+  });
+  assert.ok(requestNoSeats.has("topup"), "`request` without `seats` still ships the top-up queue");
+  assert.ok(!requestNoSeats.has("seats") && !requestNoSeats.has("assign-seat"),
+    "…and no seat commands: nothing here sells one");
+
+  const seatsNoRequest = verbsFor({
+    team: { ...SEATS.team, replenish: { purchase: {} } },
+  });
+  assert.ok(seatsNoRequest.has("seats") && seatsNoRequest.has("assign-seat"),
+    "`seats` without `request` keeps the seat commands");
+  assert.ok(!seatsNoRequest.has("topup"),
+    "…and no top-up queue: the plan takes no asks");
+
   // A catalogue WITH one gets it, so the gate is a gate and not a deletion.
   const quoted = verbsFor({
     ...FLAT,

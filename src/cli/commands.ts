@@ -348,8 +348,15 @@ export function registerBillingCommands(program: CommandLike, opts: CliOptions) 
         }),
       ),
     );
+  }
 
   // ── Credit top-up requests ─────────────────────────────────────────────────
+  // Gated on `request`, NOT on `seats` — the tools gate the five top-up tools on
+  // `replenish.request`, and the two capabilities are independent: a flat plan
+  // with a per-seat cap and `request` registers the tools, and riding the seats
+  // gate here hid all five commands on exactly that catalogue. Three surfaces,
+  // one answer, decided by the same `toolCapabilities`.
+  if (has("request")) {
   const topup = program
     .command("topup")
     .description("Credit top-up requests (a seat over its cap → owner approval)");
