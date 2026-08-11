@@ -200,6 +200,71 @@ test("the `rates` hook is authoritative, and short-circuits the calculation", as
     rates: () => ["txr_from_our_records"],
   });
   assert.deepEqual(resolved, { taxRates: ["txr_from_our_records"] });
+  // No `decision`: the consumer's resolver answered, so the library decided nothing
+  // and must not invent a decision beside an answer it did not produce.
+  assert.ok(!("decision" in resolved));
+});
+
+// ── `decision`: the TaxDecision the rate was minted from, under `local` only ─
+//
+// A consumer re-derived the customer-country cascade (address → EU-VAT prefix →
+// origin) beside taxFor to learn whether a quote reverse-charges — the cascade
+// taxFor already ran and discarded.
+
+test("local returns the decision, and its country follows address → VAT prefix → origin", async () => {
+  const { __setVatValidatorForTests } = await import(new URL("../dist/tax.js", import.meta.url).href);
+  __setVatValidatorForTests(async () => true);
+  const customer = { address: null, taxId: null };
+  const stripe = {
+    ...fakeStripe(),
+    customers: {
+      async retrieve() {
+        return {
+          id: "cus_1",
+          address: customer.address,
+          tax_ids: { data: customer.taxId ? [{ type: "eu_vat", value: customer.taxId }] : [] },
+        };
+      },
+    },
+  };
+  const local = async () => {
+    invalidateTaxRates();
+    __setStripeForTests(stripe);
+    return taxFor("cus_1", { origin: "IT" });
+  };
+
+  // 1. An address wins.
+  customer.address = { country: "DE" };
+  customer.taxId = null;
+  let { decision } = await local();
+  assert.equal(decision.country, "DE");
+  assert.equal(decision.reverseCharge, false);
+  assert.equal(decision.percent, 19);
+
+  // 2. No address: an EU VAT number carries its country, and a valid one reverse-charges.
+  customer.address = null;
+  customer.taxId = "DE811907980";
+  ({ decision } = await local());
+  assert.equal(decision.country, "DE");
+  assert.equal(decision.reverseCharge, true);
+  assert.equal(decision.percent, 0);
+
+  // 3. Nothing at all: domestic — charged, never guessed at zero.
+  customer.taxId = null;
+  const resolved = await local();
+  assert.equal(resolved.decision.country, "IT");
+  assert.equal(resolved.decision.percent, 22);
+  assert.ok(resolved.taxRates?.length, "the domestic rate is still minted");
+  __setVatValidatorForTests();
+});
+
+test("stripe and none return no decision — those modes decide nothing here", async () => {
+  invalidateTaxRates();
+  __setStripeForTests(fakeStripe({ customerCountry: "IT" }));
+  const viaStripe = await taxFor("cus_1", { mode: "stripe" });
+  assert.deepEqual(viaStripe, { automaticTax: true });
+  const none = await taxFor("cus_1", { mode: "none" });
+  assert.deepEqual(none, {});
 });
 
 test('no origin ANYWHERE cannot guess, and says so once', async () => {

@@ -668,11 +668,20 @@ let warnedNoOrigin = false;
  * customer with no address on file is charged the DOMESTIC rate rather than
  * nothing — the same direction `resolveTax` takes for an unverifiable VAT number,
  * because over-charging is recoverable and under-charging means owing it yourself.
+ *
+ * `decision` is the `TaxDecision` the rate was minted from — country, percent,
+ * reverse charge — present ONLY under `"local"`, because that is the one mode where
+ * this library decided anything. Under `"stripe"` Stripe decides, under `"none"`
+ * nobody does, and behind the consumer's own `rates` hook the consumer did; inventing
+ * a decision there would be a second answer to a question already answered elsewhere.
+ * It exists because a consumer re-derived the customer-country cascade beside this
+ * function to learn whether a quote reverse-charges — the cascade this function
+ * already ran and discarded.
  */
 export async function taxFor(
   stripeCustomerId: string | null,
   tax: BillingConfig["tax"] | undefined,
-): Promise<{ taxRates?: string[]; automaticTax?: boolean }> {
+): Promise<{ taxRates?: string[]; automaticTax?: boolean; decision?: TaxDecision }> {
   // The consumer's own resolver wins outright: it may read a rate from their own
   // records, and second-guessing it would be worse than not offering the hook.
   if (tax?.rates && stripeCustomerId) {
@@ -700,7 +709,7 @@ export async function taxFor(
         return {};
       }
       const where = stripeCustomerId ? await customerPlaceOfSupply(stripeCustomerId) : null;
-      const { rateIds } = await taxRatesFor({
+      const { decision, rateIds } = await taxRatesFor({
         oss: tax?.oss,
         registrations: tax?.registrations,
         notes: tax?.notes,
@@ -717,7 +726,7 @@ export async function taxFor(
         state: where?.state,
         taxNumber: where?.taxNumber,
       });
-      return rateIds.length ? { taxRates: rateIds } : {};
+      return rateIds.length ? { taxRates: rateIds, decision } : { decision };
     }
   }
 }
