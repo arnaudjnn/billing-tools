@@ -667,7 +667,7 @@ export {
 // part of it out of the customer's own credit balance. Exported because a consumer that
 // handles `invoice.paid` itself needs the same arithmetic, and getting it wrong destroys
 // credits somebody paid for.
-export { creditsOwedFor, sellCredits } from "./billing.js";
+export { creditsOwedFor, sellCredits, spendAlertRefusal } from "./billing.js";
 export { markPlanQuoteAccepted, quotePlanRequest } from "./plan-request.js";
 export {
   currentOperatorToken,

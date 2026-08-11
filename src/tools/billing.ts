@@ -14,6 +14,7 @@ import {
 } from "../plan-model.js";
 import { taxFor } from "../tax.js";
 import {
+  spendAlertRefusal,
   ensureStripeCustomer,
   getBillingCustomerId,
   getCreditBalance,
@@ -68,6 +69,9 @@ export function registerBillingOnlyTools(
   planFor: (orgId: string) => Promise<string | null>,
   topUp: TopUpToolOptions = {},
   caps: ToolCapabilities = ALL_TOOL_CAPABILITIES,
+  /** Whether this deployment can tell anybody anything. `set_spend_controls` refuses an
+   *  alert threshold without it, because nothing would read the number. */
+  canNotify = false,
 ) {
   // What one purchase may be. The tool schema is registered once for every plan, so it takes
   // the WIDEST bounds any plan allows and the handler enforces the org's own — a schema that
@@ -418,6 +422,9 @@ every threshold. The window is the calendar month, even on an annual plan.`,
       if (limit_credits === undefined && alert_credits === undefined) {
         return err("Pass limit_credits and/or alert_credits — there is nothing to change.");
       }
+      // A threshold nobody can deliver is a setting that lies. See `spendAlertRefusal`.
+      const undeliverable = spendAlertRefusal(canNotify, alert_credits);
+      if (undeliverable) return err(undeliverable);
       // Built key-by-key because `setSpendControls` distinguishes an ABSENT field
       // ("leave it") from a null one ("clear it") with `in`. Spreading both
       // unconditionally would clear whichever the caller did not mention.

@@ -159,6 +159,7 @@ export function registerBillingTools(server: McpServer, opts: RegisterBillingToo
     planFor,
     opts.topUp ?? {},
     caps,
+    Boolean(opts.notify),
   );
   registerManagementTools(
     server,

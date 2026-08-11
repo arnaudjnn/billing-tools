@@ -249,6 +249,9 @@ test("get_spend_controls / set_spend_controls round-trip through the tools", asy
       adapter: toolAdapter,
       config: { ...config, currency: "eur" },
       installLogging: false,
+      // A deployment that can tell somebody. Without it the tool refuses an alert
+      // threshold — see the test below, which is the point of passing it here.
+      notify: () => {},
     });
   });
   // dispatchTool already unwraps the envelope and parses the JSON body — the same
@@ -339,4 +342,60 @@ test("and the customer's own still wins over it", async () => {
     { orgId: "org_1", plans: {}, ledger: fakeLedger(0) },
   );
   assert.equal(state.limits.find((l) => l.kind === "spend").size, 5_000);
+});
+
+
+test("an alert threshold is REFUSED where nothing could deliver it", async () => {
+  // `alertCredits` is a promise — "warn me at 10 000" — and a deployment with no notifier
+  // wired cannot keep it: nothing reads the number. Storing it anyway is how a billing page
+  // comes to offer email alerts that never arrive, which shipped in a consumer for months
+  // and was found by grepping for who read the field.
+  const { createDispatcher } = await import("../dist/dispatch.js");
+  const { registerBillingTools } = await import("../dist/tools/register.js");
+  const { runWithAuth } = await import("../dist/auth.js");
+
+  let metadata = { spend_limit_credits: "", spend_alert_credits: "" };
+  __setStripeForTests({
+    customers: {
+      async retrieve() {
+        return { deleted: false, balance: 0, currency: "eur", metadata };
+      },
+      async update(_id, params) {
+        metadata = { ...metadata, ...params.metadata };
+        return { id: _id };
+      },
+    },
+  });
+
+  const toolAdapter = {
+    ...adapter,
+    async validateApiKey() {
+      return { orgId: "org_1" };
+    },
+    async getOrgDomains() {
+      return [];
+    },
+  };
+  // NO `notify`: this is the deployment the refusal is for.
+  const d = createDispatcher((server) =>
+    registerBillingTools(server, {
+      adapter: toolAdapter,
+      config: { ...config, currency: "eur" },
+      installLogging: false,
+    }),
+  );
+  const call = (name, args) => runWithAuth("Bearer sk_x", () => d.dispatchTool(name, args));
+
+  await assert.rejects(
+    () => call("set_spend_controls", { limit_credits: 5000, alert_credits: [4000] }),
+    /sends no notifications/,
+    "the whole call is refused: half-applying it is the failure being prevented",
+  );
+  // And the ceiling was NOT written on the way past — the refusal comes first.
+  assert.equal(metadata.spend_limit_credits, "");
+
+  // The CEILING alone is always fine: the meter enforces it whether or not anybody can be
+  // told, so it is a real setting on any deployment.
+  const ok = await call("set_spend_controls", { limit_credits: 5000 });
+  assert.equal(ok.limit_credits, 5000);
 });

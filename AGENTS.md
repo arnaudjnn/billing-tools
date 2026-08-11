@@ -361,6 +361,15 @@ A pool costs nothing to count: `cap: pool` plus org-scoped limits runs on the ba
 
 ## Spend controls — the customer's own ceiling (`getSpendControls`)
 
+**An alert threshold is refused where nothing can deliver it.** `alertCredits` is a promise
+— "warn me at 10 000" — and a deployment with no `notifications` wired cannot keep it,
+because nothing reads the number. `set_spend_controls` refuses the WHOLE call rather than
+storing half of it: a caller that asked for two things, got one and no error is precisely the
+shape this prevents. The CEILING is never refused — the meter enforces it whether or not
+anybody can be told, so it is a real setting on any deployment. This exact defect shipped in
+a consumer for months (a billing page headed "Avvisi via email" collecting thresholds nothing
+sent) and was found by grepping for who read the field, which is not a way to find things.
+
 A monthly ceiling on what a customer may CONSUME, plus the thresholds they want warning at, both on the customer's Stripe metadata beside auto-reload (`spend_limit_credits`, `spend_alert_credits`) — billing preferences the customer owns rather than plan config.
 
 The ceiling is **not a new gate**: it funds nothing and only refuses, which is what `state.limits` already models, so it rides the existing path — `resolveAllowance` reports it as one more `LimitState` (`kind: "spend"`), `fundingFor` checks it in the same loop, `describeDenial` writes the message. The read joins the same parallel round as the rate-limit reads and comes off the customer object `getCreditBalance` already retrieves, so it adds no round trip.

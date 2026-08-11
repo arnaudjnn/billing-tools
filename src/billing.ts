@@ -1164,6 +1164,29 @@ export async function getSpendControls(
  * "" is what CLEARS a Stripe metadata key, which is why null/empty map to it
  * rather than to "0" — a stored "0" would read back as a ceiling of zero.
  */
+/**
+ * Why an alert threshold cannot be accepted here, or null when it can.
+ *
+ * `alertCredits` is a promise: "warn me at 10 000". A deployment with no notifier wired
+ * cannot keep it — nothing reads the number — and storing it anyway is how a billing page
+ * comes to offer "email alerts" that never arrive. That exact defect shipped in one
+ * consumer for months and was only found by grepping for who read the field, which is not
+ * a way to find things.
+ *
+ * The CEILING is unaffected and is never refused: the meter enforces it whether or not
+ * anybody can be told, so it is a real setting either way. This refuses the whole call
+ * rather than accepting half of it — a caller that asked for two things and got one, with
+ * no error, is the shape this is here to prevent.
+ */
+export function spendAlertRefusal(canNotify: boolean, alertCredits?: number[]): string | null {
+  if (canNotify || !alertCredits?.length) return null;
+  return (
+    "This deployment sends no notifications, so alert thresholds cannot be honoured — " +
+    "nothing would read them. Set limit_credits on its own (the meter enforces the ceiling " +
+    "regardless), or wire `notifications` on the server."
+  );
+}
+
 export async function setSpendControls(
   stripeCustomerId: string,
   input: { limitCredits?: number | null; alertCredits?: number[] },
