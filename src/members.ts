@@ -106,6 +106,24 @@ export async function isLastAdmin(
 }
 
 /**
+ * The sole active admin's id, or null when there are several — or none can be read.
+ *
+ * The list-shaped read of `isLastAdmin`, which answers one candidate at a time: a
+ * members TABLE drawing a lock icon per row would cost N `listMembers` calls asking N
+ * times about one list. Null disables nothing in a UI, and that is safe in both
+ * directions — with several admins there is no lock to draw, and with unreadable
+ * roles the WRITE path still refuses via `isLastAdmin`'s fail-closed null.
+ */
+export async function lastAdminId(
+  adapter: BillingAdapter,
+  orgId: string,
+): Promise<string | null> {
+  const members = await listMembers(adapter, orgId);
+  const admins = members.filter((m) => m.roleSlug === ADMIN_ROLE_SLUG && m.status === "active");
+  return admins.length === 1 ? admins[0].userId : null;
+}
+
+/**
  * Invite somebody, refusing when the plan has no seat for them.
  *
  * The invitation record and the email are the service's (`createWorkOSInvitations`); what is

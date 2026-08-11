@@ -622,6 +622,7 @@ export {
   changeMemberRole,
   inviteMember,
   isLastAdmin,
+  lastAdminId,
   listMembers,
   memberSeats,
   removeMember,

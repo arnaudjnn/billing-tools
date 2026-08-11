@@ -71,6 +71,7 @@ import {
   changeMemberRole,
   inviteMember,
   isLastAdmin,
+  lastAdminId,
   listMembers,
   memberSeats,
   removeMember,
@@ -610,6 +611,9 @@ export function createBoundApi(deps: BoundApiDeps) {
       /** `null` when it cannot be answered, which callers must treat as "refuse" — see
        *  `isLastAdmin`. */
       isLastAdmin: (orgId: string, userId: string) => isLastAdmin(adapter, orgId, userId),
+      /** The list-shaped read for a members table: one call, null when there is no
+       *  sole admin (or roles are unreadable — the write path still refuses). */
+      lastAdminId: (orgId: string) => lastAdminId(adapter, orgId),
       invite: async (
         orgId: string,
         input: { email: string; roleSlug?: string; inviterUserId?: string },

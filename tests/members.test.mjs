@@ -19,6 +19,7 @@ import {
   changeMemberRole,
   inviteMember,
   isLastAdmin,
+  lastAdminId,
   listMembers,
   memberSeats,
   removeMember,
@@ -308,4 +309,30 @@ test("listMembers falls back to ids where that is all the adapter has", async ()
 test("and an adapter that can enumerate nothing reports nobody, not an error", async () => {
   const adapter = fakeAdapter({ userMetadata: false });
   assert.deepEqual(await listMembers(adapter, "org_1"), []);
+});
+
+// ── lastAdminId: the list-shaped read of isLastAdmin ──────────────────────────
+
+test("lastAdminId names the sole admin in ONE call — a table needs it once, not per row", async () => {
+  const adapter = withMembers([
+    { userId: "u1", roleSlug: "admin" },
+    { userId: "u2", roleSlug: "member" },
+    { userId: "u3", roleSlug: "member" },
+  ]);
+  assert.equal(await lastAdminId(adapter, "org_1"), "u1");
+  // And it agrees with the per-candidate guard, which is the enforcement.
+  assert.equal(await isLastAdmin(adapter, "org_1", "u1"), true);
+});
+
+test("several admins, or unreadable roles, answer null — the UI then disables nothing", async () => {
+  const two = withMembers([
+    { userId: "u1", roleSlug: "admin" },
+    { userId: "u2", roleSlug: "admin" },
+  ]);
+  assert.equal(await lastAdminId(two, "org_1"), null);
+  // Roles unreadable: null here disables no rendering hint, while the WRITE path
+  // still refuses via isLastAdmin's own fail-closed null.
+  const blind = fakeAdapter({ members: ["u1", "u2"] });
+  assert.equal(await lastAdminId(blind, "org_1"), null);
+  assert.equal(await isLastAdmin(blind, "org_1", "u1"), null);
 });
