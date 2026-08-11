@@ -397,7 +397,7 @@ export function registerBillingCommands(program: CommandLike, opts: CliOptions) 
   // "what is on offer" and "what am I on" are answerable on any catalogue, including
   // a wholly quote-only one. Only the moves that CHANGE a subscription need a plan a
   // customer can buy without a salesperson.
-  registerPlanCommands(program, requireConfig, has("lifecycle"));
+  registerPlanCommands(program, requireConfig, has("lifecycle"), has("seats"));
 }
 
 // ── Plans, the billing account, and the rest of the tool surface ────────────
@@ -410,6 +410,7 @@ function registerPlanCommands(
   program: CommandLike,
   requireConfig: () => ApiClientConfig,
   lifecycle: boolean,
+  seats: boolean,
 ) {
   program
     .command("plans")
@@ -436,19 +437,25 @@ function registerPlanCommands(
         }),
       ),
     );
-  plan
-    .command("request-seat")
-    .description("Ask an owner to move you to a bigger seat (does not change or charge anything)")
-    .option("--seat <seatType>", "Seat type to ask for. Defaults to the next one up")
-    .option("--note <note>", "A line for the owner")
-    .action(async (o: { seat?: string; note?: string }) =>
-      print(
-        await callTool(requireConfig(), "request_seat_change", {
-          ...(o.seat ? { seat_type: o.seat } : {}),
-          ...(o.note ? { note: o.note } : {}),
-        }),
-      ),
-    );
+  // Gated like the tool: `request_seat_change` registers only where a plan SELLS
+  // seats (`caps.seats`), so on a flat catalogue this subcommand could only answer
+  // "Unknown tool" — the same dead command the top-level `seats`/`topup` gates
+  // exist to prevent, hiding one level down where the group check misses it.
+  if (seats) {
+    plan
+      .command("request-seat")
+      .description("Ask an owner to move you to a bigger seat (does not change or charge anything)")
+      .option("--seat <seatType>", "Seat type to ask for. Defaults to the next one up")
+      .option("--note <note>", "A line for the owner")
+      .action(async (o: { seat?: string; note?: string }) =>
+        print(
+          await callTool(requireConfig(), "request_seat_change", {
+            ...(o.seat ? { seat_type: o.seat } : {}),
+            ...(o.note ? { note: o.note } : {}),
+          }),
+        ),
+      );
+  }
   plan
     .command("resolve <requestId>")
     .description("Mark a plan-change request handled or refused (admin)")

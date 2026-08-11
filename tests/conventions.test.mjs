@@ -493,6 +493,11 @@ test("the CLI registers the same groups the tools do", async () => {
   assert.ok(!flat.has("seats"), "a flat catalogue must not ship a `seats` command");
   assert.ok(!flat.has("assign-seat"), "…nor `assign-seat`");
   assert.ok(!flat.has("topup"), "…nor the top-up queue: `replenish.request` is unset");
+  // One level down, where the group check cannot see: `plan request-seat` calls
+  // `request_seat_change`, which registers only where a plan SELLS seats. It shipped
+  // dead on a real flat deployment while every top-level group was correctly gated.
+  assert.ok(!flat.has("request-seat"), "…nor `plan request-seat`: no plan sells a seat");
+  assert.ok(flat.has("request"), "…but `plan request` stays: a plan change is the one rung a pooled catalogue has");
   // The gap this line was written for: the CLI shipped `quotes` on a catalogue whose REST
   // and MCP surfaces both hid it. Three surfaces, two answers, is worse than either.
   assert.ok(!flat.has("quotes"), "…nor `quotes`: nothing here is sold by conversation");
@@ -504,6 +509,7 @@ test("the CLI registers the same groups the tools do", async () => {
   const seats = verbsFor(SEATS);
   assert.ok(seats.has("seats") && seats.has("assign-seat") && seats.has("topup"),
     "a seat catalogue with `request` must ship all three");
+  assert.ok(seats.has("request-seat"), "…and `plan request-seat`, because a bigger seat exists to ask for");
   assert.ok(!seats.has("quotes"), "…and still no `quotes`, because it sells no quote-only plan");
 
   // `seats` and `request` are independent capabilities, and the tools gate the five
