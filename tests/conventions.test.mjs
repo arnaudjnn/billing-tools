@@ -312,6 +312,44 @@ test("nothing compiled is reachable from no entry point", async () => {
 // registered tool. The customer CLI is hand-written, so it is the one surface that
 // can silently fall behind — and it did: the spend ceiling was settable from a
 // billing screen and from nowhere else, tool included.
+test("every structured refusal reason has a describeReason sentence", async () => {
+  // The codes are wire format: a consumer's screens branch on them, and
+  // `describeReason` is the one map from code to sentence. A reason added
+  // tomorrow without a key would echo its own code at a customer — visible,
+  // but not a sentence — so this fails by name the moment one is added.
+  const { describeReason } = await import(
+    new URL("../dist/i18n.js", import.meta.url).href
+  );
+  const MODULES = ["topup.ts", "members.ts", "plan-request.ts", "seats.ts", "billing.ts"];
+  const codes = new Set();
+  for (const file of MODULES) {
+    // \breason does not match billing_reason (underscore is a word character),
+    // so Stripe's own field never leaks into the set.
+    for (const m of code(join(ROOT, "src", file)).matchAll(/\breason:\s*"([a-z_]+)"/g)) {
+      codes.add(m[1]);
+    }
+    // Union-typed results name their codes once in the type, not per return site.
+    for (const m of code(join(ROOT, "src", file)).matchAll(
+      /\breason\??:\s*((?:"[a-z_]+"\s*\|\s*)+"[a-z_]+")/g,
+    )) {
+      for (const lit of m[1].matchAll(/"([a-z_]+)"/g)) codes.add(lit[1]);
+    }
+  }
+  // PlanChangeError carries its code as a class field rather than a `reason:` literal.
+  const sub = code(join(ROOT, "src/subscription.ts"));
+  const union = sub.match(/PlanChangeErrorCode =([\s\S]*?);/);
+  for (const lit of union[1].matchAll(/"([a-z_]+)"/g)) codes.add(lit[1]);
+
+  assert.ok(codes.size >= 20, `expected the scan to find the codes, got ${codes.size}`);
+  for (const reason of codes) {
+    assert.notEqual(
+      describeReason(reason),
+      reason,
+      `reason "${reason}" has no Messages key — add reason* to i18n.ts and REASON_KEYS`,
+    );
+  }
+});
+
 test("the CLI reaches every billing tool", async () => {
   const { BILLING_TOOL_NAMES } = await import("../dist/tools/register.js");
   // Comments stripped, so a tool merely NAMED in an explanation does not count as

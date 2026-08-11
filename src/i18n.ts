@@ -158,6 +158,37 @@ export interface Messages {
   paymentDetailsInvalid: string;
   cardNotSaved: string;
   paymentFailed: string;
+  /**
+   * The structured refusal reasons tool results carry (`{ ok: false, reason }`),
+   * one key per distinct meaning — see `describeReason`. They exist because a
+   * consumer selling in one language mapped these codes to sentences in ten
+   * different components, which is ten chances for the same refusal to be
+   * explained two ways.
+   */
+  reasonNotCapped: string;
+  reasonNotBlocked: string;
+  reasonAlreadyPending: string;
+  reasonLimitReached: string;
+  reasonMemberLimitReached: string;
+  reasonInvalidAmount: string;
+  reasonDuplicate: string;
+  reasonNotFound: string;
+  reasonLastAdmin: string;
+  reasonNotAMember: string;
+  reasonUnsupported: string;
+  reasonAlreadyOnIt: string;
+  reasonNoUpgrade: string;
+  reasonQueueFull: string;
+  reasonAtMax: string;
+  reasonNotPurchased: string;
+  reasonNoCard: string;
+  reasonNoEmail: string;
+  reasonChargeFailed: string;
+  reasonMultipleSubscriptions: string;
+  reasonInvalidBasket: string;
+  reasonNeedsReturnUrl: string;
+  reasonNoCustomer: string;
+  reasonNotPurchasable: string;
 }
 
 /**
@@ -201,6 +232,30 @@ export const DEFAULT_MESSAGES: Messages = {
   paymentDetailsInvalid: "Invalid payment details",
   cardNotSaved: "Card not saved",
   paymentFailed: "Payment failed",
+  reasonNotCapped: "This plan has no per-member allowance to raise",
+  reasonNotBlocked: "No limit is refusing you yet, so there is nothing to top up",
+  reasonAlreadyPending: "A request is already pending",
+  reasonLimitReached: "The top-up ceiling for this cycle has been reached",
+  reasonMemberLimitReached: "This plan has no seat left for another member",
+  reasonInvalidAmount: "That amount is not valid",
+  reasonDuplicate: "Already recorded",
+  reasonNotFound: "No such request",
+  reasonLastAdmin: "The last admin cannot be demoted or removed",
+  reasonNotAMember: "Not a member of this workspace",
+  reasonUnsupported: "Not supported on this workspace",
+  reasonAlreadyOnIt: "Already on that seat or better",
+  reasonNoUpgrade: "There is nothing higher to move to",
+  reasonQueueFull: "The request queue is full — resolve a pending request first",
+  reasonAtMax: "Every seat of that type is taken",
+  reasonNotPurchased: "No purchased seat of that type is free — change the plan to add one",
+  reasonNoCard: "No card on file. Have the invoice emailed instead, or add a card first",
+  reasonNoEmail: "No billing email on file. Set the billing profile first",
+  reasonChargeFailed: "The charge did not go through",
+  reasonMultipleSubscriptions: "More than one live subscription — resolve that first",
+  reasonInvalidBasket: "That seat selection cannot be bought",
+  reasonNeedsReturnUrl: "A return URL is needed to open checkout",
+  reasonNoCustomer: "No billing account exists for this workspace yet",
+  reasonNotPurchasable: "This plan is not self-serve",
 };
 
 export type PartialMessages = Partial<Messages>;
@@ -210,6 +265,61 @@ export const resolveMessages = (messages?: PartialMessages): Messages => ({
   ...DEFAULT_MESSAGES,
   ...messages,
 });
+
+/**
+ * The sentence for a structured refusal reason (`{ ok: false, reason }`), in the
+ * caller's own bundle.
+ *
+ * The engine's tool results carry these codes so a caller can branch; what a HUMAN
+ * reads was left to each screen, and the consumer that sells in Italian translated
+ * them in ten separate components. This is the one map, on the dependency-free leaf,
+ * so a client component passes its bundle while the API keeps answering English.
+ *
+ * `limit_reached` is the one code with two meanings — a member's top-up ceiling
+ * (topup.ts) and no seat left for another member (members.ts) — genuinely different
+ * sentences in any language, so `opts.of: "members"` picks the second. An unknown
+ * code echoes itself rather than returning blank, the `formatMessage` rule: a typo
+ * should be visible.
+ */
+export function describeReason(
+  reason: string,
+  messages?: PartialMessages,
+  opts?: { of?: "members" },
+): string {
+  const key =
+    reason === "limit_reached" && opts?.of === "members"
+      ? "reasonMemberLimitReached"
+      : REASON_KEYS[reason];
+  if (!key) return reason;
+  return resolveMessages(messages)[key];
+}
+
+const REASON_KEYS: Record<string, keyof Messages> = {
+  not_capped: "reasonNotCapped",
+  not_blocked: "reasonNotBlocked",
+  already_pending: "reasonAlreadyPending",
+  limit_reached: "reasonLimitReached",
+  invalid_amount: "reasonInvalidAmount",
+  duplicate: "reasonDuplicate",
+  not_found: "reasonNotFound",
+  last_admin: "reasonLastAdmin",
+  not_a_member: "reasonNotAMember",
+  unsupported: "reasonUnsupported",
+  already_on_it: "reasonAlreadyOnIt",
+  no_upgrade: "reasonNoUpgrade",
+  queue_full: "reasonQueueFull",
+  unknown_plan: "unknownPlan",
+  at_max: "reasonAtMax",
+  not_purchased: "reasonNotPurchased",
+  no_card: "reasonNoCard",
+  no_email: "reasonNoEmail",
+  charge_failed: "reasonChargeFailed",
+  multiple_subscriptions: "reasonMultipleSubscriptions",
+  invalid_basket: "reasonInvalidBasket",
+  needs_return_url: "reasonNeedsReturnUrl",
+  no_customer: "reasonNoCustomer",
+  not_purchasable: "reasonNotPurchasable",
+};
 
 /** Substitute `{name}` placeholders. Unknown names are left as-is, so a typo is
  *  visible rather than silently blank. */

@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 
 import { describeDenial } from "../dist/allowance.js";
-import { DEFAULT_MESSAGES, resolveMessages } from "../dist/i18n.js";
+import { DEFAULT_MESSAGES, describeReason, resolveMessages } from "../dist/i18n.js";
 
 const state = {
   plan: "pro",
@@ -59,4 +59,40 @@ test("a deployment's own words reach a refusal, not just its screens", () => {
     describeDenial("seat_allowance_reached", state, undefined, it),
     resolveMessages(it).seatAllowanceReached,
   );
+});
+
+// ── describeReason: the tool results' structured refusals, same bundle ───────
+
+test("every reason code resolves to a sentence, in English by default", () => {
+  for (const reason of [
+    "not_capped", "not_blocked", "already_pending", "limit_reached", "invalid_amount",
+    "duplicate", "not_found", "last_admin", "not_a_member", "unsupported",
+    "already_on_it", "no_upgrade", "queue_full", "unknown_plan", "at_max",
+    "not_purchased", "no_card", "no_email", "charge_failed",
+    "multiple_subscriptions", "invalid_basket", "needs_return_url", "no_customer",
+    "not_purchasable",
+  ]) {
+    const out = describeReason(reason);
+    assert.notEqual(out, reason, `"${reason}" did not resolve`);
+    assert.ok(out.length > 10, `"${reason}" resolved to something too short: "${out}"`);
+  }
+});
+
+test("a bundle's own words win, and a partial bundle keeps English for the rest", () => {
+  const it = { reasonNotCapped: "Questo piano non ha un pacchetto per membro da aumentare" };
+  assert.match(describeReason("not_capped", it), /^Questo piano/);
+  assert.equal(describeReason("last_admin", it), DEFAULT_MESSAGES.reasonLastAdmin);
+});
+
+test("limit_reached means two things, and `of: members` picks the seat sentence", () => {
+  assert.equal(describeReason("limit_reached"), DEFAULT_MESSAGES.reasonLimitReached);
+  assert.equal(
+    describeReason("limit_reached", undefined, { of: "members" }),
+    DEFAULT_MESSAGES.reasonMemberLimitReached,
+  );
+  assert.notEqual(DEFAULT_MESSAGES.reasonLimitReached, DEFAULT_MESSAGES.reasonMemberLimitReached);
+});
+
+test("an unknown code echoes itself — visible, never blank", () => {
+  assert.equal(describeReason("some_future_code"), "some_future_code");
 });
