@@ -80,7 +80,7 @@ Deliberate exceptions — don't "fix" these:
 
 REST and MCP get it structurally (`createDispatcher` monkey-patches `server.tool`, so every registered tool is an endpoint). `tests/surface.test.mjs` asserts `BILLING_TOOL_NAMES` matches what registration produces, **in both directions and by count**. The CLI is hand-written and is the one surface that can silently fall behind, so `tests/conventions.test.mjs` asserts it reaches every tool — and, since it is hand-written, that it is **gated by the same `toolCapabilities`**: pass `plans` to `registerBillingCommands` and a flat/pooled deployment stops shipping `seats` / `assign-seat` / the five `topup` commands, which on that catalogue call tools that were never registered and can only answer "Unknown tool". A dead command is the same false statement as a dead tool. Omitting `plans` registers everything, because undefined is "the caller did not say". Coverage is per tool, not per command: `get_api_key` has no command because `auth` performs that flow, `preview_credit_purchase` is `buy --quote`, `set_spend_controls` is `spend limit` / `spend alerts`.
 
-### The 46 tools
+### The 49 tools
 
 `BILLING_TOOL_NAMES` (`tools/register.ts`) is the canonical list of what the library **can** register. The **needs** column is not documentation: `toolCapabilities(plans)` computes it and `registerBillingTools` reads it, so the table and the code cannot disagree.
 
@@ -126,6 +126,9 @@ REST and MCP get it structurally (`createDispatcher` monkey-patches `server.tool
 | `request_plan_change` | lifecycle | A member asks an owner to move the workspace up a tier | `plans` |
 | `request_seat_change` | lifecycle | A member asks for a bigger SEAT — the right ask while one exists | `plans` |
 | `resolve_plan_request` | lifecycle | Owner records that ask handled or refused (admin) | `plans` |
+| `accept_plan_quote` | quotes | Takes a priced quote, and pays it (admin) | a `quote` plan |
+| `quote_plan_change` | quotes | Prices an ask: a quantity and a price per credit (**operator**) | a `quote` plan |
+| `sell_credits` | quotes | The same sale with no request behind it (**operator**) | a `quote` plan |
 | `get_billing_profile` | account | Invoice recipient, company name, billing address | Stripe customer |
 | `set_billing_profile` | account | Patches those fields | Stripe customer |
 | `set_tax_id` | account | The VAT number printed on invoices | Stripe customer |
