@@ -3,6 +3,16 @@ import { test } from "vitest";
 
 const ok = (label, cond, extra = "") => assert.ok(cond, `${label}${extra ? " — " + extra : ""}`);
 
+test("formatMinor is the money formatter the derivations already used, exported", async () => {
+  const { formatMinor } = await import(new URL("../dist/entries/plans.js", import.meta.url).href);
+  // The exact behaviour derivePlanViews' default had: narrowSymbol, 0–2 fraction digits.
+  assert.equal(formatMinor(1800, "eur"), "€18");
+  assert.equal(formatMinor(2104, "eur", "it-IT"), "21,04 €");
+  assert.equal(formatMinor(2104, "usd"), "$21.04");
+  // Round amounts drop the decimals; fractional ones keep exactly two.
+  assert.equal(formatMinor(300000, "usd"), "$3,000");
+});
+
 test("text localises, and the library's own words default to English", async () => {
   const P = new URL("../dist/pricing.js", import.meta.url).href;
   const { derivePlanViews, deriveCompareTable, renderPlansMarkdown, definePlans, defineCompare,

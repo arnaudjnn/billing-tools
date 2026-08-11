@@ -1,5 +1,6 @@
 import {
   formatMessage,
+  formatMinor,
   resolveLocalized,
   resolveLocalizedList,
   resolveMessages,
@@ -63,6 +64,7 @@ export {
   resolveLocalizedList,
   resolveMessages,
   formatMessage,
+  formatMinor,
   DEFAULT_MESSAGES,
 } from "./i18n.js";
 export type {
@@ -216,16 +218,6 @@ export interface DerivePlanViewsOptions extends LocaleOptions {
   includeHidden?: boolean;
 }
 
-const defaultFormatMoney = (minor: Money, currency: string, locale: string): string => {
-  const text = new Intl.NumberFormat(locale, {
-    style: "currency",
-    currency: currency.toUpperCase(),
-    currencyDisplay: "narrowSymbol",
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2,
-  }).format(minor / 100);
-  return text;
-};
 
 /** The default basket's cost for an interval, so a headline, a saving and a
  *  consumer's stepper subtotal are all `priceBasket` of the same quantities. */
@@ -282,7 +274,7 @@ export function derivePlanViews(
   const currency = opts.currency ?? "usd";
   const messages = resolveMessages(opts.messages);
   const text = (v: Localized | undefined) => resolveLocalized(v, opts);
-  const fmt = opts.formatMoney ?? defaultFormatMoney;
+  const fmt = opts.formatMoney ?? formatMinor;
   const money = (minor: Money): MoneyView => ({ minor, text: fmt(minor, currency, locale) });
   const other: BillingInterval = interval === "yearly" ? "monthly" : "yearly";
 

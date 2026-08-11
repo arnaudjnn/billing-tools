@@ -90,6 +90,26 @@ function candidates(locale: string | undefined, fallback: string): string[] {
   return out;
 }
 
+// ── Money ───────────────────────────────────────────────────────────────────
+
+/**
+ * Minor units → a currency string via Intl — THE formatter `derivePlanViews` defaults to,
+ * exported so an app's other screens format identically to its pricing cards.
+ *
+ * One consumer kept seven local copies of this, two of which hardcoded EUR next to a
+ * config that declares the currency. `formatMoney` on the pricing derivations stays the
+ * override for a house style Intl won't reproduce ("€18" where it-IT writes "18,00 €").
+ */
+export function formatMinor(minor: number, currency: string, locale = "en-US"): string {
+  return new Intl.NumberFormat(locale, {
+    style: "currency",
+    currency: currency.toUpperCase(),
+    currencyDisplay: "narrowSymbol",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  }).format(minor / 100);
+}
+
 // ── The library's own words ─────────────────────────────────────────────────
 
 export interface Messages {
