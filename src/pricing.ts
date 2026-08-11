@@ -12,6 +12,7 @@ import {
   defaultBasket,
   normalizePlans,
   poolSizeOf,
+  priceBasket,
   type BillingInterval,
   type Money,
   type PlanCatalog,
@@ -52,6 +53,8 @@ export {
   defaultBasket,
   validateBasket,
   describeBasketProblem,
+  priceBasket,
+  basketBounds,
   poolSizeOf,
   packSizeOf,
 } from "./plan-model.js";
@@ -224,15 +227,11 @@ const defaultFormatMoney = (minor: Money, currency: string, locale: string): str
   return text;
 };
 
-/** The default basket's cost for an interval, so a headline and a saving are
- *  computed from the same quantities. */
+/** The default basket's cost for an interval, so a headline, a saving and a
+ *  consumer's stepper subtotal are all `priceBasket` of the same quantities. */
 function basketTotal(model: PlanModel, interval: BillingInterval): Money {
-  if (model.sells.kind === "flat") return model.sells.price[interval];
-  const basket = defaultBasket(model);
-  return model.seatTypes.reduce(
-    (sum, s) => sum + (basket[s.key] ?? 0) * s.price[interval],
-    0,
-  );
+  const seats = model.sells.kind === "seats" ? defaultBasket(model) : undefined;
+  return priceBasket(model, seats, interval).subtotal;
 }
 
 function priceKindOf(model: PlanModel): PlanPriceView["kind"] {

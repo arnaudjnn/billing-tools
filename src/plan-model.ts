@@ -866,6 +866,85 @@ export function defaultBasket(model: PlanModel): Quantities {
   return basket;
 }
 
+export interface BasketLine {
+  /** Null for a flat plan's single line. */
+  seatType: string | null;
+  quantity: number;
+  /** Per-seat (or flat) price for the interval, minor units. */
+  unit: Money;
+  /** quantity × unit. */
+  amount: Money;
+}
+
+/**
+ * Price a basket from the catalogue — the DISPLAY half of `validateBasket`.
+ *
+ * Does not validate: `validateBasket` is the gate, and a stepper needs the number for
+ * baskets the gate would refuse (that is how it explains the refusal). A consumer's
+ * checkout hand-summed `seats[k] × price[interval]` beside the very component that
+ * called `validateBasket`, which is two sources for one figure.
+ *
+ * `taxPercent` yields a pre-address estimate: the tax rounds ONCE on the summed
+ * subtotal — the same rule `quoteCreditPurchase` applies — because rounding each line
+ * and adding drifts a cent. The real total is still Stripe's once an address exists;
+ * this is what a form shows before one does.
+ */
+export function priceBasket(
+  model: PlanModel | null,
+  seats: Quantities | undefined,
+  interval: BillingInterval,
+  opts?: { taxPercent?: number },
+): { subtotal: Money; lines: BasketLine[]; tax?: Money; total?: Money } {
+  const lines: BasketLine[] = [];
+  if (model?.sells.kind === "flat") {
+    const unit = model.sells.price[interval];
+    lines.push({ seatType: null, quantity: 1, unit, amount: unit });
+  } else if (model?.sells.kind === "seats") {
+    for (const s of model.seatTypes) {
+      const quantity = seats?.[s.key] ?? 0;
+      if (quantity <= 0) continue;
+      const unit = s.price[interval];
+      lines.push({ seatType: s.key, quantity, unit, amount: quantity * unit });
+    }
+  }
+  const subtotal = lines.reduce((sum, l) => sum + l.amount, 0);
+  if (opts?.taxPercent == null) return { subtotal, lines };
+  const tax = Math.round((subtotal * opts.taxPercent) / 100);
+  return { subtotal, lines, tax, total: subtotal + tax };
+}
+
+/**
+ * The stepper's numbers, collapsed the way a UI needs them.
+ *
+ * `maxSeats` is the TIGHTEST of `sells.maxSeats` and `limits.members`, because
+ * `validateBasket` enforces both and a stepper that read only one offered seats the
+ * other refuses — a consumer re-derived exactly this with its own `tighter()`.
+ * Deliberately no canAdd/canRemove predicates: with the numbers published the
+ * comparison is a one-liner that cannot drift, and `validateBasket` stays the refusal
+ * (the `seatCapacity` precedent — the guard answers one candidate, a UI needs the
+ * numbers).
+ */
+export function basketBounds(model: PlanModel | null): {
+  minSeats: number;
+  /** Null = unbounded. */
+  maxSeats: number | null;
+  seatTypes: Record<string, { min: number; max: number | null }>;
+} {
+  if (!model || model.sells.kind !== "seats") {
+    return { minSeats: 0, maxSeats: null, seatTypes: {} };
+  }
+  const ceilings = [model.sells.maxSeats, model.limits.members].filter(
+    (n): n is number => n != null,
+  );
+  const seatTypes: Record<string, { min: number; max: number | null }> = {};
+  for (const s of model.seatTypes) seatTypes[s.key] = { min: s.min, max: s.max };
+  return {
+    minSeats: model.sells.minSeats ?? 0,
+    maxSeats: ceilings.length ? Math.min(...ceilings) : null,
+    seatTypes,
+  };
+}
+
 export type BasketProblem =
   | { code: "unknown_plan" }
   | { code: "not_purchasable"; sale: Sale }
