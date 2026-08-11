@@ -11,7 +11,7 @@ process.env.STRIPE_SECRET_KEY ??= "sk_test_fake";
 import assert from "node:assert/strict";
 import { test } from "vitest";
 
-import { planModel, purchaseBounds, requestBounds } from "../dist/entries/plans.js";
+import { autoReloadDefaults, planModel, purchaseBounds, requestBounds } from "../dist/entries/plans.js";
 import { runWithResolvedOrg } from "../dist/auth.js";
 import { createDispatcher } from "../dist/dispatch.js";
 import { registerBillingTools } from "../dist/tools/register.js";
@@ -60,6 +60,30 @@ test("a plan that states its own is believed", () => {
 test("no plan at all still answers, because a buy form has to render something", () => {
   assert.deepEqual(purchaseBounds(null), { min: 5, max: 200_000 });
   assert.equal(requestBounds(null).percent, 25);
+});
+
+// ── auto-reload: the plan's offer, with NO invented numbers ──────────────────
+
+test("autoReloadDefaults returns the declared offer verbatim, enabledByDefault filled false", () => {
+  const declared = {
+    ...PLANS.pro,
+    replenish: { ...PLANS.pro.replenish, autoReload: { threshold: 500, reloadTo: 5_000 } },
+  };
+  assert.deepEqual(autoReloadDefaults(planModel({ p: declared }, "p")), {
+    threshold: 500,
+    reloadTo: 5_000,
+    enabledByDefault: false,
+  });
+  const enabled = {
+    ...PLANS.pro,
+    replenish: { autoReload: { threshold: 200, reloadTo: 1_000, enabledByDefault: true } },
+  };
+  assert.equal(autoReloadDefaults(planModel({ p: enabled }, "p")).enabledByDefault, true);
+});
+
+test("a plan offering no auto-reload answers null — a card must not prefill invented numbers", () => {
+  assert.equal(autoReloadDefaults(planModel(PLANS, "pro")), null);
+  assert.equal(autoReloadDefaults(null), null);
 });
 
 // ── and the tools enforce the ORG's plan, not the widest in the catalogue ────

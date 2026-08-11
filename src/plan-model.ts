@@ -457,6 +457,28 @@ export function requestBounds(model: PlanModel | null): {
   };
 }
 
+/**
+ * The auto-reload offer a plan makes, or null when it makes none.
+ *
+ * Null on purpose, with no invented numbers: unlike `purchaseBounds`, whose tool schema
+ * needs a figure, there is no engine default for a reload threshold — the two consumers
+ * that needed one invented it per screen, and one of those screens drifted from its own
+ * config (a dialog prefilling 2 000 against a plan declaring 5 000). A card that gets
+ * null should not prefill or offer the control. These are the plan's DEFAULTS; the live
+ * per-customer settings stay on the Stripe customer.
+ */
+export function autoReloadDefaults(
+  model: PlanModel | null,
+): { threshold: Money; reloadTo: Money; enabledByDefault: boolean } | null {
+  const offer = model?.replenish.autoReload;
+  if (!offer) return null;
+  return {
+    threshold: offer.threshold,
+    reloadTo: offer.reloadTo,
+    enabledByDefault: offer.enabledByDefault ?? false,
+  };
+}
+
 /** One purchase, in currency units. Stripe's own floor is well below this; 5 is the point
  *  where the processing fee stops eating the purchase. */
 export const DEFAULT_PURCHASE_MIN = 5;
