@@ -1,3 +1,10 @@
+## [25.2.2](https://github.com/arnaudjnn/billing-tools/compare/v25.2.1...v25.2.2) (2026-08-11)
+
+
+### Bug Fixes
+
+* **spend:** refuse an alert threshold nothing can deliver ([f01fcf1](https://github.com/arnaudjnn/billing-tools/commit/f01fcf1a8602e5cfcd08d24aaafe7fddf6dfb2b5))
+
 ## [25.2.1](https://github.com/arnaudjnn/billing-tools/compare/v25.2.0...v25.2.1) (2026-08-10)
 
 
