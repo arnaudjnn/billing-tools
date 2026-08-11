@@ -1,3 +1,10 @@
+## [25.2.3](https://github.com/arnaudjnn/billing-tools/compare/v25.2.2...v25.2.3) (2026-08-11)
+
+
+### Bug Fixes
+
+* **cli:** the quotes group is gated too, so three surfaces give one answer ([2963ff4](https://github.com/arnaudjnn/billing-tools/commit/2963ff4cb2e029850cad0217ab3284e99fa46e11))
+
 ## [25.2.2](https://github.com/arnaudjnn/billing-tools/compare/v25.2.1...v25.2.2) (2026-08-11)
 
 
