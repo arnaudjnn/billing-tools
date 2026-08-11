@@ -246,3 +246,32 @@ test("the ORG meter sees every call, whatever funded it", async () => {
     assert.equal(calls.orgEvents, 1, `cap ${cap.kind}: the org meter must see it`);
   }
 });
+
+// ── visibleWindows: what one scope's card shows, duplicates of the package dropped ──
+
+test("visibleWindows drops the month/cycle duplicates and appends the included row", async () => {
+  const { visibleWindows } = await import(new URL("../dist/usage.js", import.meta.url).href);
+  const win = (every, scope) => ({ every, scope, percent: 0, resetsAt: null });
+  const windows = [win("week", "org"), win("month", "org"), win("cycle", "org"), win("hour", "caller")];
+  const pool = { every: "cycle", scope: "org", percent: 62, resetsAt: null };
+
+  // Default: the package replaces its duplicates; shorter windows survive.
+  assert.deepEqual(visibleWindows(windows, "org", pool), [win("week", "org"), pool]);
+  // No included window: filter by scope only.
+  assert.deepEqual(visibleWindows(windows, "org", null), [
+    win("week", "org"), win("month", "org"), win("cycle", "org"),
+  ]);
+  assert.deepEqual(visibleWindows(windows, "caller", null), [win("hour", "caller")]);
+});
+
+test("append: false drops the same duplicates and adds nothing — the pack row lives elsewhere", async () => {
+  const { visibleWindows } = await import(new URL("../dist/usage.js", import.meta.url).href);
+  const win = (every, scope) => ({ every, scope, percent: 0, resetsAt: null });
+  const windows = [win("week", "org"), win("month", "org"), win("cycle", "org")];
+  const pack = { every: "month", scope: "caller", percent: 40, resetsAt: null };
+
+  assert.deepEqual(visibleWindows(windows, "org", pack, { append: false }), [win("week", "org")]);
+  // And the default is unchanged by the option existing.
+  assert.deepEqual(visibleWindows(windows, "org", pack, { append: true }),
+    visibleWindows(windows, "org", pack));
+});

@@ -50,16 +50,23 @@ export interface UsageWindow extends LimitState {
  * It lives here rather than in a consumer because it is a rule about the plan model, not about
  * anybody's language — and it was written twice already, once per usage screen, which is
  * exactly how two pages come to disagree about what a plan sells.
+ *
+ * `append: false` is for the screen whose duplicate-maker is rendered ELSEWHERE — an admin
+ * table already showing each member's seat pack as its own row needs the org rows that pack
+ * duplicates dropped without the pack re-added here. One consumer hand-filtered
+ * `every !== "month" && every !== "cycle"` for exactly this, which is the same rule spelled
+ * a second time.
  */
 export function visibleWindows(
   windows: readonly UsageWindow[],
   scope: "org" | "caller",
   included: UsageWindow | null,
+  opts?: { append?: boolean },
 ): UsageWindow[] {
   const rows = windows.filter(
     (w) => w.scope === scope && !(included && (w.every === "month" || w.every === "cycle")),
   );
-  return included ? [...rows, included] : rows;
+  return included && (opts?.append ?? true) ? [...rows, included] : rows;
 }
 
 
