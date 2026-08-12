@@ -1,3 +1,10 @@
+## [25.5.1](https://github.com/arnaudjnn/billing-tools/compare/v25.5.0...v25.5.1) (2026-08-12)
+
+
+### Bug Fixes
+
+* **api:** api.members.invite could not pass the seatType inviteMember takes ([13c8de6](https://github.com/arnaudjnn/billing-tools/commit/13c8de61687236f037d0c606224a4267889a8a76))
+
 # [25.5.0](https://github.com/arnaudjnn/billing-tools/compare/v25.4.3...v25.5.0) (2026-08-12)
 
 
