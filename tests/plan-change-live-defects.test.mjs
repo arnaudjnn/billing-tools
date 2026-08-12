@@ -550,3 +550,141 @@ test("an idempotency key reused with DIFFERENT params is not retried away", asyn
   await assert.rejects(() => upgrade(stripe), /same parameters/);
   assert.equal(attempts, 1, "surfaced on the first try");
 });
+
+// ── 5. What was BOUGHT has to be recorded, and was not ──────────────────────
+//
+// `changePlan` wrote plan/status/subscriptionId/periodEnd and nothing about
+// seats, so a workspace that added one PAID for it and did not receive it:
+// `seatCounts` is the member ceiling, the seat-assignment capacity AND the size
+// of a `cap.perSeat` pool, so the customer was charged and stayed refused at all
+// three. Measured on a real subscription — Stripe's item read quantity 4 while
+// the org still said 3.
+//
+// Waiting for `customer.subscription.updated` is not good enough for the same
+// reason `completeCheckout` mirrors on return: the customer is looking at the
+// page that says what they just bought, and a deployment on event POLLING (or on
+// neither) may not see the event for minutes or at all.
+
+const SEAT_PLANS = {
+  team: {
+    sells: {
+      kind: "seats",
+      seatTypes: { standard: { price: { monthly: 2104 }, includedCredits: 1000, min: 1 } },
+    },
+    cap: { kind: "per_seat" },
+    limits: { members: 100 },
+    sale: "self_serve",
+  },
+};
+
+/** A live seats subscription, and a recorder for what the adapter is told. */
+function seatWorld({ boughtNow = 4 } = {}) {
+  const recorded = [];
+  const stripe = {
+    subscriptions: {
+      async *list() {
+        yield {
+          id: "sub_1",
+          status: "active",
+          metadata: { plan: "team" },
+          schedule: null,
+          cancel_at_period_end: false,
+          default_tax_rates: [],
+          items: {
+            data: [
+              {
+                id: "si_1",
+                quantity: 3,
+                price: { id: "price_standard", metadata: { seatType: "standard" } },
+                tax_rates: [],
+                current_period_end: PERIOD_END,
+              },
+            ],
+          },
+        };
+      },
+      async update(id) {
+        return {
+          id,
+          status: "active",
+          metadata: {},
+          items: {
+            data: [
+              {
+                id: "si_1",
+                quantity: boughtNow,
+                price: { id: "price_standard", metadata: { seatType: "standard" } },
+                current_period_end: PERIOD_END,
+              },
+            ],
+          },
+        };
+      },
+    },
+    subscriptionSchedules: { async release() {}, async retrieve() {}, async create() {} },
+  };
+  const seatAdapter = {
+    ...adapter,
+    async setSubscription(orgId, patch) {
+      recorded.push(patch);
+    },
+    async setOrgMetadata() {},
+  };
+  return { stripe, seatAdapter, recorded };
+}
+
+test("adding a seat records the seats bought, not just the plan", async () => {
+  const { stripe, seatAdapter, recorded } = seatWorld({ boughtNow: 4 });
+  __setStripeForTests(stripe);
+  __setPlanPricesForTests(new Map([["team_standard_monthly", "price_standard"]]));
+
+  const r = await changePlan(seatAdapter, "org_1", {
+    plans: SEAT_PLANS,
+    to: { plan: "team", seats: { standard: 4 } },
+  });
+  assert.equal(r.kind, "updated");
+
+  const patch = recorded.at(-1);
+  assert.ok(patch, "the change must be recorded at all");
+  // Read off the UPDATED subscription, so it is what Stripe now bills — not what
+  // the caller asked for, which a partial application would make a lie.
+  assert.deepEqual(patch.seatCounts, { standard: 4 });
+  // The BREAKDOWN only: the adapter derives the total from it, and writing both
+  // is two answers to one question.
+  assert.equal("seats" in patch, false);
+  assert.equal(patch.plan, "team");
+});
+
+test("a HELD change records no seats, because none were granted", async () => {
+  // A declined `invoice_now` upgrade comes back active with the items unchanged.
+  // Recording the target there would hand over a seat nobody paid for — the same
+  // reason `kind: "pending"` refuses to record the plan.
+  const { stripe, seatAdapter, recorded } = seatWorld({ boughtNow: 3 });
+  stripe.subscriptions.update = async (id) => ({
+    id,
+    status: "active",
+    metadata: {},
+    pending_update: { expires_at: 1 },
+    latest_invoice: "in_1",
+    items: {
+      data: [
+        {
+          id: "si_1",
+          quantity: 3,
+          price: { id: "price_standard", metadata: { seatType: "standard" } },
+          current_period_end: PERIOD_END,
+        },
+      ],
+    },
+  });
+  __setStripeForTests(stripe);
+  __setPlanPricesForTests(new Map([["team_standard_monthly", "price_standard"]]));
+
+  const r = await changePlan(seatAdapter, "org_1", {
+    plans: SEAT_PLANS,
+    to: { plan: "team", seats: { standard: 4 } },
+    proration: "invoice_now",
+  });
+  assert.equal(r.kind, "pending");
+  assert.equal(recorded.length, 0, "a held change grants nothing, so it records nothing");
+});

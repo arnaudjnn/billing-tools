@@ -5,6 +5,7 @@ import {
   defaultBasket,
   normalizePlans,
   planModel,
+  purchasedSeatsOf,
   resolvePlanPrices,
   validateBasket,
   describeBasketProblem,
@@ -655,6 +656,25 @@ export async function changePlan(
       status: updated.status,
       subscriptionId: updated.id,
       periodEnd: periodEndOf(updated),
+      // WHAT WAS JUST BOUGHT, recorded now rather than when an event lands.
+      //
+      // Only `plan` was written here, so a workspace that added a seat paid for it
+      // and did not receive it: `seatCounts` is the member ceiling, the seat
+      // assignment capacity AND the size of a `cap.perSeat` pool, so the customer
+      // was charged and left refused at all three. Measured — Stripe's item read
+      // quantity 4 while the org still said 3.
+      //
+      // Waiting for `customer.subscription.updated` is not good enough, for the
+      // same reason `completeCheckout` mirrors on return: the customer is looking
+      // at the page that says what they just bought, a webhook is a different
+      // process arriving later, and a deployment on event POLLING (or on neither)
+      // may not see it for minutes or at all. The event handler writes the same
+      // fields from the same helper, so the two agree and the later one is a no-op.
+      // The BREAKDOWN only: the adapter derives the total from it on read, so the
+      // two can never disagree. Exactly what the event handler writes, from the
+      // same helper — so whichever arrives second is a no-op rather than a second
+      // opinion.
+      seatCounts: purchasedSeatsOf(updated),
     });
     await adapter.setOrgMetadata?.(orgId, { pendingPlan: null, pendingPlanAt: null });
   }
