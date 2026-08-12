@@ -1,3 +1,10 @@
+## [25.4.3](https://github.com/arnaudjnn/billing-tools/compare/v25.4.2...v25.4.3) (2026-08-12)
+
+
+### Bug Fixes
+
+* **invitations:** accepting an invitation was refused for every ordinary invitee ([996345a](https://github.com/arnaudjnn/billing-tools/commit/996345adf2cd50c190595146e02a4931b5b7f915))
+
 ## [25.4.2](https://github.com/arnaudjnn/billing-tools/compare/v25.4.1...v25.4.2) (2026-08-12)
 
 
