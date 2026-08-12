@@ -1,3 +1,10 @@
+## [25.5.4](https://github.com/arnaudjnn/billing-tools/compare/v25.5.3...v25.5.4) (2026-08-12)
+
+
+### Bug Fixes
+
+* **subscription:** a workspace that bought a seat paid for it and did not receive it ([4f98904](https://github.com/arnaudjnn/billing-tools/commit/4f989046ecc6cc259ab4a579686bf71417960a11))
+
 ## [25.5.3](https://github.com/arnaudjnn/billing-tools/compare/v25.5.2...v25.5.3) (2026-08-12)
 
 
