@@ -1,3 +1,10 @@
+# [25.5.0](https://github.com/arnaudjnn/billing-tools/compare/v25.4.3...v25.5.0) (2026-08-12)
+
+
+### Features
+
+* **members:** invite somebody onto a seat, with the price guard the raw write skips ([e87402e](https://github.com/arnaudjnn/billing-tools/commit/e87402eef911aaecb09023272f1ec0a65e89d63d))
+
 ## [25.4.3](https://github.com/arnaudjnn/billing-tools/compare/v25.4.2...v25.4.3) (2026-08-12)
 
 
