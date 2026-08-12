@@ -977,10 +977,11 @@ export async function purchaseCredits(
       { idempotencyKey: `${key}:invoice` },
     );
     if (!invoice.id) return { status: "refused", reason: "charge_failed", message: "Stripe returned no invoice." };
+    let settled: Stripe.Invoice;
     try {
-      const paid = await stripe.invoices.pay(invoice.id, { off_session: true });
-      if (paid.status !== "paid") {
-        return { status: "refused", reason: "charge_failed", message: `Invoice is ${paid.status}, not paid.` };
+      settled = await stripe.invoices.pay(invoice.id, { off_session: true });
+      if (settled.status !== "paid") {
+        return { status: "refused", reason: "charge_failed", message: `Invoice is ${settled.status}, not paid.` };
       }
     } catch (e) {
       // A decline is an ANSWER, not a crash: the caller can switch to `invoice` or send the
@@ -994,7 +995,14 @@ export async function purchaseCredits(
     // Credited here rather than left to `invoice.paid`, because an off-session charge is
     // synchronous: the caller gets `charged` and the balance is already true. The webhook
     // grants on the same key, so a delivered event cannot double it.
-    await grantCredits(stripeCustomerId, credits, `Purchase: ${credits} credits`, currency, `credit:invoice:${invoice.id}`);
+    //
+    // `creditsOwedFor`, NOT `credits`: Stripe applies the customer's credit balance to any
+    // invoice it finalizes, and this library's wallet IS that balance — so a customer with
+    // 100 credits buying 2 000 paid $20, had their 100 eaten, and ended on 2 000 instead of
+    // 2 100 (measured headless, exactly the loss `creditsOwedFor` exists to repay). The
+    // webhook path already used it; this one, which credits before the event, did not.
+    const owed = creditsOwedFor(settled) || credits;
+    await grantCredits(stripeCustomerId, owed, `Purchase: ${credits} credits`, currency, `credit:invoice:${invoice.id}`);
     return { status: "charged", method, credits, invoiceId: invoice.id };
   }
 

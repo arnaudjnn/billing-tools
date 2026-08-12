@@ -21,7 +21,15 @@ import { stripeList } from "./helpers.mjs";
 const config = { currency: "eur", baseUrl: "https://app.test", internalDomains: [] };
 
 /** Records everything asked of Stripe; that IS the behaviour under test. */
-function fakeStripe({ cards = [], email = "team@acme.test", payStatus = "paid", payThrows = null } = {}) {
+function fakeStripe({
+  cards = [],
+  email = "team@acme.test",
+  payStatus = "paid",
+  payThrows = null,
+  /** What Stripe ate off the customer's balance to settle the invoice, in minor
+   *  units — negative, exactly as `starting_balance` reports it. */
+  startingBalance = 0,
+} = {}) {
   const calls = { items: [], invoices: [], paid: [], finalized: [], sent: [], credits: [], sessions: [] };
   return {
     calls,
@@ -41,7 +49,12 @@ function fakeStripe({ cards = [], email = "team@acme.test", payStatus = "paid", 
       pay: async (id, o) => {
         calls.paid.push({ id, ...o });
         if (payThrows) throw new Error(payThrows);
-        return { id, status: payStatus };
+        return {
+          id,
+          status: payStatus,
+          starting_balance: startingBalance,
+          metadata: calls.invoices.at(-1)?.metadata,
+        };
       },
       finalizeInvoice: async (id) => (calls.finalized.push(id), { id, status: "open" }),
       sendInvoice: async (id) => (
@@ -82,6 +95,23 @@ test("saved_card charges the card on file and credits, with no URL anywhere", as
   // webhook will use, so the event that follows cannot credit it twice.
   assert.equal(s.calls.credits[0].amount, -2000);
   assert.equal(s.calls.credits[0].key, "credit:invoice:in_1");
+});
+
+test("a saved-card purchase repays the credits the invoice ATE", async () => {
+  // Stripe applies the customer's credit balance to any invoice it finalizes,
+  // and this library's wallet IS that balance. Measured headless against a real
+  // account: a customer holding 100 credits bought 2 000, paid the full $20,
+  // and ended on 2 000 — their 100 silently gone. The webhook path already
+  // corrected for this (`creditsOwedFor`); the synchronous off-session credit,
+  // which runs FIRST and owns the idempotency key, did not.
+  const s = fakeStripe({ cards: [{ id: "pm_1" }], startingBalance: -100 });
+  __setStripeForTests(s);
+
+  const out = await purchaseCredits("cus_1", "org_1", 20, config, { method: "saved_card", tax: noTax });
+
+  assert.equal(out.status, "charged");
+  assert.equal(out.credits, 2000, "what was SOLD is what the caller is told");
+  assert.equal(s.calls.credits[0].amount, -2100, "what is GRANTED is the sale plus what was eaten");
 });
 
 test("…and refuses with the other method named when there is no card", async () => {
