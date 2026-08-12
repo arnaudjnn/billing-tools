@@ -1,3 +1,10 @@
+## [25.3.2](https://github.com/arnaudjnn/billing-tools/compare/v25.3.1...v25.3.2) (2026-08-12)
+
+
+### Bug Fixes
+
+* **subscription:** resuming a cancellation unfiles the pendingPlan record ([8087ba9](https://github.com/arnaudjnn/billing-tools/commit/8087ba9a8333ad566e42e76396eeb3ee71d32174))
+
 ## [25.3.1](https://github.com/arnaudjnn/billing-tools/compare/v25.3.0...v25.3.1) (2026-08-11)
 
 
