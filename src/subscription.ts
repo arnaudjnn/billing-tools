@@ -494,6 +494,26 @@ export async function changePlan(
   const { items, carried } = diffItems(sub, desired, opts.taxRates);
 
   if (items.length === 0) {
+    // Asking for the plan already in force is "STAY here". A schedule still
+    // attached is a move away from it being called off — same act as resuming
+    // a pending cancellation above, reached when the scheduled target was a
+    // paid tier rather than free.
+    if (sub.schedule) {
+      await stripe.subscriptionSchedules.release(
+        typeof sub.schedule === "string" ? sub.schedule : sub.schedule.id,
+      );
+      if (record) {
+        await adapter.setOrgMetadata?.(orgId, { pendingPlan: null, pendingPlanAt: null });
+      }
+      return { kind: "resumed", customerId, subscriptionId: sub.id, plan: currentPlanKey ?? target.key, status: sub.status, effectiveAt };
+    }
+    // Nothing to release — but a pendingPlan record contradicting a healthy
+    // subscription has NOTHING else to clear it on this path: the resume branch
+    // needs cancel_at_period_end and the updated branch needs a real diff, so a
+    // record left behind (the resume bug this fixes shipped one) was permanent.
+    if (record) {
+      await adapter.setOrgMetadata?.(orgId, { pendingPlan: null, pendingPlanAt: null });
+    }
     return { kind: "noop", customerId, subscriptionId: sub.id, plan: currentPlanKey ?? target.key, status: sub.status, effectiveAt };
   }
 

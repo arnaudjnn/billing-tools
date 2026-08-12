@@ -313,6 +313,67 @@ test("resuming a pending cancellation UNFILES pendingPlan", async () => {
   );
 });
 
+test("a same-plan no-op clears a stale pendingPlan record", async () => {
+  // The empty-diff return is reached when Stripe is already healthy — which is
+  // exactly the state the resume bug left behind (metadata pending, subscription
+  // fine). Nothing else can clear the record on this path: the resume branch
+  // needs cancel_at_period_end and the updated branch needs a real diff.
+  const written = [];
+  const recording = {
+    ...adapter,
+    async setSubscription(orgId, patch) {
+      written.push(patch);
+    },
+    async setOrgMetadata(orgId, patch) {
+      written.push(patch);
+    },
+  };
+  const stripe = fakeStripe({ currentPlan: "pro", currentPrice: "price_pro" });
+  __setStripeForTests(stripe);
+  const res = await changePlan(recording, "org_1", {
+    plans: PLANS,
+    to: { plan: "pro", interval: "monthly" },
+    currency: "eur",
+    record: true,
+  });
+
+  assert.equal(res.kind, "noop");
+  assert.deepEqual(
+    written.find((p) => "pendingPlan" in p),
+    { pendingPlan: null, pendingPlanAt: null },
+    "the stale record contradicting a healthy subscription is cleared",
+  );
+});
+
+test("a same-plan ask with a schedule attached calls the scheduled move off", async () => {
+  // A scheduled downgrade to a PAID tier keeps its schedule (it is the
+  // mechanism). The customer then asking for the CURRENT plan is "stay here" —
+  // the schedule is released and the pending record unfiled, exactly like
+  // resuming a pending cancellation.
+  const written = [];
+  const recording = {
+    ...adapter,
+    async setSubscription(orgId, patch) {
+      written.push(patch);
+    },
+    async setOrgMetadata(orgId, patch) {
+      written.push(patch);
+    },
+  };
+  const stripe = fakeStripe({ currentPlan: "pro", currentPrice: "price_pro", schedule: "sub_sched_9" });
+  __setStripeForTests(stripe);
+  const res = await changePlan(recording, "org_1", {
+    plans: PLANS,
+    to: { plan: "pro", interval: "monthly" },
+    currency: "eur",
+    record: true,
+  });
+
+  assert.equal(res.kind, "resumed");
+  assert.deepEqual(stripe.released, ["sub_sched_9"]);
+  assert.deepEqual(written.find((p) => "pendingPlan" in p), { pendingPlan: null, pendingPlanAt: null });
+});
+
 // ── 4. cancelling a scheduled subscription ───────────────────────────────────
 
 test("cancelling releases an attached schedule first", async () => {
