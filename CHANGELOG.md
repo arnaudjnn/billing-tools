@@ -1,3 +1,10 @@
+## [25.5.5](https://github.com/arnaudjnn/billing-tools/compare/v25.5.4...v25.5.5) (2026-08-12)
+
+
+### Bug Fixes
+
+* **subscription:** a no-op left a drifted mirror permanently stuck ([2bf2943](https://github.com/arnaudjnn/billing-tools/commit/2bf2943e32043b4b7e029ba4450e5e97c3139b7c))
+
 ## [25.5.4](https://github.com/arnaudjnn/billing-tools/compare/v25.5.3...v25.5.4) (2026-08-12)
 
 
