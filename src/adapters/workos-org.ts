@@ -388,12 +388,18 @@ export class WorkOSOrgAdapter implements BillingAdapter {
     },
   ): Promise<void> {
     const wid = await this.wid(orgId);
-    const org = await this.workos.organizations.getOrganization(wid);
-    const metadata: Record<string, string> = { ...(org.metadata as Record<string, string> ?? {}) };
+    // WorkOS metadata updates MERGE (measured, orgs and users alike): a key
+    // omitted from the patch is KEPT, and only an explicit null deletes it. The
+    // old shape here — read, merge locally, delete the key, send the remainder —
+    // therefore never deleted anything: the server merged the remainder back
+    // over the existing object and the "deleted" key survived. Every clear this
+    // adapter ever issued (pendingPlan after a resume, an emptied member store,
+    // a retired key) silently no-oped. So deletions are SENT as nulls, and the
+    // read-modify-write goes away — the server's merge is the merge.
+    const metadata: Record<string, string | null> = {};
     const set = (k: string, v: string | null | undefined) => {
       if (v === undefined) return;
-      if (v === null || v === "") delete metadata[k];
-      else metadata[k] = v;
+      metadata[k] = v === null || v === "" ? null : v;
     };
     set("subscriptionStatus", sub.status);
     set("stripeSubscriptionId", sub.subscriptionId);
@@ -409,7 +415,12 @@ export class WorkOSOrgAdapter implements BillingAdapter {
     // Retired in favour of the key above; cleared so it cannot be read as a stale
     // total after seats change, and so the key budget goes back to nine.
     set("subscriptionSeats", null);
-    await this.workos.organizations.updateOrganization({ organization: wid, metadata });
+    await this.workos.organizations.updateOrganization({
+      organization: wid,
+      // The SDK types metadata as Record<string, string>; the API accepts and
+      // REQUIRES null for deletion. Typed around, deliberately.
+      metadata: metadata as unknown as Record<string, string>,
+    });
   }
 
   // ── Metering support (org metadata as the store; no separate DB) ───────────
@@ -419,16 +430,17 @@ export class WorkOSOrgAdapter implements BillingAdapter {
     return (org.metadata as Record<string, string>) ?? {};
   }
 
-  /** Merge a patch into the org metadata (null/"" deletes the key). */
+  /** Merge a patch into the org metadata (null/"" deletes the key). The MERGE is
+   *  the server's own (WorkOS keeps omitted keys — measured), so the patch goes
+   *  as-is with deletions spelled as null; see setSubscription's note. */
   async setOrgMetadata(orgId: string, patch: Record<string, string | null>): Promise<void> {
     const wid = await this.wid(orgId);
-    const org = await this.workos.organizations.getOrganization(wid);
-    const metadata: Record<string, string> = { ...((org.metadata as Record<string, string>) ?? {}) };
-    for (const [k, v] of Object.entries(patch)) {
-      if (v === null || v === "") delete metadata[k];
-      else metadata[k] = v;
-    }
-    await this.workos.organizations.updateOrganization({ organization: wid, metadata });
+    const metadata: Record<string, string | null> = {};
+    for (const [k, v] of Object.entries(patch)) metadata[k] = v === null || v === "" ? null : v;
+    await this.workos.organizations.updateOrganization({
+      organization: wid,
+      metadata: metadata as unknown as Record<string, string>,
+    });
   }
 
   /**
@@ -447,13 +459,14 @@ export class WorkOSOrgAdapter implements BillingAdapter {
   /** Merge a patch into a member's metadata (null/"" deletes the key). Read-then-
    *  write for the same reason `setOrgMetadata` does it: the update replaces. */
   async setUserMetadata(userId: string, patch: Record<string, string | null>): Promise<void> {
-    const user = await this.workos.userManagement.getUser(userId);
-    const metadata: Record<string, string> = { ...((user.metadata as Record<string, string>) ?? {}) };
-    for (const [k, v] of Object.entries(patch)) {
-      if (v === null || v === "") delete metadata[k];
-      else metadata[k] = v;
-    }
-    await this.workos.userManagement.updateUser({ userId, metadata });
+    // Same server-side merge as org metadata (measured on the user endpoint
+    // too): deletions must be SENT as nulls, never expressed by omission.
+    const metadata: Record<string, string | null> = {};
+    for (const [k, v] of Object.entries(patch)) metadata[k] = v === null || v === "" ? null : v;
+    await this.workos.userManagement.updateUser({
+      userId,
+      metadata: metadata as unknown as Record<string, string>,
+    });
   }
 
   /**
