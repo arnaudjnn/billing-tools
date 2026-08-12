@@ -55,6 +55,8 @@ function stripeWith({
   subMetadata = {},
   customer = "cus_1",
   priceMeta = { plan: "pro" },
+  /** The subscription's items, as Stripe returns them — what was BOUGHT. */
+  items = [{ price: { id: "price_1" }, ...PERIOD }],
 } = {}) {
   const updates = [];
   __setStripeForTests({
@@ -78,7 +80,7 @@ function stripeWith({
           id: "sub_1",
           status: subStatus,
           metadata: subMetadata,
-          items: { data: [{ price: { id: "price_1" }, ...PERIOD }] },
+          items: { data: items },
         };
       },
       async update(id, params) {
@@ -170,6 +172,26 @@ test("the plan is mirrored now, not when the webhook lands", async () => {
     new Date(PERIOD.current_period_end * 1000).toISOString(),
     "the period comes off the ITEM, where this API version keeps it",
   );
+});
+
+test("…and so is WHAT WAS BOUGHT, by seat type", async () => {
+  // The only moment the signup flow knows the subscription AND the org:
+  // `customer.subscription.created` fires before an org exists to stamp
+  // `org_id` on, so the sync handler drops it and no later subscription event
+  // ever fires for a subscription nobody touches. Without this, `seatCounts`
+  // stayed null for the life of the workspace and everything measured against
+  // it read UNKNOWN — `seatAssignable` fails open there, so the dearest seat
+  // was free. Measured in a browser: 3 Standard bought, Premium accepted.
+  const adapter = storingAdapter();
+  stripeWith({
+    items: [
+      { price: { id: "price_std", metadata: { seatType: "standard" } }, quantity: 3, ...PERIOD },
+      { price: { id: "price_prem", metadata: { seatType: "premium" } }, quantity: 1, ...PERIOD },
+    ],
+  });
+  await completeCheckout(adapter, "cs_1", { orgId: "org_1", plan: "pro" });
+
+  assert.deepEqual(adapter.state.subscription.seatCounts, { standard: 3, premium: 1 });
 });
 
 test("an explicit plan wins over the price lookup", async () => {

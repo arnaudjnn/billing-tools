@@ -96,6 +96,7 @@ export {
   migrateSubscriptions,
   planPriceId,
   planForPriceId,
+  purchasedSeatsOf,
   seatTypeForPriceId,
   seatLimit,
   seatTypeLimit,

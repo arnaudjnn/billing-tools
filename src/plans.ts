@@ -630,6 +630,36 @@ export async function seatTypeForPriceId(priceId: string): Promise<string | null
   }
 }
 
+/**
+ * What a subscription actually BOUGHT, by seat type — the number every seat
+ * guard, pool size and per-seat grant is measured against.
+ *
+ * Read off the items' own price metadata, so it needs no catalogue and no
+ * network. Null when nothing is quantified, so a reader falls back to the
+ * active member count rather than to a pool of one seat.
+ *
+ * Lives here rather than in `sync.ts` because BOTH paths that learn about a
+ * subscription have to record it: the poller/webhook, and `completeCheckout` —
+ * which is the only moment the SIGNUP flow knows the subscription and the org
+ * together, since the `customer.subscription.created` event fires before the
+ * org exists to stamp on it.
+ */
+export function purchasedSeatsOf(sub: {
+  items?: { data?: Array<{ price?: { metadata?: Record<string, string> | null } | null; quantity?: number | null }> } | null;
+}): Record<string, number> | null {
+  const counts: Record<string, number> = {};
+  for (const item of sub.items?.data ?? []) {
+    const seatType = item.price?.metadata?.seatType;
+    const qty = item.quantity ?? 0;
+    if (!qty) continue;
+    // An item with no seat type still counts toward the total — a `flat` plan has
+    // no seat types at all, and a pool sized per seat must not read zero there.
+    const key = seatType || "default";
+    counts[key] = (counts[key] ?? 0) + qty;
+  }
+  return Object.keys(counts).length ? counts : null;
+}
+
 /** Seat limit for a plan (null = unlimited, undefined plan = null). */
 /** Member limit for a plan (null = unlimited, unknown plan = null). */
 export function seatLimit(plans: PlanCatalog, plan: string): number | null {

@@ -1,7 +1,7 @@
 import { getStripe } from "./billing.js";
 import { updateBillingProfile, type BillingAddress } from "./billing-profile.js";
 import { checkoutSessionOutcome } from "./checkout.js";
-import { planForPriceId } from "./plans.js";
+import { planForPriceId, purchasedSeatsOf } from "./plans.js";
 import type { BillingAdapter } from "./types.js";
 import type Stripe from "stripe";
 
@@ -140,6 +140,19 @@ export async function completeCheckout(
           subscriptionId: sub.id,
           periodStart: periodOf(sub).start,
           periodEnd: periodOf(sub).end,
+          // WHAT WAS BOUGHT, and this is the only place the signup flow can
+          // record it. `customer.subscription.created` fires while the checkout
+          // is completing — before an org exists to stamp `org_id` on — so the
+          // sync handler drops that event, and no later subscription event ever
+          // fires for a subscription nobody touches. Left out, `seatCounts`
+          // stayed null for the life of the workspace, and everything measured
+          // against it read UNKNOWN: `seatAssignable` fails open on unknown
+          // capacity, so an owner could put the whole team on the dearest seat
+          // for free — the exact giveaway that guard exists to stop — and a
+          // `cap.perSeat` pool sized itself on the member count instead of on
+          // the seats the customer is paying for. Measured in a browser: 3
+          // Standard seats bought, Premium assigned and accepted.
+          seatCounts: purchasedSeatsOf(sub),
         });
       } catch (e) {
         warnings.push(`plan not mirrored: ${msg(e)}`);

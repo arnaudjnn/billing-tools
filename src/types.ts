@@ -150,6 +150,21 @@ export interface BillingAdapter {
       subscriptionId: string | null;
       periodStart?: string | null;
       periodEnd: string | null;
+      /**
+       * What was PURCHASED — the mirror of the two fields `getSubscription`
+       * above returns, and the reason a seat guard can answer at all.
+       *
+       * They were declared on the READ and not on the WRITE, so the only
+       * implementation that could ever be told was the concrete
+       * `WorkOSOrgAdapter` (which sync.ts is typed against); through this
+       * interface the counts were unwritable, and any adapter satisfying it
+       * reported `seatCounts: null` for ever. Everything measured against that
+       * reads UNKNOWN — and unknown ALLOWS, so the dearest seat is free.
+       *
+       * `undefined` leaves them as they are; `null` clears them.
+       */
+      seats?: number | null;
+      seatCounts?: Record<string, number> | null;
     },
   ): Promise<void>;
   /** Active members, for per-seat grants and seat limits. */
