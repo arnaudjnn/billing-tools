@@ -1,3 +1,10 @@
+## [25.4.1](https://github.com/arnaudjnn/billing-tools/compare/v25.4.0...v25.4.1) (2026-08-12)
+
+
+### Bug Fixes
+
+* **checkout:** record WHAT WAS BOUGHT, or every seat guard reads unknown ([44ce5ad](https://github.com/arnaudjnn/billing-tools/commit/44ce5ad09a60089240da1cf3f189a6dca41246bd))
+
 # [25.4.0](https://github.com/arnaudjnn/billing-tools/compare/v25.3.6...v25.4.0) (2026-08-12)
 
 
