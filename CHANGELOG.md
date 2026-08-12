@@ -1,3 +1,10 @@
+## [25.4.2](https://github.com/arnaudjnn/billing-tools/compare/v25.4.1...v25.4.2) (2026-08-12)
+
+
+### Bug Fixes
+
+* **seats:** a seat type missing from a breakdown means ZERO, not unknown ([a602c24](https://github.com/arnaudjnn/billing-tools/commit/a602c24079c3d428b41453c6c6a998ab1b83a790))
+
 ## [25.4.1](https://github.com/arnaudjnn/billing-tools/compare/v25.4.0...v25.4.1) (2026-08-12)
 
 
