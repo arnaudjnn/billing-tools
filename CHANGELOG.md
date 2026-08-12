@@ -1,3 +1,10 @@
+## [25.5.2](https://github.com/arnaudjnn/billing-tools/compare/v25.5.1...v25.5.2) (2026-08-12)
+
+
+### Bug Fixes
+
+* **members:** the member ceiling is the seats BOUGHT, not limits.members ([b6c8318](https://github.com/arnaudjnn/billing-tools/commit/b6c8318409a2066713d0c5f84a6f78f8d1a0815b))
+
 ## [25.5.1](https://github.com/arnaudjnn/billing-tools/compare/v25.5.0...v25.5.1) (2026-08-12)
 
 
