@@ -103,6 +103,19 @@ test("no seatCounts means unknown, which means ALLOW", async () => {
   assert.deepEqual(await seatAssignable(adapter, "org_1", model, "u1", "premium"), { ok: true });
 });
 
+test("but a type MISSING from a breakdown that exists means ZERO, and refuses", async () => {
+  // The case the guard exists for, and the one it used to wave through: a
+  // workspace that bought only Standard has no `premium` key at all, so
+  // `seatCounts.premium` is undefined — read as UNKNOWN, the dearest seat was
+  // free exactly where the counts had been recorded correctly. Measured in a
+  // browser: 3 Standard bought, Premium assigned and accepted.
+  const adapter = withSeats({ standard: 3 }, ["u1", "u2"]);
+  const res = await seatAssignable(adapter, "org_1", model, "u1", "premium");
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, "not_purchased");
+  assert.equal(res.purchased, 0);
+});
+
 test("no subscription at all is allowed too, rather than throwing", async () => {
   const adapter = fakeAdapter({ members: ["u1"] });
   assert.deepEqual(await seatAssignable(adapter, "org_1", model, "u1", "premium"), { ok: true });

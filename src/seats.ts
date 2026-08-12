@@ -241,8 +241,16 @@ async function occupancy(
     const members = await adapter.listMemberIds(orgId).catch((): string[] => []);
     implicit = members.filter((id) => id !== exclude && !assignments[id]).length;
   }
-  const purchased = (await adapter.getSubscription?.(orgId).catch(() => null))?.seatCounts?.[seatType];
-  return { assigned: already + implicit, purchased: purchased ?? null };
+  // A seat type MISSING from a breakdown that exists means ZERO of them were
+  // bought — not "unknown". Reading it as unknown made the whole guard inert on
+  // the case it exists for: a workspace that bought only Standard has no
+  // `premium` key, so `seatCounts.premium` is undefined, and unknown ALLOWS —
+  // the dearest seat was free precisely where the counts were recorded
+  // correctly. Only an absent breakdown (no subscription, a plan selling no
+  // seats, a record written before seat counts existed) is genuinely unknown.
+  const counts = (await adapter.getSubscription?.(orgId).catch(() => null))?.seatCounts;
+  const purchased = counts ? (counts[seatType] ?? 0) : null;
+  return { assigned: already + implicit, purchased };
 }
 
 /**
