@@ -231,9 +231,17 @@ export async function startLocalWebhooks(
   const forwardTo = opts.forwardTo ?? "http://localhost:3000/api/stripe/webhook";
   const envFile = opts.envFile === undefined ? ".env.local" : opts.envFile;
 
+  // The key comes from the dotenv file when the environment does not already
+  // carry it. That file is the app's own — it is where the signing secret is
+  // WRITTEN — so requiring the caller to also export STRIPE_SECRET_KEY by hand
+  // was asking them to state twice where their keys live. `npx billing-tools
+  // dev` failed outright in a repo that keeps its key in .env.local, which is
+  // every repo this command documents itself for.
+  const apiKey = opts.apiKey ?? process.env.STRIPE_SECRET_KEY ?? (envFile ? await readEnvVar(envFile, "STRIPE_SECRET_KEY") : undefined);
+
   const listener = await listenForWebhooks({
     forwardTo,
-    apiKey: opts.apiKey,
+    apiKey,
     events: opts.events ?? LOCAL_WEBHOOK_EVENTS,
     log,
   });
@@ -255,6 +263,19 @@ const LOCAL_WEBHOOK_EVENTS = [
   "invoice.paid",
   "invoice.payment_failed",
 ] as const;
+
+/** One key out of a dotenv file, or undefined. Deliberately minimal — this
+ *  entry point is reachable with nothing installed but Node, so it grows no
+ *  dotenv dependency to read one variable. */
+export async function readEnvVar(file: string, key: string): Promise<string | undefined> {
+  if (!(await exists(file))) return undefined;
+  const text = await readFile(file, "utf8");
+  // `[^\n]*`, not `.*`: with the `m` flag `\s*` after the `=` happily eats the
+  // newline and `.` then matches the NEXT line, so an empty `KEY=` returned the
+  // value of whatever followed it.
+  const hit = new RegExp(`^${key}[ \\t]*=[ \\t]*([^\\n]*)$`, "m").exec(text);
+  return hit ? hit[1].trim().replace(/^["']|["']$/g, "") || undefined : undefined;
+}
 
 /**
  * Set one key in a dotenv file, leaving everything else byte-identical.
