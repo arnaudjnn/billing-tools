@@ -1,3 +1,10 @@
+## [25.3.6](https://github.com/arnaudjnn/billing-tools/compare/v25.3.5...v25.3.6) (2026-08-12)
+
+
+### Bug Fixes
+
+* **billing:** a saved-card purchase repays the credits its invoice ate ([e7480c2](https://github.com/arnaudjnn/billing-tools/commit/e7480c2994f64b9c4149d223ceae5ae75f20ab0a))
+
 ## [25.3.5](https://github.com/arnaudjnn/billing-tools/compare/v25.3.4...v25.3.5) (2026-08-12)
 
 
