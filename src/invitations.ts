@@ -158,6 +158,20 @@ export function createWorkOSInvitations(
     return Promise.all(pending.map((i) => normalize(i, orgId)));
   }
 
+  /** WorkOS refusing to create a membership because a PENDING one exists.
+   *
+   *  Matched on the machine CODE, not on `instanceof`: WorkOS raises this as a
+   *  bare `GenericServerException` (400), so there is no class to narrow to and
+   *  a `status === 400` test would swallow every other bad request. The code is
+   *  the only stable, specific signal — measured against a live environment. */
+  function isPendingMembership(e: unknown): boolean {
+    return (
+      typeof e === "object" &&
+      e !== null &&
+      (e as { code?: unknown }).code === "cannot_reactivate_pending_organization_membership"
+    );
+  }
+
   async function accept(
     invitationId: string,
     user: BillingUser,
@@ -179,9 +193,31 @@ export function createWorkOSInvitations(
         roleSlug: inv.roleSlug,
       });
     } catch (e) {
+      if (isPendingMembership(e)) {
+        // SENDING an invitation already creates a PENDING membership for the
+        // invited user, so creating one on acceptance is refused — 400
+        // `cannot_reactivate_pending_organization_membership`, whose own message
+        // says "The invite must be accepted instead". Nothing tolerated that, so
+        // acceptance threw for EVERY ordinary invitee and the only people who
+        // ever reached a workspace were the ones a fixture added directly.
+        //
+        // WorkOS's own accept is the answer, and it takes the invitation id
+        // against the API key — it does NOT need the invited user's session,
+        // which was this reimplementation's whole premise and was simply wrong.
+        // Create-first still leads, because it is what serves the case WorkOS
+        // cannot: a `canAccept` hook widening acceptance to a verified secondary
+        // email, where the accepting user is not the invited one and WorkOS
+        // would enrol the wrong account. The fallback is reached only when the
+        // pending membership is the ACCEPTING user's own, which is the refusal
+        // WorkOS just raised about them.
+        await workos().userManagement.acceptInvitation(invitationId);
+        return { orgId: inv.orgId };
+      }
       if (!(e instanceof ConflictException)) throw e;
     }
-    // Consume the pending invitation.
+    // Consume the pending invitation. Not reached on the accept path above:
+    // WorkOS has already moved it to `accepted` there, and revoking is only for
+    // the invitation this function bypassed by creating the membership itself.
     try {
       await workos().userManagement.revokeInvitation(invitationId);
     } catch (e) {
