@@ -1,3 +1,10 @@
+## [25.3.5](https://github.com/arnaudjnn/billing-tools/compare/v25.3.4...v25.3.5) (2026-08-12)
+
+
+### Bug Fixes
+
+* **dev:** the webhook command reads the key from the dotenv file it writes to ([352e35f](https://github.com/arnaudjnn/billing-tools/commit/352e35f35b381c979d00c490a71bd5d3306dc5f3))
+
 ## [25.3.4](https://github.com/arnaudjnn/billing-tools/compare/v25.3.3...v25.3.4) (2026-08-12)
 
 
