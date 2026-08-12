@@ -432,6 +432,12 @@ export async function changePlan(
         subscriptionId: resumed.id,
         periodEnd: periodEndOf(resumed),
       });
+      // The cancelling branch filed `pendingPlan` so a UI could say what was
+      // scheduled; calling the cancellation off has to UNFILE it, or every
+      // surface keeps reporting "In disdetta" for a subscription Stripe says is
+      // healthy — measured in a browser: cancel → resume left the plan card
+      // stuck on the scheduled move with nothing left to schedule.
+      await adapter.setOrgMetadata?.(orgId, { pendingPlan: null, pendingPlanAt: null });
     }
     return { kind: "resumed", customerId, subscriptionId: sub.id, plan: target.key, status: resumed.status, effectiveAt: periodEndOf(resumed) };
   }

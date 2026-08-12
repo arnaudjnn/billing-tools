@@ -63,6 +63,7 @@ function fakeStripe({
   itemId = "si_1",
   schedule = null,
   pendingUpdate = null,
+  cancelAtPeriodEnd = false,
 } = {}) {
   const updates = [];
   const released = [];
@@ -78,7 +79,7 @@ function fakeStripe({
           status: "active",
           metadata: { plan: currentPlan },
           schedule,
-          cancel_at_period_end: false,
+          cancel_at_period_end: cancelAtPeriodEnd,
           default_tax_rates: defaultRates.map((id) => ({ id })),
           items: {
             data: [
@@ -276,6 +277,40 @@ test("the key stays inside Stripe's 255-character limit", async () => {
   await upgrade(stripe);
 
   assert.ok(stripe.updates[0].idempotencyKey.length <= 255, stripe.updates[0].idempotencyKey.length);
+});
+
+test("resuming a pending cancellation UNFILES pendingPlan", async () => {
+  // The cancelling branch records { pendingPlan } so a UI can say what is
+  // scheduled. Calling the cancellation off (changePlan back to the same plan)
+  // unset cancel_at_period_end on Stripe and left the record behind — measured
+  // in a browser: every surface kept reporting the scheduled downgrade of a
+  // subscription Stripe said was healthy, with nothing left that could clear it.
+  const written = [];
+  const recording = {
+    ...adapter,
+    async setSubscription(orgId, patch) {
+      written.push(patch);
+    },
+    async setOrgMetadata(orgId, patch) {
+      written.push(patch);
+    },
+  };
+  const stripe = fakeStripe({ currentPlan: "pro", cancelAtPeriodEnd: true });
+  __setStripeForTests(stripe);
+  const res = await changePlan(recording, "org_1", {
+    plans: PLANS,
+    to: { plan: "pro", interval: "monthly" },
+    currency: "eur",
+    record: true,
+  });
+
+  assert.equal(res.kind, "resumed");
+  assert.equal(stripe.updates[0].params.cancel_at_period_end, false);
+  assert.deepEqual(
+    written.find((p) => "pendingPlan" in p),
+    { pendingPlan: null, pendingPlanAt: null },
+    "the record the cancel filed is cleared by the resume",
+  );
 });
 
 // ── 4. cancelling a scheduled subscription ───────────────────────────────────
