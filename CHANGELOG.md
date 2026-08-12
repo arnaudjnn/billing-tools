@@ -1,3 +1,10 @@
+## [25.5.3](https://github.com/arnaudjnn/billing-tools/compare/v25.5.2...v25.5.3) (2026-08-12)
+
+
+### Bug Fixes
+
+* **billing:** getOrgSubscription hid the seats a workspace has paid for ([2c16af2](https://github.com/arnaudjnn/billing-tools/commit/2c16af2e22b2ae8793d8eade6eb2fbb4615687fc))
+
 ## [25.5.2](https://github.com/arnaudjnn/billing-tools/compare/v25.5.1...v25.5.2) (2026-08-12)
 
 
