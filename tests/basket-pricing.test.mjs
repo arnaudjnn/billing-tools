@@ -71,13 +71,42 @@ test("a flat plan is one line with no seat type; `nothing` and null price to zer
 test("taxPercent yields an estimate that rounds ONCE on the summed subtotal", () => {
   const model = planModel(PLANS, "pro");
   const priced = priceBasket(model, { standard: 3 }, "monthly", { taxPercent: 22 });
-  // 6312 × 22% = 1388.64 → 1389 rounded once. Per-line rounding would give
-  // 3 × round(2104 × 0.22) = 3 × 463 = 1389 here, but the rule is pinned on the sum.
   assert.equal(priced.subtotal, 6312);
   assert.equal(priced.tax, Math.round((6312 * 22) / 100));
   assert.equal(priced.total, priced.subtotal + priced.tax);
   // No taxPercent → no tax fields at all, so a renderer cannot mistake 0 for "0% applies".
   assert.ok(!("tax" in priceBasket(model, { standard: 3 }, "monthly")));
+});
+
+test("…and the sum is what rounds, on a basket where the two answers DIFFER", () => {
+  // The case above does not discriminate: 6312 × 22% and 3 × round(2104 × 22%)
+  // both give 1389. This one does — three lines of 333 at 21%: rounding each
+  // gives 3 × 70 = 210, rounding the sum gives round(999 × 0.21) = 210 as well…
+  // so pick figures where they part: 5 × 199 at 21% is round(1044.75) = 1045
+  // summed, versus 5 × round(41.79) = 5 × 42 = 210 → 210 vs 209 per line.
+  const model = planModel(
+    { p: { sells: { kind: "seats", seatTypes: { s: { price: { monthly: 199 } } } }, sale: "self_serve" } },
+    "p",
+  );
+  const priced = priceBasket(model, { s: 5 }, "monthly", { taxPercent: 21 });
+  assert.equal(priced.subtotal, 995);
+  assert.equal(priced.tax, 209, "round(995 × 0.21) = 208.95 → 209");
+  const perLine = 5 * Math.round((199 * 21) / 100);
+  assert.equal(perLine, 210, "the fixture really does discriminate");
+  assert.notEqual(priced.tax, perLine);
+});
+
+test("taxPercent: 0 states a rate of zero; omitting it states nothing", () => {
+  // Distinct on purpose — an out-of-scope sale IS 0%, and a page that has not
+  // asked yet must not print one. `0` is falsy, so `?? undefined` shortcuts
+  // here would collapse the two.
+  const model = planModel(PLANS, "pro");
+  const zero = priceBasket(model, { standard: 1 }, "monthly", { taxPercent: 0 });
+  assert.equal(zero.tax, 0);
+  assert.equal(zero.total, zero.subtotal);
+  const silent = priceBasket(model, { standard: 1 }, "monthly");
+  assert.ok(!("tax" in silent) && !("total" in silent));
+  assert.ok(!("tax" in priceBasket(model, { standard: 1 }, "monthly", {})));
 });
 
 test("basketBounds collapses maxSeats and limits.members to the TIGHTEST ceiling", () => {

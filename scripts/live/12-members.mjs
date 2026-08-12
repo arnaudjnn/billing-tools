@@ -80,6 +80,12 @@ export async function run(ctx) {
   const stillAdmin = await api.members.isLastAdmin(orgId, adminUserId);
   ok("the role is untouched", stillAdmin === true);
 
+  // The LIST-shaped read of the same fact, against the same real memberships: a
+  // members table asks it once instead of once per row, and the two must agree
+  // or the lock a UI draws is not the rule the write enforces.
+  const soleAdmin = await api.members.lastAdminId(orgId);
+  ok("lastAdminId names the same person", soleAdmin === adminUserId, String(soleAdmin));
+
   section("12d — promote, and the refusal lifts on the NEXT call");
   const promote = await callers.asAdmin("change_member_role", { member_id: memberUserId, role: "admin" });
   ok("the member is promoted", promote.value?.status === "role_changed", promote.error?.slice(0, 60));

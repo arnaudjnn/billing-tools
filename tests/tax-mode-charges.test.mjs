@@ -259,12 +259,37 @@ test("local returns the decision, and its country follows address → VAT prefix
 });
 
 test("stripe and none return no decision — those modes decide nothing here", async () => {
+  // ABSENCE is the contract, not just the shape: `decision` present under a
+  // mode this library did not decide would be a second answer beside Stripe's
+  // (or beside nobody's), which is what every caller would then read.
   invalidateTaxRates();
   __setStripeForTests(fakeStripe({ customerCountry: "IT" }));
   const viaStripe = await taxFor("cus_1", { mode: "stripe" });
   assert.deepEqual(viaStripe, { automaticTax: true });
+  assert.ok(!("decision" in viaStripe), "Stripe decided, so this library did not");
   const none = await taxFor("cus_1", { mode: "none" });
   assert.deepEqual(none, {});
+  assert.ok(!("decision" in none), "nobody decided");
+});
+
+test("local with no resolvable origin returns nothing at all — not a zero decision", async () => {
+  // The one remaining untaxed case under this mode. A `decision` here would
+  // read as "0%, decided", when the truth is that no rate could be worked out.
+  invalidateTaxRates();
+  invalidateTaxOrigin();
+  __setStripeForTests({
+    ...fakeStripe({ customerCountry: "IT" }),
+    accounts: { retrieve: async () => ({ id: "acct_1" }) },
+  });
+  const real = console.warn;
+  console.warn = () => {};
+  try {
+    const out = await taxFor("cus_1", { mode: "local" });
+    assert.deepEqual(out, {});
+    assert.ok(!("decision" in out));
+  } finally {
+    console.warn = real;
+  }
 });
 
 test('no origin ANYWHERE cannot guess, and says so once', async () => {

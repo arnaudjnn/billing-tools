@@ -65,6 +65,11 @@ export {
   resolveMessages,
   formatMessage,
   formatMinor,
+  // Beside `describeBasketProblem`: a pricing surface renders refusals too (the
+  // seat picker that cannot add one, the plan a member may only ask for), and
+  // needing a second entry point for the sentence beside the price is how a
+  // consumer ends up importing the root barrel into a client component.
+  describeReason,
   DEFAULT_MESSAGES,
 } from "./i18n.js";
 export type {

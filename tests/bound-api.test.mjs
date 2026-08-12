@@ -204,6 +204,25 @@ test("subscription.change binds plans, config and currency", async () => {
   );
 });
 
+test("members.lastAdminId answers through the bound API, not just from source", async () => {
+  // The structural check below reads bound-api.ts as TEXT, so a binding can
+  // satisfy it and still be broken (wrong adapter threaded, wrong arity). One
+  // real invocation is what proves the wire.
+  const { adapter, api: a } = api();
+  adapter.listMembers = async () => [
+    { userId: "u1", email: null, name: null, roleSlug: "admin", status: "active" },
+    { userId: "u2", email: null, name: null, roleSlug: "member", status: "active" },
+  ];
+  assert.equal(await a.members.lastAdminId("org_1"), "u1");
+
+  // And the null the UI must read as "nothing to lock".
+  adapter.listMembers = async () => [
+    { userId: "u1", email: null, name: null, roleSlug: "admin", status: "active" },
+    { userId: "u2", email: null, name: null, roleSlug: "admin", status: "active" },
+  ];
+  assert.equal(await a.members.lastAdminId("org_1"), null);
+});
+
 test("every adapter-first function is wired into the bound API", async () => {
   // Completeness, in the spirit of the tool-surface test: a library function taking
   // the adapter first and NOT wired here is one every consumer wraps by hand again.
