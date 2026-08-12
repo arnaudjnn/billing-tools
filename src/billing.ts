@@ -135,18 +135,23 @@ export async function getBillingCustomerId(
 export async function getOrgSubscription(
   adapter: BillingAdapter,
   orgId: string,
-): Promise<{
-  plan: string | null;
-  status: string | null;
-  subscriptionId: string | null;
-  periodEnd: string | null;
-}> {
+  // The adapter's OWN shape, not a narrowed copy of it. This used to declare four
+  // fields while `WorkOSOrgAdapter` returned seven, so `seats` and `seatCounts` —
+  // what a workspace has actually PAID FOR — arrived at runtime and were invisible
+  // to the type system. A caller wanting them had to reach past the adapter and
+  // re-derive the metadata keys, which is the exact thing this function exists to
+  // stop. `periodStart` went the same way, and an included allowance is measured
+  // over that window.
+): Promise<Awaited<ReturnType<NonNullable<BillingAdapter["getSubscription"]>>>> {
   return (
     (await adapter.getSubscription?.(orgId)) ?? {
       plan: null,
       status: null,
       subscriptionId: null,
+      periodStart: null,
       periodEnd: null,
+      seats: null,
+      seatCounts: null,
     }
   );
 }
