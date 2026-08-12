@@ -616,7 +616,14 @@ export function createBoundApi(deps: BoundApiDeps) {
       lastAdminId: (orgId: string) => lastAdminId(adapter, orgId),
       invite: async (
         orgId: string,
-        input: { email: string; roleSlug?: string; inviterUserId?: string },
+        input: {
+          email: string;
+          roleSlug?: string;
+          inviterUserId?: string;
+          /** Seat to put them on — checked against this org's plan and its purchased
+           *  seats before the invitation goes out. See `inviteMember`. */
+          seatType?: string | null;
+        },
       ) => {
         if (!deps.invitations) throw new Error("No invitation service configured.");
         return inviteMember(adapter, orgId, {
