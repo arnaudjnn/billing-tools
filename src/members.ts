@@ -1,5 +1,7 @@
+import { seatTypeExists } from "./ladder.js";
+import { planModel } from "./plan-model.js";
 import { seatLimit } from "./plans.js";
-import { clearMemberRecords } from "./seats.js";
+import { assignSeatType, clearMemberRecords, seatAssignable } from "./seats.js";
 import { ADMIN_ROLE_SLUG } from "./workos-setup.js";
 import type { PlanCatalog } from "./plan-model.js";
 import type { BillingAdapter, OrgMember } from "./types.js";
@@ -36,7 +38,11 @@ export type MemberRefusal =
   /** Not in this workspace (or already gone). */
   | "not_a_member"
   /** The adapter cannot answer the question this rule needs. */
-  | "unsupported";
+  | "unsupported"
+  /** A `seatType` this workspace's own plan does not sell. */
+  | "unknown_seat"
+  /** The seat exists and there is no room: nobody bought it, or the plan caps it. */
+  | "seat_unavailable";
 
 export interface MemberSeats {
   /** Active memberships. */
@@ -139,9 +145,18 @@ export async function inviteMember(
     invitations: InvitationService;
     plans?: PlanCatalog;
     plan?: string | null;
+    /**
+     * Seat to put them on, checked BEFORE the invitation goes out.
+     *
+     * A seat is a PRICE, and assigning one touches no subscription — so offering the choice
+     * on an invite form without this check is the same giveaway `seatAssignable` exists to
+     * stop, arriving through a different door. Omit it and the invitee draws the plan's
+     * default seat, which is what every invitation did before.
+     */
+    seatType?: string | null;
   },
 ): Promise<
-  | { ok: true; invitation: Invitation; seats: MemberSeats }
+  | { ok: true; invitation: Invitation; seats: MemberSeats; seatType?: string | null }
   | { ok: false; reason: MemberRefusal; seats: MemberSeats }
 > {
   const seats = await memberSeats(adapter, orgId, {
@@ -152,14 +167,48 @@ export async function inviteMember(
   if (seats.remaining !== null && seats.remaining <= 0) {
     return { ok: false, reason: "limit_reached", seats };
   }
+
+  // Both seat checks run BEFORE `send`, because an invitation is not undoable: revoking one
+  // already delivered still leaves the invitee an email about a workspace that then refuses
+  // them. Refusing first costs nothing and says why.
+  const model = input.plans && input.plan ? planModel(input.plans, input.plan) : null;
+  const seatType = input.seatType ?? null;
+  if (seatType) {
+    // Against the ORG's OWN plan, never the catalogue union: "premium is a seat type
+    // somewhere" is not "this workspace may sell it".
+    if (!model || !seatTypeExists(model, seatType)) {
+      return { ok: false, reason: "unknown_seat", seats };
+    }
+    // Counted with an id nobody holds, so it asks "is there room for ONE MORE" rather than
+    // "may this person move here" — which is the question at invite time, when the person
+    // does not exist yet.
+    const room = await seatAssignable(adapter, orgId, model, INVITEE_PLACEHOLDER, seatType);
+    if (!room.ok) return { ok: false, reason: "seat_unavailable", seats };
+  }
+
   const invitation = await input.invitations.send(
     orgId,
     input.email.trim().toLowerCase(),
     input.roleSlug ?? "member",
     input.inviterUserId,
   );
-  return { ok: true, invitation, seats };
+
+  // Seat them now. Sending CREATES the WorkOS user, so the seat can be recorded before they
+  // ever sign in — and it must be, because acceptance is the app's own flow and a seat
+  // applied "on join" would be one more thing each consumer remembers to do. The write is
+  // per-user metadata, which acceptance does not touch, so it simply survives.
+  if (seatType && invitation.userId) {
+    await assignSeatType(adapter, orgId, invitation.userId, seatType);
+  }
+  // No `userId` means the invitation stands and the seat did not: reported, never thrown,
+  // since the person HAS been invited and they fall back to the plan's default seat.
+  return { ok: true, invitation, seats, seatType: invitation.userId ? seatType : null };
 }
+
+/** Stands in for the person being invited, who has no id until `send` returns.
+ *  `seatAssignable` only uses it to exclude an EXISTING assignment from the count, and there
+ *  is none — so any id nobody holds asks exactly the right question. */
+const INVITEE_PLACEHOLDER = " invitee";
 
 /** Move somebody between roles, refusing the demotion that locks everyone out. */
 export async function changeMemberRole(

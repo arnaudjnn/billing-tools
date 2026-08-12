@@ -115,17 +115,41 @@ export function registerMemberTools(
           .enum(roles as [string, ...string[]])
           .optional()
           .describe(`Role to grant. Defaults to "member"`),
+        // Not an enum: the schema is registered ONCE for every plan, so a per-plan seat list
+        // would advertise one workspace's seats to another. The handler checks it against the
+        // org's own plan, and `list_seats` is where a caller reads the real options.
+        seat_type: z
+          .string()
+          .optional()
+          .describe(
+            "Seat type to put them on (see list_seats). Checked against this workspace's " +
+              "plan and its purchased seats before the invitation goes out. Omit to give " +
+              "them the plan's default seat.",
+          ),
       },
-      async ({ email, role }) => {
+      async ({ email, role, seat_type }) => {
         const auth = await enforceAdmin(adapter, "invite_member");
         if ("isError" in auth) return auth;
         const res = await inviteMember(adapter, auth.orgId, {
           email,
           roleSlug: role,
+          seatType: seat_type,
           invitations,
           plans: opts.plans,
           plan: await planFor(auth.orgId),
         });
+        if (!res.ok && res.reason === "unknown_seat") {
+          return err(
+            `This workspace's plan does not sell a "${seat_type}" seat. Call list_seats for ` +
+              `the types it does.`,
+          );
+        }
+        if (!res.ok && res.reason === "seat_unavailable") {
+          return err(
+            `No "${seat_type}" seat is free to give: buy one (change_plan) or move somebody ` +
+              `off it (assign_seat_type) first. Nobody was invited.`,
+          );
+        }
         if (!res.ok) {
           // The refusal names the ceiling AND what it is made of: an owner who reads "10
           // members" while seeing 7 people has 3 invitations they have forgotten about, and
@@ -142,6 +166,10 @@ export function registerMemberTools(
           email: res.invitation.email,
           role: res.invitation.roleSlug,
           expires_at: res.invitation.expiresAt,
+          // What they will actually DRAW. Null where none was asked for (the plan's default)
+          // and also where the seat could not be recorded, so a caller is never told somebody
+          // holds a seat they do not.
+          seat_type: res.seatType ?? null,
           seats_remaining: res.seats.remaining === null ? null : res.seats.remaining - 1,
         });
       },

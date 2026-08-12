@@ -167,6 +167,8 @@ export interface Messages {
    */
   reasonNotCapped: string;
   reasonNotBlocked: string;
+  reasonUnknownSeat: string;
+  reasonSeatUnavailable: string;
   reasonAlreadyPending: string;
   reasonLimitReached: string;
   reasonMemberLimitReached: string;
@@ -234,6 +236,8 @@ export const DEFAULT_MESSAGES: Messages = {
   paymentFailed: "Payment failed",
   reasonNotCapped: "This plan has no per-member allowance to raise",
   reasonNotBlocked: "No limit is refusing you yet, so there is nothing to top up",
+  reasonUnknownSeat: "This workspace's plan does not sell that seat type",
+  reasonSeatUnavailable: "No seat of that type is free — buy one, or move somebody off it",
   reasonAlreadyPending: "A request is already pending",
   reasonLimitReached: "The top-up ceiling for this cycle has been reached",
   reasonMemberLimitReached: "This plan has no seat left for another member",
@@ -297,6 +301,8 @@ export function describeReason(
 const REASON_KEYS: Record<string, keyof Messages> = {
   not_capped: "reasonNotCapped",
   not_blocked: "reasonNotBlocked",
+  unknown_seat: "reasonUnknownSeat",
+  seat_unavailable: "reasonSeatUnavailable",
   already_pending: "reasonAlreadyPending",
   limit_reached: "reasonLimitReached",
   invalid_amount: "reasonInvalidAmount",

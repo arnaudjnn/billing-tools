@@ -104,7 +104,7 @@ REST and MCP get it structurally (`createDispatcher` monkey-patches `server.tool
 | `get_usage_limits` | usage | Every window that applies now: used, remaining, `resets_at` | a `cap` or a `limits.rate` |
 | `get_org_usage` | usage | Every member against whatever caps them, who is over it, and the workspace reading — a mean of the seats, or the POOL read once | `listMemberIds` |
 | `list_members` | members | Everyone in the workspace with their role, plus seats used / left | `listMemberIds` |
-| `invite_member` | members | Invites by email, refusing past `limits.members` (admin) | `invitations` |
+| `invite_member` | members | Invites by email onto an optional `seat_type`, refusing past `limits.members` (admin) | `invitations` |
 | `list_invitations` | members | Invitations and their state | `invitations` |
 | `revoke_invitation` | members | Cancels a pending one, freeing its seat (admin) | `invitations` |
 | `change_member_role` | members | Moves a member between roles; refuses the last admin (admin) | `setMemberRole` |
@@ -238,6 +238,8 @@ Deleting a workspace was one call (`deleteOrg`) that removed the WorkOS organiza
 **WorkOS organization deletion is eventually consistent** — measured at ~3–6s: `deleteOrganization` returns success and `getOrganization` still answers with the org. A UI that deletes then re-lists will show it, and a delete-then-verify check reads as a failed delete.
 
 **`limits.members` is ENFORCED at the invitation, and PENDING INVITATIONS COUNT.** `list_plans` advertised it on every plan and nothing refused a membership beyond it, so a plan selling ten seats admitted a hundred — left to each app, which means each app wrote the counting and the count that matters existed per consumer. `memberSeats` / `inviteMember` (`src/members.ts`) own it now. Counting active members alone is not a limit: a three-seat workspace with one member can send two invitations and the third has nowhere to land, and the refusal — if it ever comes — arrives when the last person ACCEPTS, addressed to the one person who cannot do anything about it. A revoked invitation gives the seat back. **Membership creation is still the app's flow** (Pattern B needs its own row first); what the library owns is who may be added.
+
+**And WHICH SEAT they arrive on, because an invite form is the other door onto a price.** `inviteMember({ seatType })` checks `seatTypeExists` against the ORG's own plan and then `seatAssignable`, both **before** `send` — an invitation is not undoable, and revoking one already delivered still leaves somebody an email about a workspace that then refuses them. It is the same guard `assign_seat_type` applies, and it is needed for the same reason: the write touches no subscription, so without it a form offering "Premium" hands out the €105/month pack for nothing. Sending CREATES the WorkOS user (measured — it exists the moment `send` returns, which is also why a pending membership blocks acceptance), so `Invitation.userId` carries it and the seat is recorded against the invitee immediately; per-user metadata is untouched by acceptance, so it simply survives. An unresolvable user leaves the invitation standing and reports `seatType: null` rather than throwing — they were invited, and they draw the plan's default seat.
 
 ## Metadata is a budget, and a per-member record does not fit in it
 

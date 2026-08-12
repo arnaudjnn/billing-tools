@@ -336,3 +336,108 @@ test("several admins, or unreadable roles, answer null — the UI then disables 
   assert.equal(await lastAdminId(blind, "org_1"), null);
   assert.equal(await isLastAdmin(blind, "org_1", "u1"), null);
 });
+
+// ── Inviting somebody ONTO a seat ───────────────────────────────────────────
+// A seat is a PRICE and assigning one touches no subscription, so an invite form
+// offering the choice is the same giveaway `seatAssignable` exists to stop,
+// arriving through a different door. These pin that the door is shut, and that
+// both checks run BEFORE the invitation goes out — an invitation is not undoable,
+// and revoking one already delivered still leaves somebody an email about a
+// workspace that then refuses them.
+
+const SEATS = {
+  team: {
+    sells: {
+      kind: "seats",
+      seatTypes: {
+        standard: { price: { monthly: 1800 }, includedCredits: 1000, min: 1 },
+        premium: { price: { monthly: 10500 }, includedCredits: 5000 },
+      },
+    },
+    cap: { kind: "per_seat" },
+    limits: { members: 10 },
+    sale: "self_serve",
+  },
+};
+
+/** `send` returns the invited user's id, as the real service does — WorkOS creates
+ *  the user at send time, which is what makes seating an invitee possible at all. */
+function seatingInvitations() {
+  const base = fakeInvitations();
+  const send = base.send.bind(base);
+  base.send = async (...args) => ({ ...(await send(...args)), userId: `user_${args[1]}` });
+  return base;
+}
+
+test("an invitee can be seated, and the seat is recorded against them", async () => {
+  const adapter = withMembers([{ userId: "u1", roleSlug: "admin" }], {
+    subscription: { plan: "team", seats: 3, seatCounts: { standard: 2, premium: 1 } },
+  });
+  const invitations = seatingInvitations();
+
+  const res = await inviteMember(adapter, "org_1", {
+    email: "new@example.test", seatType: "premium", invitations, plans: SEATS, plan: "team",
+  });
+  assert.equal(res.ok, true);
+  assert.equal(res.seatType, "premium");
+  // Against the invitee's own id — the seat store is per USER, which is exactly why
+  // acceptance (a different flow, in the app) does not have to remember to apply it.
+  assert.equal(await getSeatType(adapter, "org_1", "user_new@example.test"), "premium");
+});
+
+test("a seat nobody bought is refused, and NOBODY is invited", async () => {
+  const adapter = withMembers([{ userId: "u1", roleSlug: "admin" }], {
+    subscription: { plan: "team", seats: 2, seatCounts: { standard: 2 } },
+  });
+  const invitations = seatingInvitations();
+
+  const res = await inviteMember(adapter, "org_1", {
+    email: "new@example.test", seatType: "premium", invitations, plans: SEATS, plan: "team",
+  });
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, "seat_unavailable");
+  // The half that matters: refusing after sending would still have emailed somebody.
+  assert.equal(invitations.sent.length, 0);
+});
+
+test("a seat the plan does not sell is refused before anything happens", async () => {
+  const adapter = withMembers([{ userId: "u1", roleSlug: "admin" }]);
+  const invitations = seatingInvitations();
+
+  const res = await inviteMember(adapter, "org_1", {
+    email: "new@example.test", seatType: "enterprise", invitations, plans: SEATS, plan: "team",
+  });
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, "unknown_seat");
+  assert.equal(invitations.sent.length, 0);
+});
+
+test("no seat asked for is the old behaviour exactly", async () => {
+  const adapter = withMembers([{ userId: "u1", roleSlug: "admin" }]);
+  const invitations = seatingInvitations();
+
+  const res = await inviteMember(adapter, "org_1", {
+    email: "new@example.test", invitations, plans: SEATS, plan: "team",
+  });
+  assert.equal(res.ok, true);
+  assert.equal(res.seatType ?? null, null);
+  // Nothing written: they draw the plan's default seat, which is what every
+  // invitation did before this option existed.
+  assert.equal(await getSeatType(adapter, "org_1", "user_new@example.test"), null);
+});
+
+test("an invitation with no resolvable user still stands, without claiming a seat", async () => {
+  const adapter = withMembers([{ userId: "u1", roleSlug: "admin" }], {
+    subscription: { plan: "team", seats: 3, seatCounts: { premium: 2 } },
+  });
+  const invitations = fakeInvitations(); // send() returns no userId
+
+  const res = await inviteMember(adapter, "org_1", {
+    email: "new@example.test", seatType: "premium", invitations, plans: SEATS, plan: "team",
+  });
+  // Invited — the email went out and undoing it helps nobody — but reported as
+  // holding no seat, so a caller is never told somebody has one they do not.
+  assert.equal(res.ok, true);
+  assert.equal(res.seatType, null);
+  assert.equal(invitations.sent.length, 1);
+});

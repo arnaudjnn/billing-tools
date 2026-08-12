@@ -58,6 +58,20 @@ export interface Invitation {
    * link in the email and the route that accepts it come to disagree.
    */
   acceptUrl?: string;
+  /**
+   * The WorkOS user this invitation belongs to — present from `send`, absent elsewhere.
+   *
+   * Sending an invitation CREATES the user (measured: it exists the moment `send` returns,
+   * which is also why a pending membership already blocks acceptance — see `accept`). That
+   * makes it possible to act on the invited person before they ever sign in, and the one
+   * caller that needs to is `inviteMember` with a `seatType`: a seat is stored per USER, so
+   * seating an invitee needs their id and nothing else.
+   *
+   * Resolved only here, not in `normalize`: `list` would otherwise pay a lookup per row for
+   * a field almost nobody reads. `acceptedUserId` is NOT it — WorkOS leaves that null until
+   * acceptance.
+   */
+  userId?: string | null;
 }
 
 export interface WorkOSInvitationsOptions {
@@ -137,6 +151,13 @@ export function createWorkOSInvitations(
       inviterUserId,
     });
     const acceptUrl = `${baseUrl}${acceptPath}/${inv.id}`;
+    // Who WorkOS just created for this address. Never fatal: an invitation that
+    // went out is not undone because a lookup failed, and the one caller that
+    // reads it (seating an invitee) refuses on its own when it is absent.
+    const userId = await workos()
+      .userManagement.listUsers({ email: inv.email, limit: 1 })
+      .then((r) => r.data[0]?.id ?? null)
+      .catch(() => null);
     if (hooks.sendEmail) {
       await hooks.sendEmail({
         id: inv.id,
@@ -148,7 +169,7 @@ export function createWorkOSInvitations(
         inviterUserId,
       });
     }
-    return { ...(await normalize(inv, orgId)), acceptUrl };
+    return { ...(await normalize(inv, orgId)), acceptUrl, userId };
   }
 
   async function list(orgId: string): Promise<Invitation[]> {
