@@ -1,3 +1,10 @@
+## [25.3.3](https://github.com/arnaudjnn/billing-tools/compare/v25.3.2...v25.3.3) (2026-08-12)
+
+
+### Bug Fixes
+
+* **subscription:** a same-plan ask clears pendingPlan and calls off a schedule ([1576830](https://github.com/arnaudjnn/billing-tools/commit/1576830fc0c242202b056e4d196f372eedc8668d))
+
 ## [25.3.2](https://github.com/arnaudjnn/billing-tools/compare/v25.3.1...v25.3.2) (2026-08-12)
 
 
