@@ -514,6 +514,20 @@ export async function changePlan(
     // record left behind (the resume bug this fixes shipped one) was permanent.
     if (record) {
       await adapter.setOrgMetadata?.(orgId, { pendingPlan: null, pendingPlanAt: null });
+      // RECONCILE while we are here. "No diff" means Stripe already bills what was
+      // asked for — it does NOT mean the org says so. A mirror that drifted (an
+      // event that never arrived, a version that did not record seats) is then
+      // permanently stuck: every attempt to correct it resolves to this branch and
+      // this branch used to write nothing, so the workspace stayed refused for
+      // seats it demonstrably owns. Observed exactly that way — Stripe 4, org 3,
+      // and asking for 4 changed nothing.
+      await adapter.setSubscription?.(orgId, {
+        plan: currentPlanKey ?? target.key,
+        status: sub.status,
+        subscriptionId: sub.id,
+        periodEnd: periodEndOf(sub),
+        seatCounts: purchasedSeatsOf(sub),
+      });
     }
     return { kind: "noop", customerId, subscriptionId: sub.id, plan: currentPlanKey ?? target.key, status: sub.status, effectiveAt };
   }

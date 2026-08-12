@@ -688,3 +688,41 @@ test("a HELD change records no seats, because none were granted", async () => {
   assert.equal(r.kind, "pending");
   assert.equal(recorded.length, 0, "a held change grants nothing, so it records nothing");
 });
+
+test("a NO-OP reconciles a drifted mirror instead of leaving it stuck", async () => {
+  // Stripe already bills 4; the org still says 3 (an event that never arrived, or
+  // a version that recorded no seats). Asking for 4 is then a genuine no-op — and
+  // used to write nothing, so the workspace stayed refused for seats it owns and
+  // every attempt to fix it landed here again. Permanently stuck, observed live.
+  const { stripe, seatAdapter, recorded } = seatWorld();
+  stripe.subscriptions.list = async function* () {
+    yield {
+      id: "sub_1",
+      status: "active",
+      metadata: { plan: "team" },
+      schedule: null,
+      cancel_at_period_end: false,
+      default_tax_rates: [],
+      items: {
+        data: [
+          {
+            id: "si_1",
+            quantity: 4,
+            price: { id: "price_standard", metadata: { seatType: "standard" } },
+            tax_rates: [],
+            current_period_end: PERIOD_END,
+          },
+        ],
+      },
+    };
+  };
+  __setStripeForTests(stripe);
+  __setPlanPricesForTests(new Map([["team_standard_monthly", "price_standard"]]));
+
+  const r = await changePlan(seatAdapter, "org_1", {
+    plans: SEAT_PLANS,
+    to: { plan: "team", seats: { standard: 4 } },
+  });
+  assert.equal(r.kind, "noop");
+  assert.deepEqual(recorded.at(-1)?.seatCounts, { standard: 4 });
+});
