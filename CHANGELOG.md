@@ -1,3 +1,10 @@
+# [25.4.0](https://github.com/arnaudjnn/billing-tools/compare/v25.3.6...v25.4.0) (2026-08-12)
+
+
+### Features
+
+* **pricing:** describeReason is reachable from the /pricing leaf ([6e4567e](https://github.com/arnaudjnn/billing-tools/commit/6e4567e4e999f21c57211c9adf369bf1d76b6f71))
+
 ## [25.3.6](https://github.com/arnaudjnn/billing-tools/compare/v25.3.5...v25.3.6) (2026-08-12)
 
 
