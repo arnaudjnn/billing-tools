@@ -1,3 +1,10 @@
+## [25.3.4](https://github.com/arnaudjnn/billing-tools/compare/v25.3.3...v25.3.4) (2026-08-12)
+
+
+### Bug Fixes
+
+* **adapter:** WorkOS metadata merges — deletions must be SENT as nulls, not omitted ([9d3f91f](https://github.com/arnaudjnn/billing-tools/commit/9d3f91f790dbb6c0cc45d6b76ad72b53a026e686))
+
 ## [25.3.3](https://github.com/arnaudjnn/billing-tools/compare/v25.3.2...v25.3.3) (2026-08-12)
 
 
