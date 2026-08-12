@@ -441,3 +441,114 @@ test("an invitation with no resolvable user still stands, without claiming a sea
   assert.equal(res.seatType, null);
   assert.equal(invitations.sent.length, 1);
 });
+
+// ── The ceiling is what was BOUGHT ──────────────────────────────────────────
+// `limits.members` is a product rule ("Pro tops out at 100"), not a price. Read
+// alone it let a workspace paying for 3 seats admit 100 people — and under
+// `cap: per_seat` every one drew a full pack. Measured on a live deployment
+// before this was fixed: 3 purchased, 10 members, aggregate limit 10 000 against
+// 3 000 sold. Nothing refused and nothing reported it.
+
+test("purchased seats bind before the plan's member limit", async () => {
+  // The measured shape, exactly: 3 bought, 100 allowed by the plan.
+  const adapter = withMembers(
+    Array.from({ length: 3 }, (_, i) => ({ userId: `u${i}`, roleSlug: "member" })),
+    { subscription: { plan: "team", seats: 3, seatCounts: { standard: 3 } } },
+  );
+  const invitations = fakeInvitations();
+
+  const seats = await memberSeats(adapter, "org_1", {
+    plans: BIG, plan: "team", invitations,
+  });
+  expect_(seats.limit, 3, "the ceiling is the seats bought, not limits.members");
+  expect_(seats.limitSource, "purchased");
+  expect_(seats.remaining, 0);
+
+  // And the fourth person is refused, where before they walked in.
+  const res = await inviteMember(adapter, "org_1", {
+    email: "fourth@example.test", invitations, plans: BIG, plan: "team",
+  });
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, "limit_reached");
+  assert.equal(invitations.sent.length, 0);
+});
+
+test("a PENDING invitation still holds one of the purchased seats", async () => {
+  const adapter = withMembers([{ userId: "u1", roleSlug: "admin" }], {
+    subscription: { plan: "team", seats: 2, seatCounts: { standard: 2 } },
+  });
+  const invitations = fakeInvitations();
+
+  const first = await inviteMember(adapter, "org_1", {
+    email: "a@example.test", invitations, plans: BIG, plan: "team",
+  });
+  assert.equal(first.ok, true);
+  // 2 bought, 1 member, 1 invited — full, before anybody accepts.
+  const second = await inviteMember(adapter, "org_1", {
+    email: "b@example.test", invitations, plans: BIG, plan: "team",
+  });
+  assert.equal(second.ok, false);
+  assert.equal(second.seats.limitSource, "purchased");
+});
+
+test("the PLAN's limit still binds when it is the tighter of the two", async () => {
+  // 50 seats bought against a plan that allows 3: the product rule wins, and says so,
+  // because "buy another seat" is the wrong advice to somebody this tier refuses.
+  const adapter = withMembers(
+    Array.from({ length: 3 }, (_, i) => ({ userId: `u${i}`, roleSlug: "member" })),
+    { subscription: { plan: "small", seats: 50, seatCounts: { standard: 50 } } },
+  );
+  const seats = await memberSeats(adapter, "org_1", { plans: BIG, plan: "small" });
+  expect_(seats.limit, 3);
+  expect_(seats.limitSource, "plan");
+});
+
+test("no subscription falls back to the plan's limit rather than to zero", async () => {
+  // Nothing bought yet. Refusing everybody here would lock a workspace out of its own
+  // first invitation — and on a free tier `limits.members` is 1, which is the real cap.
+  const adapter = withMembers([{ userId: "u1", roleSlug: "admin" }]);
+  const seats = await memberSeats(adapter, "org_1", { plans: BIG, plan: "team" });
+  expect_(seats.limit, 100);
+  expect_(seats.limitSource, "plan");
+});
+
+test("a plan that sells no seats is unaffected", async () => {
+  const adapter = withMembers([{ userId: "u1", roleSlug: "admin" }], {
+    subscription: { plan: "unlimited", seats: 4, seatCounts: { default: 4 } },
+  });
+  // `sells: flat` — the seat count is not a member ceiling there, and reading it as one
+  // would cap a flat plan at whatever quantity its single line item happens to carry.
+  const seats = await memberSeats(adapter, "org_1", { plans: BIG, plan: "unlimited" });
+  expect_(seats.limit, null);
+  expect_(seats.limitSource, null);
+});
+
+const BIG = {
+  team: {
+    sells: {
+      kind: "seats",
+      seatTypes: { standard: { price: { monthly: 2104 }, includedCredits: 1000, min: 1 } },
+    },
+    cap: { kind: "per_seat" },
+    limits: { members: 100 },
+    sale: "self_serve",
+  },
+  small: {
+    sells: {
+      kind: "seats",
+      seatTypes: { standard: { price: { monthly: 900 }, includedCredits: 500, min: 1 } },
+    },
+    cap: { kind: "per_seat" },
+    limits: { members: 3 },
+    sale: "self_serve",
+  },
+  unlimited: {
+    sells: { kind: "flat", price: { monthly: 9900 } },
+    cap: { kind: "pool", credits: 100_000 },
+    sale: "self_serve",
+  },
+};
+
+function expect_(actual, expected, why) {
+  assert.equal(actual, expected, why ?? `expected ${expected}, got ${actual}`);
+}

@@ -154,10 +154,24 @@ export function registerMemberTools(
           // The refusal names the ceiling AND what it is made of: an owner who reads "10
           // members" while seeing 7 people has 3 invitations they have forgotten about, and
           // "the limit is 10" alone sends them looking for a bug.
+          //
+          // And it names the RIGHT way out, which depends on which ceiling bound. Every
+          // seat bought being taken is fixed by buying another; a plan that stops at this
+          // many people is not, and telling that owner to buy a seat sends them to a form
+          // that will refuse them.
+          const fix =
+            res.seats.limitSource === "purchased"
+              ? `Buy another seat (change_plan) or revoke an invitation ` +
+                `(list_invitations, revoke_invitation) first.`
+              : `Move up a plan (change_plan) or revoke an invitation ` +
+                `(list_invitations, revoke_invitation) first.`;
           return err(
-            `This plan allows ${res.seats.limit} member(s): ${res.seats.active} active and ` +
-              `${res.seats.pending} invitation(s) already pending. Move up a plan (change_plan) ` +
-              `or revoke an invitation (list_invitations, revoke_invitation) first.`,
+            `${
+              res.seats.limitSource === "purchased"
+                ? `All ${res.seats.limit} purchased seat(s) are taken`
+                : `This plan allows ${res.seats.limit} member(s)`
+            }: ${res.seats.active} active and ${res.seats.pending} invitation(s) already ` +
+              `pending. ${fix}`,
           );
         }
         return json({

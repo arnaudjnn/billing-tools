@@ -49,10 +49,21 @@ export interface MemberSeats {
   active: number;
   /** Invitations sent and not yet accepted — they are seats already promised. */
   pending: number;
-  /** The plan's ceiling, or null for unlimited. */
+  /** The ceiling that actually binds, or null for unlimited. */
   limit: number | null;
   /** How many more people may be invited. Null when unlimited. */
   remaining: number | null;
+  /**
+   * WHICH ceiling that is, because the two mean opposite things to whoever is refused.
+   *
+   * `"purchased"` — every seat the workspace BOUGHT is taken. Money fixes it: buy another.
+   * `"plan"` — the plan's own `limits.members`. Money does not fix it at this tier; a
+   *   different plan does.
+   *
+   * A screen that cannot tell them apart offers "upgrade" to somebody who needs one more
+   * seat, or "buy a seat" to somebody whose plan forbids a fourth person.
+   */
+  limitSource: "purchased" | "plan" | null;
 }
 
 /**
@@ -69,15 +80,52 @@ export async function memberSeats(
   orgId: string,
   opts: { plans?: PlanCatalog; plan?: string | null; invitations?: InvitationService },
 ): Promise<MemberSeats> {
-  const limit = opts.plans && opts.plan ? seatLimit(opts.plans, opts.plan) : null;
+  const model = opts.plans && opts.plan ? planModel(opts.plans, opts.plan) : null;
+  const planCap = opts.plans && opts.plan ? seatLimit(opts.plans, opts.plan) : null;
+
+  // THE SEATS ACTUALLY BOUGHT, and on a plan that sells them this is the ceiling that
+  // matters. `limits.members` is a product rule ("a Pro workspace tops out at 100"), not a
+  // price — so reading it alone let a workspace paying for 3 seats admit 100 people, and
+  // under `cap: per_seat` every one of them drew a full pack. Measured on a real
+  // deployment: 3 purchased, 10 members, `aggregate.limit` 10 000 against 3 000 sold.
+  // Seven monthly allowances nobody paid for, with nothing refusing and nothing reporting.
+  //
+  // Unknown capacity ALLOWS, as everywhere else here: no subscription on a seats plan
+  // means nothing has been bought yet, and there `limits.members` is the honest cap (it is
+  // 1 on a free tier, which is what makes that case still refuse).
+  // Unreadable counts as unknown, never as zero: an adapter that throws (WorkOS down, a
+  // workspace with no subscription record) must not refuse every invitation in the product.
+  // The same fail-open trade `seatAssignable` makes, and the same reason — the giveaway is
+  // cheaper than locking owners out of their own team.
+  const purchased =
+    model?.sells.kind === "seats"
+      ? await Promise.resolve(adapter.getSubscription?.(orgId))
+          .then(totalPurchasedSeats)
+          .catch(() => null)
+      : null;
+
   const active = (await adapter.memberCount?.(orgId)) ?? (await adapter.listMemberIds?.(orgId))?.length ?? 0;
   const pending = opts.invitations
     ? (await opts.invitations.list(orgId)).filter((i) => i.state === "pending").length
     : 0;
+
+  // The TIGHTER of the two binds, and which one it was travels with the number: "buy
+  // another seat" and "this plan stops here" are different sentences and different buttons.
+  let limit: number | null = null;
+  let limitSource: MemberSeats["limitSource"] = null;
+  if (purchased !== null && (planCap === null || purchased <= planCap)) {
+    limit = purchased;
+    limitSource = "purchased";
+  } else if (planCap !== null) {
+    limit = planCap;
+    limitSource = "plan";
+  }
+
   return {
     active,
     pending,
     limit,
+    limitSource,
     remaining: limit === null ? null : Math.max(0, limit - active - pending),
   };
 }
@@ -203,6 +251,16 @@ export async function inviteMember(
   // No `userId` means the invitation stands and the seat did not: reported, never thrown,
   // since the person HAS been invited and they fall back to the plan's default seat.
   return { ok: true, invitation, seats, seatType: invitation.userId ? seatType : null };
+}
+
+/** How many seats of any type this subscription pays for. Null when it cannot be told —
+ *  no adapter read, no subscription, or a subscription carrying no counts. */
+function totalPurchasedSeats(
+  sub: { seats?: number | null; seatCounts?: Record<string, number> | null } | null | undefined,
+): number | null {
+  if (!sub) return null;
+  if (sub.seatCounts) return Object.values(sub.seatCounts).reduce((a, b) => a + b, 0);
+  return typeof sub.seats === "number" ? sub.seats : null;
 }
 
 /** Stands in for the person being invited, who has no id until `send` returns.
