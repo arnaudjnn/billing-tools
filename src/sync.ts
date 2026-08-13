@@ -1,5 +1,5 @@
 import type Stripe from "stripe";
-import { pollStripeEvents, pollWorkOSEvents } from "./events.js";
+import { pollStripeEvents, pollWorkOSEvents, type PollResult } from "./events.js";
 import { creditsOwedFor, grantCredits, getStripe } from "./billing.js";
 import {
   grantFor,
@@ -51,6 +51,18 @@ export interface BillingSyncOptions {
    * any frequency: the handlers are idempotent.
    */
   reconcilePayments?: boolean;
+  /**
+   * An event whose handler failed every attempt and was SKIPPED to keep the sweep
+   * moving. Defaults to `start`'s `onError`.
+   *
+   * Separate from `onError` because the two mean different things: `onError` is
+   * "the sweep failed", which stops and retries; this is "the sweep carried on
+   * WITHOUT this event", which nothing else will announce. That silence is the
+   * characteristic failure of a poller — the same reason `onUsageFault` exists —
+   * and it is what let a single unhandleable event stop mirroring for twelve days
+   * with only a log line to show for it.
+   */
+  onEventFault?: (source: "stripe" | "workos", event: { id: string; error: unknown }) => void;
   /** Mirror of the WorkOS Organization (e.g. a workspaces table). */
   orgMirror?: Mirror;
   /** Mirror of the WorkOS User (e.g. a users table). */
@@ -397,20 +409,60 @@ export function createBillingSync(opts: BillingSyncOptions): BillingSync {
     ? [...SYNC_EVENT_TYPES, ...PAYMENT_EVENT_TYPES]
     : SYNC_EVENT_TYPES;
 
+  /** Report what the sweep gave up on. Never throws — a reporter that can fail is
+   *  one more way to lose the report. */
+  function reportFaults(source: "stripe" | "workos", result: { skipped?: PollResult["skipped"] }) {
+    for (const fault of result.skipped ?? []) {
+      try {
+        if (opts.onEventFault) opts.onEventFault(source, fault);
+        else console.error(`[billing-sync] skipped ${source} event ${fault.id}:`, fault.error);
+      } catch {
+        /* a failed report must not fail the sweep */
+      }
+    }
+  }
+
   async function runOnce() {
-    const s = await pollStripeEvents({
-      after: await cursor.get("stripe"),
-      types: stripeTypes,
-      onEvent: handleStripe,
-    });
-    await cursor.set("stripe", s.cursor);
-    const w = await pollWorkOSEvents({
-      after: await cursor.get("workos"),
-      events: WORKOS_EVENTS,
-      onEvent: handleWorkOS,
-    });
-    await cursor.set("workos", w.cursor);
-    return { stripe: s.count, workos: w.count };
+    // The two legs are INDEPENDENT. They used to share one try: the Stripe poll
+    // ran first, and when it threw, `cursor.set` never ran AND the WorkOS leg was
+    // never reached — so a Stripe-side problem silently stopped WorkOS mirroring
+    // too. One provider being down is not a reason to stop syncing the other.
+    let stripeCount = 0;
+    let workosCount = 0;
+    let failure: unknown;
+
+    try {
+      const s = await pollStripeEvents({
+        after: await cursor.get("stripe"),
+        types: stripeTypes,
+        onEvent: handleStripe,
+      });
+      // Set the cursor BEFORE reporting: the sweep's progress is the thing that
+      // must survive, and a reporter is the caller's code.
+      await cursor.set("stripe", s.cursor);
+      reportFaults("stripe", s);
+      stripeCount = s.count;
+    } catch (e) {
+      failure = e;
+    }
+
+    try {
+      const w = await pollWorkOSEvents({
+        after: await cursor.get("workos"),
+        events: WORKOS_EVENTS,
+        onEvent: handleWorkOS,
+      });
+      await cursor.set("workos", w.cursor);
+      reportFaults("workos", w);
+      workosCount = w.count;
+    } catch (e) {
+      failure ??= e;
+    }
+
+    // Still surfaced: a leg that could not poll at all is a real failure, and
+    // `start`'s onError is where it goes. Both legs ran first.
+    if (failure !== undefined) throw failure;
+    return { stripe: stripeCount, workos: workosCount };
   }
 
   function start(opts: { intervalMs?: number; onError?: (e: unknown) => void } = {}) {
