@@ -21,7 +21,7 @@ import { beforeEach, test } from "vitest";
 
 import { __setStripeForTests } from "../dist/billing.js";
 import { __setPlanPricesForTests } from "../dist/plans.js";
-import { cancelPlan, changePlan } from "../dist/subscription.js";
+import { cancelPlan, changePlan, previewPlanChange } from "../dist/subscription.js";
 
 const PLANS = {
   free: { sells: { kind: "nothing" }, cap: { kind: "pool", credits: 100 }, sale: "free" },
@@ -726,3 +726,135 @@ test("a NO-OP reconciles a drifted mirror instead of leaving it stuck", async ()
   assert.equal(r.kind, "noop");
   assert.deepEqual(recorded.at(-1)?.seatCounts, { standard: 4 });
 });
+
+// ── 6. Seats fixed at purchase ──────────────────────────────────────────────
+//
+// A plan may declare that its seat count is chosen when it is BOUGHT and not
+// tuned afterwards — growing the team is a plan change, not a bigger basket.
+//
+// Enforced here rather than by a screen omitting a button: `change_plan` is
+// reachable over REST, MCP and the CLI, so a rule the UI keeps and the API does
+// not is a rule enforced by absence. That is the gap this library exists to
+// close, and it is the same shape as `limits.members` being advertised by
+// `list_plans` and enforced by nothing.
+
+const FIXED_PLANS = {
+  team: {
+    sells: {
+      kind: "seats",
+      seatsFixed: true,
+      seatTypes: { standard: { price: { monthly: 2104 }, includedCredits: 1000, min: 1 } },
+    },
+    cap: { kind: "per_seat" },
+    limits: { members: 100 },
+    sale: "self_serve",
+  },
+  big: {
+    sells: {
+      kind: "seats",
+      seatsFixed: true,
+      seatTypes: { standard: { price: { monthly: 4000 }, includedCredits: 5000, min: 1 } },
+    },
+    cap: { kind: "per_seat" },
+    limits: { members: 100 },
+    sale: "self_serve",
+  },
+};
+
+const FIXED_PRICES = new Map([
+  ["team_standard_monthly", "price_standard"],
+  ["big_standard_monthly", "price_big"],
+]);
+
+test("a bigger basket on the plan in force is REFUSED", async () => {
+  const { stripe, seatAdapter, recorded } = seatWorld();
+  __setStripeForTests(stripe);
+  __setPlanPricesForTests(FIXED_PRICES);
+
+  await assert.rejects(
+    () =>
+      changePlan(seatAdapter, "org_1", {
+        plans: FIXED_PLANS,
+        to: { plan: "team", seats: { standard: 4 } },
+      }),
+    (e) => e.code === "seats_fixed",
+  );
+  // Nothing was written and nothing was charged — refused before the diff.
+  assert.equal(recorded.length, 0);
+});
+
+test("removing a seat is refused too — fixed is fixed", async () => {
+  const { stripe, seatAdapter } = seatWorld();
+  __setStripeForTests(stripe);
+  __setPlanPricesForTests(FIXED_PRICES);
+
+  await assert.rejects(
+    () =>
+      changePlan(seatAdapter, "org_1", {
+        plans: FIXED_PLANS,
+        to: { plan: "team", seats: { standard: 2 } },
+      }),
+    (e) => e.code === "seats_fixed",
+  );
+});
+
+test("the SAME basket is not a change, so it still reconciles", async () => {
+  // The quantities decide, not the shape of the request. A re-submit or a
+  // reconcile passes the numbers already billed and must not be refused as
+  // though it were asking for something.
+  const { stripe, seatAdapter, recorded } = seatWorld();
+  __setStripeForTests(stripe);
+  __setPlanPricesForTests(FIXED_PRICES);
+
+  const r = await changePlan(seatAdapter, "org_1", {
+    plans: FIXED_PLANS,
+    to: { plan: "team", seats: { standard: 3 } },
+  });
+  assert.equal(r.kind, "noop");
+  assert.deepEqual(recorded.at(-1)?.seatCounts, { standard: 3 });
+});
+
+test("moving to a DIFFERENT plan may carry any basket that plan allows", async () => {
+  // The door this leaves open, and the only one: changing plan is how a team
+  // grows, so a bigger basket is exactly what that move is for.
+  const { stripe, seatAdapter } = seatWorld();
+  __setStripeForTests(stripe);
+  __setPlanPricesForTests(FIXED_PRICES);
+
+  const r = await changePlan(seatAdapter, "org_1", {
+    plans: FIXED_PLANS,
+    to: { plan: "big", seats: { standard: 8 } },
+  });
+  assert.equal(r.kind, "updated");
+});
+
+test("a plan that does NOT declare it keeps taking a new basket", async () => {
+  // Plenty of products sell a seat onto a live subscription. The refusal is a
+  // declaration, never an assumption.
+  const { stripe, seatAdapter } = seatWorld();
+  __setStripeForTests(stripe);
+  __setPlanPricesForTests(FIXED_PRICES);
+
+  const r = await changePlan(seatAdapter, "org_1", {
+    plans: SEAT_PLANS,
+    to: { plan: "team", seats: { standard: 4 } },
+  });
+  assert.equal(r.kind, "updated");
+});
+
+test("the PREVIEW refuses it too, rather than pricing something unbuyable", async () => {
+  // Quoting a move the charge will reject is the worst form of "quote one policy,
+  // apply another": a number on screen for something that cannot be bought.
+  const { stripe, seatAdapter } = seatWorld();
+  __setStripeForTests(stripe);
+  __setPlanPricesForTests(FIXED_PRICES);
+
+  await assert.rejects(
+    () =>
+      previewPlanChange(seatAdapter, "org_1", {
+        plans: FIXED_PLANS,
+        to: { plan: "team", seats: { standard: 4 } },
+      }),
+    (e) => e.code === "seats_fixed",
+  );
+})

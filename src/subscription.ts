@@ -84,7 +84,10 @@ export type PlanChangeErrorCode =
   | "not_purchasable"
   | "invalid_basket"
   | "needs_return_url"
-  | "no_customer";
+  | "no_customer"
+  /** The plan's seat count is fixed at purchase (`sells.seatsFixed`), and this
+   *  change only moves quantities on the plan already in force. */
+  | "seats_fixed";
 
 export class PlanChangeError extends Error {
   constructor(
@@ -486,6 +489,29 @@ export async function changePlan(
 
   // ── A paid target: diff the items ─────────────────────────────────────────
   const seats = opts.to.seats ?? defaultBasket(target);
+
+  // SEATS FIXED AT PURCHASE. A plan may declare that its seat count is chosen when
+  // it is bought and not tuned afterwards — growing the team is a plan change, not
+  // a bigger basket. Enforced HERE rather than by a screen omitting a button,
+  // because a rule the UI keeps and the API does not is not a rule: `change_plan`
+  // is reachable over REST, MCP and the CLI, and every one of them would have gone
+  // on selling the seat the product says it does not sell.
+  //
+  // Only a SAME-PLAN quantity move is refused. The first purchase has no
+  // subscription to change and never reaches here, and a move to a different plan
+  // may carry any basket that plan allows — that is the door this leaves open.
+  if (
+    target.sells.kind === "seats" &&
+    target.sells.seatsFixed &&
+    currentPlanKey === target.key &&
+    seatsDiffer(sub, target, seats)
+  ) {
+    throw new PlanChangeError(
+      "seats_fixed",
+      `The seat count for "${target.key}" is set when the plan is bought and cannot be changed on the plan in force. Move to a different plan to change it.`,
+    );
+  }
+
   const problems = validateBasket(opts.plans, { plan: target.key, interval, seats });
   if (problems.length) {
     throw new PlanChangeError("invalid_basket", problems.map((problem) => describeBasketProblem(problem)).join("; "), problems);
@@ -702,6 +728,28 @@ export async function changePlan(
   };
 }
 
+/**
+ * Does this basket ask for different QUANTITIES than the subscription already bills?
+ *
+ * Compared per seat TYPE off the live items, so it is the quantities that decide and
+ * not the shape of the request: a caller passing the same numbers it already has —
+ * a re-submit, a reconcile — is not asking for a change and must not be refused as
+ * though it were.
+ */
+function seatsDiffer(
+  sub: Stripe.Subscription,
+  model: PlanModel,
+  seats: Quantities,
+): boolean {
+  const current = purchasedSeatsOf(sub) ?? {};
+  const keys = new Set([...Object.keys(current), ...Object.keys(seats)]);
+  for (const key of keys) {
+    if (model.sells.kind === "seats" && !(key in model.sells.seatTypes) && key !== "default") continue;
+    if ((current[key] ?? 0) !== (seats[key] ?? 0)) return true;
+  }
+  return false;
+}
+
 /** What a plan change would cost, before committing to it. */
 export interface PlanChangePreview {
   /** What `changePlan` would do with these same arguments. */
@@ -804,6 +852,21 @@ export async function previewPlanChange(
   if (targetIsFree) return empty("canceling", periodEndOf(sub));
 
   const seats = opts.to.seats ?? defaultBasket(target);
+  // Refused here on the SAME terms as the change. A preview that priced a move
+  // `changePlan` will reject is the "quoting a policy the app does not apply"
+  // trap in its worst form: a number on screen for something that cannot be
+  // bought at all.
+  if (
+    target.sells.kind === "seats" &&
+    target.sells.seatsFixed &&
+    (sub.metadata?.plan ?? null) === target.key &&
+    seatsDiffer(sub, target, seats)
+  ) {
+    throw new PlanChangeError(
+      "seats_fixed",
+      `The seat count for "${target.key}" is set when the plan is bought and cannot be changed on the plan in force.`,
+    );
+  }
   const problems = validateBasket(opts.plans, { plan: target.key, interval, seats });
   if (problems.length) {
     throw new PlanChangeError("invalid_basket", problems.map((p) => describeBasketProblem(p)).join("; "), problems);

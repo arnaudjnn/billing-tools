@@ -153,6 +153,24 @@ export type Sells =
       /** Minimum TOTAL seats across every type ("a team of one is Hobby"). */
       minSeats?: number;
       maxSeats?: number | null;
+      /**
+       * The seat count is chosen when the plan is BOUGHT and cannot be changed
+       * afterwards — growing the team is a plan change, not a bigger basket.
+       *
+       * A product decision, so it is declared rather than assumed: plenty of
+       * products do sell a seat onto a live subscription, and for them this stays
+       * off and `changePlan` keeps taking a new basket. Declared, `changePlan`
+       * refuses a same-plan change that only moves quantities, which is what makes
+       * the rule true for an API, CLI and MCP caller and not merely for whichever
+       * screen happens to omit the control. A UI that hides a button the API still
+       * honours is a rule enforced by absence, which is the gap this library exists
+       * to close.
+       *
+       * The FIRST purchase is unaffected (there is no subscription to change), and
+       * so is a move to a different plan, which may carry any basket that plan
+       * allows.
+       */
+      seatsFixed?: boolean;
       /** Intervals actually sold. Default both. */
       intervals?: readonly BillingInterval[];
     }

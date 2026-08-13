@@ -788,7 +788,7 @@ One flat shape can only express one product: fold the axes together and an org-l
 
 | axis | values | what it decides |
 |---|---|---|
-| `sells` | `nothing` \| `seats` \| `flat` | what Stripe charges for (and what gets minted) |
+| `sells` | `nothing` \| `seats` \| `flat` | what Stripe charges for (and what gets minted). `seats` takes `seatsFixed` — see below |
 | `grant` | `none` \| `purchased_seats` \| `per_member` \| `fixed` | what is CREDITED as money on `invoice.paid` |
 | `cap` | `wallet` \| `per_seat` \| `pool` (flat `credits` or `perSeat`) | what is INCLUDED, as a counted window |
 | `replenish` | `{purchase?, autoReload?, request?}` | how to get more (a record — they compose) |
@@ -797,6 +797,8 @@ One flat shape can only express one product: fold the axes together and an org-l
 Plus `limits.members`, `limits.rate` (below), and `display` (name/tagline/features/badge/cta/pooled) so one config drives every pricing surface. `sale: "legacy"` means a plan kept for existing subscribers and offered to nobody new.
 
 **`grant` vs `cap` is a money bug, not a preference.** A Stripe credit balance auto-applies to the next invoice and cannot be opted out of — measured: 1000 credits granted to a customer on a €21.04 seat produced `starting_balance: -1000`, `amount_due: 1104`. So an *included* allowance must never be credited; it is a `cap`, a window usage is COUNTED against (`src/allowance.ts`). Credit is for what a customer actually buys. `checkPlansConfig` fails a plan that both invoices and credits.
+
+**`seatsFixed` says the seat count is bought, not tuned.** A plan declaring it refuses a same-plan change that only moves quantities: growing the team is a plan CHANGE, not a bigger basket. It exists because the alternative was a rule kept by a screen omitting a button — and `change_plan` is reachable over REST, MCP and the CLI, so every one of them would have gone on selling the seat the product says it does not sell. That is the same shape as `limits.members` being advertised by `list_plans` and enforced by nothing. Both `changePlan` and `previewPlanChange` refuse, on identical terms, because quoting a move the charge will reject is the worst form of quoting a policy you do not apply. Three things it deliberately does NOT refuse: the first purchase (no subscription to change), a move to a DIFFERENT plan (which may carry any basket that plan allows — the door this leaves open), and the SAME basket, since a re-submit or a reconcile is not asking for anything. Declared rather than assumed: plenty of products do sell a seat onto a live subscription, and for them it stays off.
 
 ### `limits.rate` is a sixth axis, and it is NOT `cap`
 
