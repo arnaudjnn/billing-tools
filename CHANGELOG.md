@@ -1,3 +1,10 @@
+# [25.7.0](https://github.com/arnaudjnn/billing-tools/compare/v25.6.1...v25.7.0) (2026-08-13)
+
+
+### Features
+
+* **pricing:** upgradesOnly — a grid shown to a customer is a grid of moves up ([bc7eade](https://github.com/arnaudjnn/billing-tools/commit/bc7eade15f24d50b65cf9c775fbcdc9464b3b50f))
+
 ## [25.6.1](https://github.com/arnaudjnn/billing-tools/compare/v25.6.0...v25.6.1) (2026-08-13)
 
 
