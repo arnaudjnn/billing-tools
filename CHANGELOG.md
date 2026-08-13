@@ -1,3 +1,10 @@
+# [25.6.0](https://github.com/arnaudjnn/billing-tools/compare/v25.5.5...v25.6.0) (2026-08-13)
+
+
+### Features
+
+* **plans:** seatsFixed — a plan whose seat count is bought, not tuned ([776a755](https://github.com/arnaudjnn/billing-tools/commit/776a7550c4e3d3ace534932a7f44a7c39d7a3ec9))
+
 ## [25.5.5](https://github.com/arnaudjnn/billing-tools/compare/v25.5.4...v25.5.5) (2026-08-12)
 
 
