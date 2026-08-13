@@ -1,3 +1,10 @@
+## [25.7.1](https://github.com/arnaudjnn/billing-tools/compare/v25.7.0...v25.7.1) (2026-08-13)
+
+
+### Bug Fixes
+
+* **pricing:** canManage skipped the CURRENT plan's CTA ([8fde50b](https://github.com/arnaudjnn/billing-tools/commit/8fde50b6fd6bb8f4c1afe73490f69c295a16eccf))
+
 # [25.7.0](https://github.com/arnaudjnn/billing-tools/compare/v25.6.1...v25.7.0) (2026-08-13)
 
 
