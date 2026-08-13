@@ -263,7 +263,13 @@ function ctaFor(
   const href = model.display?.cta?.href ?? null;
 
   if (opts.currentPlan && opts.currentPlan === model.key) {
-    return { kind: "current", label, href: null, disabledReason: null };
+    // The CURRENT card carries the reason too. It used to return null before the
+    // `canManage` check, so on a grid where every other CTA was dead a member got
+    // one live button — on the card about the plan they cannot manage, which
+    // reads as "this is the one you're allowed to press". `kind` stays `current`
+    // because the card still means "you are here"; what the viewer may DO with it
+    // is the separate question `disabledReason` answers.
+    return { kind: "current", label, href: null, disabledReason };
   }
   if (disabledReason !== null) {
     return { kind: "unavailable", label, href: null, disabledReason };

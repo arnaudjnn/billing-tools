@@ -141,3 +141,44 @@ test("with no current plan it is inert, so one page serves a visitor too", async
     ["free", "top"],
   );
 });
+
+test("a viewer who cannot manage gets NO live CTA, the current card included", async () => {
+  const { derivePlanViews, definePlans } = await import(
+    new URL("../dist/pricing.js", import.meta.url).href
+  );
+  const PLANS = definePlans({
+    free: { sells: { kind: "nothing" }, cap: { kind: "pool", credits: 100 }, sale: "free",
+      display: { name: "Free", order: 1 } },
+    mid: { sells: { kind: "flat", price: { monthly: 1800 } }, cap: { kind: "pool", credits: 1000 },
+      sale: "self_serve", display: { name: "Mid", order: 2 } },
+  });
+  const reason = "Solo un amministratore può gestire questo piano.";
+  const views = derivePlanViews(PLANS, { currentPlan: "mid", canManage: { reason } });
+
+  // The card they are ON. It used to be the one exception, so a member saw a grid
+  // of dead buttons and one live one — on the plan they cannot manage, which reads
+  // as the button they ARE allowed to press.
+  const current = views.find((v) => v.key === "mid");
+  assert.equal(current.cta.kind, "current", "it still means 'you are here'");
+  assert.equal(current.cta.disabledReason, reason);
+
+  // And nothing anywhere in the grid is actionable.
+  assert.equal(
+    views.every((v) => v.cta.disabledReason),
+    true,
+    views.map((v) => `${v.key}:${v.cta.kind}:${v.cta.disabledReason}`).join(" "),
+  );
+});
+
+test("an admin's current card stays actionable — the reason is the ONLY trigger", async () => {
+  const { derivePlanViews, definePlans } = await import(
+    new URL("../dist/pricing.js", import.meta.url).href
+  );
+  const PLANS = definePlans({
+    mid: { sells: { kind: "flat", price: { monthly: 1800 } }, cap: { kind: "pool", credits: 1000 },
+      sale: "self_serve", display: { name: "Mid", order: 1 } },
+  });
+  const view = derivePlanViews(PLANS, { currentPlan: "mid" })[0];
+  assert.equal(view.cta.kind, "current");
+  assert.equal(view.cta.disabledReason, null, "no reason means nothing to explain");
+});
