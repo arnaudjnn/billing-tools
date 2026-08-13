@@ -1,3 +1,10 @@
+## [25.6.1](https://github.com/arnaudjnn/billing-tools/compare/v25.6.0...v25.6.1) (2026-08-13)
+
+
+### Bug Fixes
+
+* **sync:** one unhandleable event stopped mirroring for every org, indefinitely ([f5d3bbe](https://github.com/arnaudjnn/billing-tools/commit/f5d3bbeb5ce3a9f0b8a054e5777b41ae755e537d))
+
 # [25.6.0](https://github.com/arnaudjnn/billing-tools/compare/v25.5.5...v25.6.0) (2026-08-13)
 
 
