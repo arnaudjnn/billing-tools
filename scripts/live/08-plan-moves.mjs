@@ -56,6 +56,23 @@ export async function run(ctx) {
     ok("nothing is charged today", (await s.count()) === before, `${before} invoice(s), unchanged`);
     ok("the quote agrees nothing is due now", quote.dueNow === 0, eur(quote.dueNow));
     ok("but the plan IS applied immediately", applied.kind === "updated", applied.kind);
+
+    // WHAT WAS BOUGHT, recorded by the change itself. `changePlan` wrote plan,
+    // status, subscriptionId and periodEnd and nothing about seats, so a workspace
+    // that added one PAID for it and did not receive it — `seatCounts` is the
+    // member ceiling, the seat-assignment capacity AND the size of a `cap.perSeat`
+    // pool. Measured live before the fix: Stripe's item read quantity 4 while the
+    // org still said 3. Waiting for `customer.subscription.updated` is not good
+    // enough, so this asserts the mirror NOW, with no event in between.
+    const mirrored = await ctx.adapter.getSubscription(orgId);
+    const wanted = Object.values(PRO_SEATS).reduce((a, b) => a + b, 0);
+    const recorded = Object.values(mirrored.seatCounts ?? {}).reduce((a, b) => a + b, 0);
+    ok(
+      "and the seats it bought are recorded on the org, without waiting for an event",
+      recorded === wanted,
+      `recorded ${recorded} of ${wanted} — ${JSON.stringify(mirrored.seatCounts)}`,
+    );
+
     const live = await s.live();
     ok(
       "the customer has the new tier already",

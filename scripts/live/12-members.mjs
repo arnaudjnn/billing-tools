@@ -13,7 +13,8 @@
 // A whole throwaway workspace, because this section REMOVES people and the run's own org is
 // every later section's fixture.
 
-import { note, ok, section, skip } from "../lib/harness.mjs";
+import { createWorkOSInvitations } from "../../dist/invitations.js";
+import { defer, ignoreMissing, note, ok, section, skip } from "../lib/harness.mjs";
 import { RUN } from "../lib/scratch-stripe.mjs";
 import { createScratchOrg } from "../lib/scratch-workos.mjs";
 import { makeCallers } from "../lib/callers.mjs";
@@ -22,6 +23,10 @@ const FORBIDDEN = /Forbidden \(403\)/;
 
 export async function run(ctx) {
   const { api, dispatcher, workos } = ctx;
+  // The invitation SERVICE, not a tool: accepting has no tool (it needs the
+  // accepting user's identity, which the app's own route supplies), so this is
+  // the only way to exercise the path a real invitee walks.
+  const invitations = createWorkOSInvitations({ baseUrl: "https://e2e.invalid" });
 
   const team = await createScratchOrg({ name: `E2E Members ${RUN}`, suffix: "-m" });
   const { orgId, adminUserId, memberUserId } = team;
@@ -137,6 +142,79 @@ export async function run(ctx) {
     ok("it can be revoked", revoked.value?.status === "revoked", revoked.error?.slice(0, 60));
     const after = (await callers.asAdmin("list_members", {})).value?.seats;
     ok("which gives the seat back", after?.pending_invitations === 0, JSON.stringify(after));
+
+    // ── ACCEPTING one, which is the half nothing ever ran ────────────────────
+    //
+    // Sending an invitation makes WorkOS create a PENDING membership for the
+    // invited user, so `accept` — which creates the membership itself, because
+    // that is the only path a `canAccept` hook widening acceptance to a secondary
+    // email can take — is refused with
+    // `cannot_reactivate_pending_organization_membership`. Only ConflictException
+    // was tolerated, so acceptance threw for EVERY ordinary invitee and nobody
+    // invited through the product could ever join.
+    //
+    // It survived an offline suite because a fake accepts any create, and it
+    // survived both consumers' suites because every member they have is added
+    // straight through WorkOS by a fixture. Exactly the shape this file exists
+    // for: only a real WorkOS environment has an opinion about pending
+    // memberships.
+    section("12e2 — the invited person actually joins");
+    const joinEmail = `${RUN}-joins@example.test`;
+    const toJoin = await callers.asAdmin("invite_member", { email: joinEmail, role: "member" });
+    ok("a second invitation goes out", Boolean(toJoin.value?.invitation_id), toJoin.error?.slice(0, 80));
+
+    // The user WorkOS created at send time — the fact that makes seating an
+    // invitee possible, and the same one that blocks the naive accept.
+    const invitedUser = await workos.userManagement.listUsers({ email: joinEmail, limit: 1 });
+    const joinerId = invitedUser.data[0]?.id;
+    ok("sending created the WorkOS user", Boolean(joinerId), joinEmail);
+    if (joinerId) {
+      defer("removed invited user", () =>
+        workos.userManagement.deleteUser(joinerId).catch(ignoreMissing),
+      );
+    }
+
+    // `statuses` is REQUIRED to see it: the listing defaults to active memberships,
+    // so the pending one — the whole reason acceptance used to fail — is invisible
+    // without asking for it. (Measured: without this the assertion reads "(none)"
+    // and would have been "fixed" by deleting it.)
+    const pendingBefore = await workos.userManagement.listOrganizationMemberships({
+      organizationId: orgId,
+      userId: joinerId,
+      statuses: ["pending"],
+      limit: 1,
+    });
+    ok(
+      "and a PENDING membership, which is what used to make accepting impossible",
+      pendingBefore.data[0]?.status === "pending",
+      pendingBefore.data[0]?.status ?? "(none)",
+    );
+
+    const joined = await invitations
+      .accept(toJoin.value.invitation_id, { id: joinerId, email: joinEmail })
+      .catch((e) => ({ error: e.message }));
+    ok("accepting SUCCEEDS", joined?.orgId === orgId, joined?.error?.slice(0, 90) ?? JSON.stringify(joined));
+
+    const activeAfter = await workos.userManagement.listOrganizationMemberships({
+      organizationId: orgId,
+      userId: joinerId,
+      limit: 1,
+    });
+    ok(
+      "and the membership is ACTIVE — they are really in the workspace",
+      activeAfter.data[0]?.status === "active",
+      activeAfter.data[0]?.status ?? "(none)",
+    );
+    // Put the org back to the shape the next section expects. NOT deferred: 12f
+    // asserts that exactly ONE member is left after it removes the member, and a
+    // joiner still sitting there makes that read 2. A section that leaves the
+    // environment changed makes every later one depend on it — the same rule the
+    // teardown exists for, applied a few lines earlier.
+    if (activeAfter.data[0]) {
+      await workos.userManagement
+        .deleteOrganizationMembership(activeAfter.data[0].id)
+        .catch(ignoreMissing);
+    }
   }
 
   // ── removing somebody ─────────────────────────────────────────────────────
