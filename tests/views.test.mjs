@@ -79,3 +79,65 @@ test('plan config derives the pricing surfaces', async () => {
 
 
 });
+
+// ── A grid shown to a customer is a grid of moves UP ─────────────────────────
+//
+// A card headed "Get the Hobby plan", offered to somebody on Pro, is a downgrade
+// dressed as an upgrade — and it is not where cancelling belongs, which is the
+// billing page, in those words, scheduled for the period end.
+//
+// Ranked by `planRank`, the SAME arithmetic `isDowngrade` uses, so a grid cannot
+// offer a move the engine would treat as going the other way.
+
+test("upgradesOnly drops the tiers below the current plan", async () => {
+  const { derivePlanViews, definePlans } = await import(
+    new URL("../dist/pricing.js", import.meta.url).href
+  );
+  const PLANS = definePlans({
+    free: { sells: { kind: "nothing" }, cap: { kind: "pool", credits: 100 }, sale: "free",
+      display: { name: "Free", order: 1 } },
+    mid: { sells: { kind: "flat", price: { monthly: 1800 } }, cap: { kind: "pool", credits: 1000 },
+      sale: "self_serve", display: { name: "Mid", order: 2 } },
+    top: { sells: { kind: "flat", price: { monthly: 9000 } }, cap: { kind: "pool", credits: 5000 },
+      sale: "self_serve", display: { name: "Top", order: 3 } },
+  });
+  const keys = (o) => derivePlanViews(PLANS, o).map((v) => v.key);
+
+  // On the middle tier: where you are, and up. Not the one below.
+  assert.deepEqual(keys({ currentPlan: "mid", upgradesOnly: true }), ["mid", "top"]);
+  // The current plan STAYS — it is the anchor the others are compared against,
+  // and its card is what says "you are here" (`cta.kind: "current"`).
+  assert.equal(
+    derivePlanViews(PLANS, { currentPlan: "mid", upgradesOnly: true }).find((v) => v.key === "mid")
+      .cta.kind,
+    "current",
+  );
+  // On the top tier the grid is one card. A page rendering it has to cope; the
+  // alternative is offering a move that does not exist.
+  assert.deepEqual(keys({ currentPlan: "top", upgradesOnly: true }), ["top"]);
+  // On the free tier nothing is below, so it changes nothing.
+  assert.deepEqual(keys({ currentPlan: "free", upgradesOnly: true }), ["free", "mid", "top"]);
+});
+
+test("with no current plan it is inert, so one page serves a visitor too", async () => {
+  const { derivePlanViews, definePlans } = await import(
+    new URL("../dist/pricing.js", import.meta.url).href
+  );
+  const PLANS = definePlans({
+    free: { sells: { kind: "nothing" }, cap: { kind: "pool", credits: 100 }, sale: "free",
+      display: { name: "Free", order: 1 } },
+    top: { sells: { kind: "flat", price: { monthly: 9000 } }, cap: { kind: "pool", credits: 5000 },
+      sale: "self_serve", display: { name: "Top", order: 2 } },
+  });
+  // A signed-out reader has no tier to be above, so the public page keeps every
+  // card without needing a second call or a second component.
+  assert.deepEqual(
+    derivePlanViews(PLANS, { upgradesOnly: true }).map((v) => v.key),
+    ["free", "top"],
+  );
+  // And an unknown current plan must not silently empty the grid.
+  assert.deepEqual(
+    derivePlanViews(PLANS, { currentPlan: "legacy_gone", upgradesOnly: true }).map((v) => v.key),
+    ["free", "top"],
+  );
+});

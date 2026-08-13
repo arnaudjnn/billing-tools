@@ -1,3 +1,4 @@
+import { planRank } from "./ladder.js";
 import {
   formatMessage,
   formatMinor,
@@ -221,6 +222,20 @@ export interface DerivePlanViewsOptions extends LocaleOptions {
   };
   /** Also include `display.hidden` plans and `sale: "legacy"`. Default false. */
   includeHidden?: boolean;
+  /**
+   * Drop the tiers BELOW `currentPlan` — a grid of moves up, plus where you are.
+   *
+   * A pricing grid shown to an existing customer is a place to move UP; a card
+   * headed "Get the Hobby plan" offered to somebody on Pro is a downgrade dressed
+   * as an upgrade, and it is not where cancelling belongs (that is the billing
+   * page, which says so in those words and schedules it for the period end).
+   *
+   * Ranked by `planRank`, the SAME arithmetic `isDowngrade` uses, so the grid and
+   * the refusal cannot disagree about which way a move goes. Ignored without a
+   * `currentPlan` — a visitor has no tier to be above — which is what lets one
+   * public page serve a signed-out reader and a signed-in customer.
+   */
+  upgradesOnly?: boolean;
 }
 
 
@@ -283,8 +298,19 @@ export function derivePlanViews(
   const money = (minor: Money): MoneyView => ({ minor, text: fmt(minor, currency, locale) });
   const other: BillingInterval = interval === "yearly" ? "monthly" : "yearly";
 
+  // The floor a card has to reach to be shown. `null` means show everything: no
+  // current plan is no ranking to be below.
+  const floor =
+    opts.upgradesOnly && opts.currentPlan
+      ? (() => {
+          const current = normalizePlans(plans).find((m) => m.key === opts.currentPlan);
+          return current ? planRank(current) : null;
+        })()
+      : null;
+
   return normalizePlans(plans)
     .filter((m) => opts.includeHidden || (!m.display?.hidden && m.sale !== "legacy"))
+    .filter((m) => floor === null || planRank(m) >= floor)
     .map((model): PlanView => {
       const rows: SeatRowView[] = model.seatTypes.map((s) => ({
         key: s.key,
