@@ -596,6 +596,32 @@ when the proxy is on, and `authorization_code`/`refresh_token` join
 `grant_types_supported`. Consumers without the proxy no longer advertise an
 `/oauth/authorize` they don't implement.
 
+**Registered clients, parked sessions and codes live in an `OAuthStore`,** and the
+default is this process's memory. That suits one long-lived process; after a
+redeploy every connector answers `invalid_client` until its user re-adds it, and
+behind two replicas a code minted by one is unknown to the other. Pass a
+persistent store — four methods, with `take` an atomic read-and-delete (a
+`DELETE … RETURNING`, a Redis `GETDEL`) so a code stays single-use across
+instances:
+
+```ts
+oauthProxy: {
+  store: {
+    get: (kind, key) => …,               // null when absent or expired
+    set: (kind, key, value, ttlMs) => …, // ttlMs null = never expires
+    delete: (kind, key) => …,
+    take: (kind, key) => …,              // atomic: at most one caller gets it
+  },
+  ttl: { clientMs: null },               // optional; default 90 days, extended while in use
+},
+```
+
+Bearer keys (session ids, codes) reach the store already hashed and the WorkOS
+tokens inside a code are sealed with a key only the code's holder has, so the
+store's rows replay nothing. With a store, a client lives 90 days by default and
+is extended whenever it authorizes or refreshes, so a connector in use keeps its
+`client_id`; without one it keeps the old 24 h.
+
 **`REFRESH_TOKEN_SECRET` is required and has no fallback.** Falling back to
 `WORKOS_CLIENT_ID` — a public identifier — would let anyone who knows it forge a
 30-day refresh token. Without the secret the token endpoint returns

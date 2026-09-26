@@ -423,6 +423,15 @@ export {
   type OAuthProxyPaths,
   type ClaimGrantChain,
 } from "./oauth-proxy/index.js";
+export {
+  inMemoryOAuthStore,
+  type OAuthStore,
+  type OAuthStoreRecords,
+  type OAuthRecordKind,
+  type OAuthClientRecord,
+  type OAuthSessionRecord,
+  type OAuthCodeRecord,
+} from "./oauth-proxy/store.js";
 
 // Next route factories
 export { createToolListHandler, createToolDispatchHandler, type Dispatcher } from "./routes/rest.js";

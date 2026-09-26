@@ -27,8 +27,27 @@
 // 30-day refresh token. There is deliberately no fallback here: without
 // REFRESH_TOKEN_SECRET the token endpoint returns server_error rather than
 // signing with something guessable.
-import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+//
+// STATE — clients, parked sessions and codes live in an `OAuthStore` (./store.ts).
+// The default is this process's memory, and a redeploy then forgets every
+// registered client: each connector answers `invalid_client` until its user
+// removes and re-adds it. A deployment that redeploys, or runs two replicas,
+// passes a persistent `store`.
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  createHmac,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto";
 import { getWorkOS } from "../workos.js";
+import {
+  inMemoryOAuthStore,
+  type OAuthClientRecord,
+  type OAuthStore,
+} from "./store.js";
 
 export interface ClaimGrantChain {
   type: string;
@@ -54,7 +73,11 @@ export interface OAuthProxyOptions {
   /** Seconds/ms overrides. accessTokenTtl is what we *advertise* for the WorkOS
    *  access token; refreshTtl is how long our wrapper JWT stays valid. */
   ttl?: {
-    clientMs?: number; // default 24h
+    /** How long a registered client lives. `null` = never expires. Default: 24h
+     *  in memory; 90 days with a `store`, extended while the client is in use
+     *  (authorize + refresh), so a connector used at least once per refresh-token
+     *  lifetime never loses its client_id. */
+    clientMs?: number | null;
     sessionMs?: number; // default 10m
     codeMs?: number; // default 5m
     accessTokenSeconds?: number; // default 600
@@ -65,36 +88,9 @@ export interface OAuthProxyOptions {
    *  handler isn't available yet at construction (createBilling builds the proxy
    *  first, because agent-auth needs its endpoints for discovery). */
   claimGrant?: ClaimGrantChain | (() => ClaimGrantChain | undefined);
-}
-
-interface RegisteredClient {
-  client_id: string;
-  client_name?: string;
-  redirect_uris: string[];
-  grant_types: string[];
-  response_types: string[];
-  token_endpoint_auth_method: string;
-  created_at: number;
-}
-
-interface AuthSession {
-  client_id: string;
-  redirect_uri: string;
-  state?: string;
-  code_challenge?: string;
-  code_challenge_method?: string;
-  created_at: number;
-}
-
-interface AuthCodeEntry {
-  client_id: string;
-  redirect_uri: string;
-  access_token: string;
-  refresh_token: string;
-  code_challenge?: string;
-  code_challenge_method?: string;
-  used: boolean;
-  created_at: number;
+  /** Where clients, sessions and codes live. Default: `inMemoryOAuthStore()`,
+   *  one process only — see STATE above. */
+  store?: OAuthStore;
 }
 
 const b64url = (b: Buffer) => b.toString("base64url");
@@ -119,30 +115,66 @@ function verifyCodeChallenge(verifier: string, challenge: string, method: string
   return false;
 }
 
+/** Store key for a bearer value (session id, code): its SHA-256, so a store's
+ *  rows cannot be replayed — the same at-rest rule as the claim store. */
+const keyOf = (secret: string) => createHash("sha256").update(secret).digest("hex");
+
+// A code record carries the WorkOS access + refresh tokens. Sealed with a key
+// derived from the code, which only the client holds (the store has its hash), so
+// a leaked row — a backup, a replica, a log of the table — hands out no session.
+function sealKey(code: string): Buffer {
+  return createHash("sha256").update(`oauth-proxy:code-seal:${code}`).digest();
+}
+
+function sealTokens(code: string, tokens: { access_token: string; refresh_token: string }): string {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", sealKey(code), iv);
+  const body = Buffer.concat([cipher.update(JSON.stringify(tokens), "utf8"), cipher.final()]);
+  return [iv, cipher.getAuthTag(), body].map(b64url).join(".");
+}
+
+function openTokens(code: string, sealed: string): { access_token: string; refresh_token: string } | null {
+  try {
+    const [iv, tag, body] = sealed.split(".").map((p) => Buffer.from(p, "base64url"));
+    const decipher = createDecipheriv("aes-256-gcm", sealKey(code), iv);
+    decipher.setAuthTag(tag);
+    return JSON.parse(Buffer.concat([decipher.update(body), decipher.final()]).toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
 export function createOAuthProxy(opts: OAuthProxyOptions = {}) {
   const paths: Required<OAuthProxyPaths> = {
     authorize: opts.paths?.authorize ?? "/oauth/authorize",
     register: opts.paths?.register ?? "/oauth/register",
     callback: opts.paths?.callback ?? "/oauth/callback",
   };
-  const CLIENT_TTL = opts.ttl?.clientMs ?? 24 * 60 * 60 * 1000;
+  const store = opts.store ?? inMemoryOAuthStore();
+  // `undefined` is "not said"; `null` is "never expires".
+  const CLIENT_TTL =
+    opts.ttl?.clientMs !== undefined
+      ? opts.ttl.clientMs
+      : opts.store
+        ? 90 * 24 * 60 * 60 * 1000
+        : 24 * 60 * 60 * 1000;
   const SESSION_TTL = opts.ttl?.sessionMs ?? 10 * 60 * 1000;
   const CODE_TTL = opts.ttl?.codeMs ?? 5 * 60 * 1000;
   const ACCESS_TTL = opts.ttl?.accessTokenSeconds ?? 600;
   const REFRESH_TTL = opts.ttl?.refreshSeconds ?? 30 * 24 * 60 * 60;
 
-  // In-memory, single-process — same assumption as the default claim store.
-  // Pruned on access rather than on a timer, so there is no dangling interval in
-  // a serverless/edge build.
-  const clients = new Map<string, RegisteredClient>();
-  const sessions = new Map<string, AuthSession>();
-  const codes = new Map<string, AuthCodeEntry>();
-
-  function prune(): void {
+  /** Extends a client's lifetime while it is in use. Written at most once per
+   *  half-TTL, so a connector refreshing every ten minutes is not a write every
+   *  ten minutes. A store failure here is logged, never the request's failure. */
+  async function touchClient(client: OAuthClientRecord): Promise<void> {
+    if (CLIENT_TTL === null) return;
     const now = Date.now();
-    for (const [k, v] of clients) if (now - v.created_at > CLIENT_TTL) clients.delete(k);
-    for (const [k, v] of sessions) if (now - v.created_at > SESSION_TTL) sessions.delete(k);
-    for (const [k, v] of codes) if (now - v.created_at > CODE_TTL) codes.delete(k);
+    if (now - (client.refreshed_at ?? client.created_at) < CLIENT_TTL / 2) return;
+    try {
+      await store.set("client", client.client_id, { ...client, refreshed_at: now }, CLIENT_TTL);
+    } catch (e) {
+      console.error("[oauth-proxy] could not extend client lifetime:", e);
+    }
   }
 
   const baseUrlOf = (request: Request): string =>
@@ -208,7 +240,6 @@ export function createOAuthProxy(opts: OAuthProxyOptions = {}) {
   /** RFC 7591 dynamic client registration. Public clients only
    *  (token_endpoint_auth_method: none) — PKCE is what protects the exchange. */
   async function register(request: Request): Promise<Response> {
-    prune();
     let body: Record<string, unknown>;
     try {
       body = (await request.json()) as Record<string, unknown>;
@@ -222,7 +253,7 @@ export function createOAuthProxy(opts: OAuthProxyOptions = {}) {
     if (!uris.every((u) => typeof u === "string")) {
       return jsonError("invalid_client_metadata", "Each redirect_uri must be a string");
     }
-    const client: RegisteredClient = {
+    const client: OAuthClientRecord = {
       client_id: randomUUID(),
       client_name: typeof body.client_name === "string" ? body.client_name : undefined,
       redirect_uris: uris as string[],
@@ -231,7 +262,7 @@ export function createOAuthProxy(opts: OAuthProxyOptions = {}) {
       token_endpoint_auth_method: "none",
       created_at: Date.now(),
     };
-    clients.set(client.client_id, client);
+    await store.set("client", client.client_id, client, CLIENT_TTL);
     return Response.json(
       {
         client_id: client.client_id,
@@ -249,7 +280,6 @@ export function createOAuthProxy(opts: OAuthProxyOptions = {}) {
    *  AuthKit. The session id travels as WorkOS's `state`, so the callback can
    *  match the returning user back to the waiting client. */
   async function authorize(request: Request): Promise<Response> {
-    prune();
     const q = new URL(request.url).searchParams;
     const clientId = q.get("client_id");
     const redirectUri = q.get("redirect_uri");
@@ -259,7 +289,7 @@ export function createOAuthProxy(opts: OAuthProxyOptions = {}) {
         "Missing or invalid required parameters (client_id, redirect_uri, response_type=code)",
       );
     }
-    const client = clients.get(clientId);
+    const client = await store.get("client", clientId);
     if (!client) return jsonError("invalid_client", "Unknown client_id");
     if (!client.redirect_uris.includes(redirectUri)) {
       return jsonError("invalid_request", "redirect_uri does not match registered URIs");
@@ -268,14 +298,20 @@ export function createOAuthProxy(opts: OAuthProxyOptions = {}) {
     if (!wosClientId) return jsonError("server_error", "WORKOS_CLIENT_ID is not configured", 500);
 
     const sessionId = randomUUID();
-    sessions.set(sessionId, {
-      client_id: clientId,
-      redirect_uri: redirectUri,
-      state: q.get("state") ?? undefined,
-      code_challenge: q.get("code_challenge") ?? undefined,
-      code_challenge_method: q.get("code_challenge_method") ?? undefined,
-      created_at: Date.now(),
-    });
+    await store.set(
+      "session",
+      keyOf(sessionId),
+      {
+        client_id: clientId,
+        redirect_uri: redirectUri,
+        state: q.get("state") ?? undefined,
+        code_challenge: q.get("code_challenge") ?? undefined,
+        code_challenge_method: q.get("code_challenge_method") ?? undefined,
+        created_at: Date.now(),
+      },
+      SESSION_TTL,
+    );
+    await touchClient(client);
 
     const url = new URL("https://api.workos.com/user_management/authorize");
     url.searchParams.set("client_id", wosClientId);
@@ -289,15 +325,14 @@ export function createOAuthProxy(opts: OAuthProxyOptions = {}) {
   /** AuthKit's redirect target. Exchanges WorkOS's code for tokens, mints OUR
    *  single-use code, and bounces back to the client's redirect_uri. */
   async function callback(request: Request): Promise<Response> {
-    prune();
     const q = new URL(request.url).searchParams;
     const workosCode = q.get("code");
     const sessionId = q.get("state");
     if (!workosCode || !sessionId) return jsonError("invalid_request", "Missing code or state parameter");
 
-    const session = sessions.get(sessionId);
+    // Taken, not read: a session is one trip to AuthKit and back.
+    const session = await store.take("session", keyOf(sessionId));
     if (!session) return jsonError("invalid_request", "Invalid or expired session");
-    sessions.delete(sessionId);
 
     const wosClientId = workosClientId();
     if (!wosClientId) return jsonError("server_error", "WORKOS_CLIENT_ID is not configured", 500);
@@ -317,16 +352,19 @@ export function createOAuthProxy(opts: OAuthProxyOptions = {}) {
     }
 
     const code = randomUUID();
-    codes.set(code, {
-      client_id: session.client_id,
-      redirect_uri: session.redirect_uri,
-      access_token: accessToken,
-      refresh_token: refreshToken,
-      code_challenge: session.code_challenge,
-      code_challenge_method: session.code_challenge_method,
-      used: false,
-      created_at: Date.now(),
-    });
+    await store.set(
+      "code",
+      keyOf(code),
+      {
+        client_id: session.client_id,
+        redirect_uri: session.redirect_uri,
+        code_challenge: session.code_challenge,
+        code_challenge_method: session.code_challenge_method,
+        sealed_tokens: sealTokens(code, { access_token: accessToken, refresh_token: refreshToken }),
+        created_at: Date.now(),
+      },
+      CODE_TTL,
+    );
 
     const back = new URL(session.redirect_uri);
     back.searchParams.set("code", code);
@@ -339,13 +377,12 @@ export function createOAuthProxy(opts: OAuthProxyOptions = {}) {
     if (!code || !client_id) {
       return jsonError("invalid_request", "Missing required parameters (code, client_id)");
     }
-    const entry = codes.get(code);
-    if (!entry) return jsonError("invalid_grant", "Invalid or expired authorization code");
-    if (entry.used) {
-      // Replay: burn it. RFC 6749 §4.1.2 — a reused code must invalidate.
-      codes.delete(code);
-      return jsonError("invalid_grant", "Authorization code has already been used");
-    }
+    // TAKEN before anything is checked: the store's atomic take is what makes a
+    // code single-use across instances, so the first presentation consumes it
+    // whatever its outcome — a replay, or a second guess at the PKCE verifier,
+    // finds nothing (RFC 6749 §4.1.2; RFC 7636 §4.6 gains a one-guess bound).
+    const entry = await store.take("code", keyOf(code));
+    if (!entry) return jsonError("invalid_grant", "Invalid, expired or already used authorization code");
     if (entry.client_id !== client_id) return jsonError("invalid_grant", "client_id does not match");
     if (redirect_uri && entry.redirect_uri !== redirect_uri) {
       return jsonError("invalid_grant", "redirect_uri does not match");
@@ -356,17 +393,18 @@ export function createOAuthProxy(opts: OAuthProxyOptions = {}) {
         return jsonError("invalid_grant", "PKCE code_verifier verification failed");
       }
     }
-    entry.used = true;
+    const tokens = openTokens(code, entry.sealed_tokens);
+    if (!tokens) return jsonError("invalid_grant", "Invalid or expired authorization code");
 
     let refresh: string;
     try {
-      refresh = signRefresh(entry.refresh_token, entry.client_id);
+      refresh = signRefresh(tokens.refresh_token, entry.client_id);
     } catch (e) {
       console.error("[oauth-proxy]", e);
       return jsonError("server_error", "Refresh-token signing is not configured", 500);
     }
     return Response.json({
-      access_token: entry.access_token,
+      access_token: tokens.access_token,
       token_type: "bearer",
       expires_in: ACCESS_TTL,
       refresh_token: refresh,
@@ -390,6 +428,10 @@ export function createOAuthProxy(opts: OAuthProxyOptions = {}) {
 
     const wosClientId = workosClientId();
     if (!wosClientId) return jsonError("server_error", "WORKOS_CLIENT_ID is not configured", 500);
+    // A client that keeps refreshing is a connector in use: keep its
+    // registration alive, so the next re-authorize still knows it.
+    const client = await store.get("client", client_id).catch(() => null);
+    if (client) await touchClient(client);
     try {
       const auth = await getWorkOS().userManagement.authenticateWithRefreshToken({
         clientId: wosClientId,
@@ -427,7 +469,6 @@ export function createOAuthProxy(opts: OAuthProxyOptions = {}) {
   /** POST /oauth/token — authorization_code + refresh_token, plus whatever
    *  `claimGrant` chains in (auth.md's claim grant, in practice). */
   async function token(request: Request): Promise<Response> {
-    prune();
     const params = await readBody(request);
     if (!params) return jsonError("invalid_request", "Invalid request body");
     if (params.grant_type === "authorization_code") return handleAuthorizationCode(params);
