@@ -1,3 +1,10 @@
+# [25.8.0](https://github.com/arnaudjnn/billing-tools/compare/v25.7.1...v25.8.0) (2026-09-26)
+
+
+### Features
+
+* **oauth-proxy:** pluggable OAuthStore so registered clients survive a redeploy ([58da13f](https://github.com/arnaudjnn/billing-tools/commit/58da13fa32309fdaa6838a74dfd3f5c8517eeb81))
+
 ## [25.7.1](https://github.com/arnaudjnn/billing-tools/compare/v25.7.0...v25.7.1) (2026-08-13)
 
 
