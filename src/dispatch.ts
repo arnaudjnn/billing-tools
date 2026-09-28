@@ -16,9 +16,16 @@ export class ToolValidationError extends Error {}
 interface Registered {
   cb: ToolHandler;
   validator: z.ZodTypeAny | null;
+  /** What server.tool() returned: the SDK's registered tool, whose
+   *  `inputSchema` is what an MCP call is validated against. */
+  tool: { inputSchema?: unknown } | null;
 }
 
 export type RegisterFn = (server: McpServer) => void;
+
+function isSchema(v: unknown): v is z.ZodTypeAny {
+  return !!v && typeof (v as { safeParse?: unknown }).safeParse === "function";
+}
 
 export function createDispatcher(register: RegisterFn) {
   let handlers: Map<string, Registered> | null = null;
@@ -40,10 +47,11 @@ export function createDispatcher(register: RegisterFn) {
           validator = null;
         }
       }
+      const tool = origTool(...args) as unknown as { inputSchema?: unknown } | undefined;
       if (typeof cb === "function" && typeof name === "string") {
-        map.set(name, { cb: cb as ToolHandler, validator });
+        map.set(name, { cb: cb as ToolHandler, validator, tool: tool ?? null });
       }
-      return origTool(...args);
+      return tool;
     };
     register(server);
     handlers = map;
@@ -60,8 +68,15 @@ export function createDispatcher(register: RegisterFn) {
       );
     }
     let callArgs = args;
-    if (entry.validator) {
-      const parsed = entry.validator.safeParse(args ?? {});
+    // Validate the way the MCP server does: against the registered tool's own
+    // inputSchema, read at CALL time. For a raw shape that is the SDK's object
+    // of it — the same as `validator` — but a host may replace it after
+    // registering (a passthrough object, so an argument the tool does not
+    // declare reaches the handler and can be REPORTED rather than silently
+    // stripped). Rebuilding z.object(shape) here made /api/v0 disagree with MCP.
+    const validator = isSchema(entry.tool?.inputSchema) ? entry.tool!.inputSchema : entry.validator;
+    if (validator) {
+      const parsed = validator.safeParse(args ?? {});
       if (!parsed.success) {
         const detail = parsed.error.issues
           .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
