@@ -1,3 +1,10 @@
+## [25.8.1](https://github.com/arnaudjnn/billing-tools/compare/v25.8.0...v25.8.1) (2026-09-28)
+
+
+### Bug Fixes
+
+* **dispatch:** validate a REST call against the registered tool's inputSchema ([46e3f3f](https://github.com/arnaudjnn/billing-tools/commit/46e3f3f5e0b378bee1bab88cfabf658a14cea166))
+
 # [25.8.0](https://github.com/arnaudjnn/billing-tools/compare/v25.7.1...v25.8.0) (2026-09-26)
 
 
