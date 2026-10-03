@@ -80,6 +80,9 @@ const SECTIONS = [
   // 15 asserts the CASH of every credit sale — what every earlier section left unasserted
   // while the wallet paid for its own top-ups. Its own customer, so it moves no fixture.
   ["15", "credit sales paid in cash", () => import("./live/15-credit-sales-cash.mjs")],
+  // 16 moves two test clocks past a period boundary: a renewal finalized by the poller outside
+  // the wallet, and a CONTROL left to Stripe, which the wallet pays and the sync reports.
+  ["16", "renewal outside the wallet", () => import("./live/16-renewal-outside-wallet.mjs")],
 ];
 
 async function main() {
