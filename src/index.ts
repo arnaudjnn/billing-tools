@@ -24,6 +24,12 @@ export {
   // Is this org one of ours (an `internalDomains` match)? The metering gate asks it on
   // every call; a consumer deciding whether to show a paywall could not ask it at all.
   isInternalOrg,
+  // "The key could not be CHECKED" (HTTP 503), distinct from "the key is bad" (401). For a
+  // consumer serving its own route over `enforceAccess`, so an identity-provider outage
+  // does not tell its callers to discard a good key.
+  authUnavailable,
+  isAuthUnavailable,
+  AUTH_UNAVAILABLE_RETRY_AFTER,
 } from "./auth.js";
 
 // The two SDK clients. Both are memoised singletons that read the env lazily,

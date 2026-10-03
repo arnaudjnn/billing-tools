@@ -1,4 +1,11 @@
-import { operatorFromRequest, runWithAuth, runWithPrincipal, type Principal } from "../auth.js";
+import {
+  AUTH_UNAVAILABLE_RETRY_AFTER,
+  isAuthUnavailable,
+  operatorFromRequest,
+  runWithAuth,
+  runWithPrincipal,
+  type Principal,
+} from "../auth.js";
 import { ToolValidationError } from "../dispatch.js";
 
 // Framework-light REST factories (standard Request/Response; works in Next app
@@ -137,6 +144,14 @@ export function createToolDispatchHandler(opts: {
         return Response.json(result);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        // FIRST, before the 401 matcher: the key could not be checked, which is not the
+        // caller's fault and must not read as "your key is invalid".
+        if (isAuthUnavailable(message)) {
+          return Response.json(
+            { error: message },
+            { status: 503, headers: { "Retry-After": String(AUTH_UNAVAILABLE_RETRY_AFTER) } },
+          );
+        }
         if (/\bUnauthorized\b|\b401\b/i.test(message)) {
           return Response.json({ error: message }, { status: 401, headers: { "WWW-Authenticate": wwwAuth(realm, rm) } });
         }

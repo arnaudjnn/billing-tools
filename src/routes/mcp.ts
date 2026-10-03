@@ -1,6 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { BillingAdapter } from "../types.js";
 import {
+  AUTH_UNAVAILABLE_RETRY_AFTER,
+  authUnavailable,
   operatorFromRequest,
   runWithAuth,
   runWithPrincipal,
@@ -55,6 +57,23 @@ export interface McpTransportOptions {
    * admin-only tools cannot be enforced here either.
    */
   principal?: (request: Request) => Principal | null | Promise<Principal | null>;
+}
+
+/** HTTP 503 for a key that could not be CHECKED — see `authUnavailable`. */
+function unavailable(cause: unknown): Response {
+  const text = authUnavailable(cause).content[0].text;
+  return Response.json(
+    { error: text },
+    { status: 503, headers: { "Retry-After": String(AUTH_UNAVAILABLE_RETRY_AFTER) } },
+  );
+}
+
+/** Whether this JSON-RPC request (or batch) calls a tool — the only method that reads
+ *  the key, so the only one worth validating it for up front. */
+async function callsTool(request: Request): Promise<boolean> {
+  const body = (await request.clone().json().catch(() => null)) as unknown;
+  const msgs = Array.isArray(body) ? body : [body];
+  return msgs.some((m) => (m as { method?: unknown } | null)?.method === "tools/call");
 }
 
 function wwwAuth(realm: string, resourceMetadata?: string): string {
@@ -119,13 +138,13 @@ export function createMcpTransport(opts: McpTransportOptions) {
     // else has already had its chance above.
     if (opts.requireAuth) {
       let orgId: string | null = null;
-      if (token) {
+      if (token?.startsWith(apiKeyPrefix)) {
         try {
-          orgId = token.startsWith(apiKeyPrefix)
-            ? ((await opts.adapter.validateApiKey(token))?.orgId ?? null)
-            : null;
-        } catch {
-          orgId = null;
+          orgId = (await opts.adapter.validateApiKey(token))?.orgId ?? null;
+        } catch (e) {
+          // Could not CHECK the key, which is not "the key is bad": a 401 here makes a
+          // client discard a key that may be fine. Null stays the only rejection.
+          return unavailable(e);
         }
       }
       if (!orgId) {
@@ -139,6 +158,26 @@ export function createMcpTransport(opts: McpTransportOptions) {
       return principal
         ? runWithPrincipal({ authHeader, orgId, principal }, () => mcp(request))
         : runWithResolvedOrg(authHeader, orgId, () => mcp(request));
+    }
+
+    // A tool CALL with an API key is validated here rather than inside the tool, for one
+    // reason: only here can an unverifiable key become an HTTP 503. Inside the handler
+    // the refusal is a JSON-RPC result, which travels as a 200. A rejected key falls
+    // through unchanged, so the tool refuses it with the 401 envelope as before; a valid
+    // one is pre-resolved, so the tool does not validate the same key a second time.
+    // The handshake and `tools/list` read no key and are not made to wait on one.
+    if (token?.startsWith(apiKeyPrefix) && (await callsTool(request))) {
+      let orgId: string | null;
+      try {
+        orgId = (await opts.adapter.validateApiKey(token))?.orgId ?? null;
+      } catch (e) {
+        return unavailable(e);
+      }
+      if (orgId) {
+        return principal
+          ? runWithPrincipal({ authHeader, orgId, principal }, () => mcp(request))
+          : runWithResolvedOrg(authHeader, orgId, () => mcp(request));
+      }
     }
 
     const res = await (principal

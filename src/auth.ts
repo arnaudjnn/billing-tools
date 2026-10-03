@@ -169,9 +169,44 @@ export function enforceOperator(action: string): { authorized: true } | ToolErro
   };
 }
 
+/** Seconds a caller is told to wait when a key could not be verified. Short: an
+ *  outage of the identity provider is usually a blip, and the caller holds a key
+ *  that may well be fine. */
+export const AUTH_UNAVAILABLE_RETRY_AFTER = 5;
+
+/**
+ * The refusal for "the key could not be CHECKED", as opposed to "the key is bad".
+ *
+ * A wire contract like "Unauthorized (401)": the REST and MCP layers match
+ * `Service Unavailable (503)` and answer HTTP 503 + `Retry-After`. The distinction is
+ * the whole point. `validateApiKey` used to swallow every error into null, so a WorkOS
+ * outage answered every caller "401 Invalid API key" — and a client told its key is
+ * invalid discards or rotates it. The cause is logged, never echoed: a provider's
+ * message can itself say "Unauthorized" (our own WorkOS key refused), which the 401
+ * matcher would read as the caller's fault.
+ */
+export function authUnavailable(cause: unknown): ToolErrorResult {
+  console.error("[billing] API key could not be verified:", cause);
+  return {
+    isError: true,
+    content: [
+      {
+        type: "text",
+        text: `Service Unavailable (503): the API key could not be verified right now. It was not rejected; retry in ${AUTH_UNAVAILABLE_RETRY_AFTER}s.`,
+      },
+    ],
+  };
+}
+
+/** Whether a refusal's text is `authUnavailable`'s. */
+export function isAuthUnavailable(text: string): boolean {
+  return /\bService Unavailable \(503\)/.test(text);
+}
+
 // Resolve the caller's org from the Bearer API key (via the adapter). Returns
 // the org id or a parseable 401 envelope (REST/MCP layers sniff "Unauthorized
-// (401)" to map to HTTP 401 + WWW-Authenticate).
+// (401)" to map to HTTP 401 + WWW-Authenticate). A key the adapter could not
+// CHECK (it threw) is the 503 envelope instead — see `authUnavailable`.
 export async function enforceAccess(
   adapter: BillingAdapter,
 ): Promise<{ authorized: true; orgId: string } | ToolErrorResult> {
@@ -191,7 +226,13 @@ export async function enforceAccess(
     };
   }
   const token = header.slice("Bearer ".length).trim();
-  const resolved = await adapter.validateApiKey(token);
+  let resolved: { orgId: string } | null;
+  try {
+    resolved = await adapter.validateApiKey(token);
+  } catch (e) {
+    // The adapter contract: null is a rejection, a throw is "could not tell".
+    return authUnavailable(e);
+  }
   if (!resolved) {
     return {
       isError: true,

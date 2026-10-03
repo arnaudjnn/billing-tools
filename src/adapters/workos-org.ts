@@ -1,4 +1,11 @@
-import { DomainDataState, OrganizationDomainState, type WorkOS } from "@workos-inc/node";
+import {
+  BadRequestException,
+  DomainDataState,
+  NotFoundException,
+  OrganizationDomainState,
+  UnprocessableEntityException,
+  type WorkOS,
+} from "@workos-inc/node";
 import type { BillingAdapter, BillingUser, ApiKeyInfo, OrgMember } from "../types.js";
 import { getWorkOS } from "../workos.js";
 import { ADMIN_ROLE_SLUG } from "../workos-setup.js";
@@ -137,8 +144,19 @@ export class WorkOSOrgAdapter implements BillingAdapter {
       // what makes per-key attribution possible at all — see `validateApiKey` on
       // the seam. It was being thrown away one line before the meter needed it.
       return orgId ? { orgId, keyId: apiKey.id } : null;
-    } catch {
-      return null;
+    } catch (e) {
+      // Null only when WorkOS REJECTED the value: not found, or not a well-formed key.
+      // Everything else — a network error, a 5xx, a rate limit, our own WorkOS key
+      // refused — is "could not tell" and propagates, so the route answers 503 rather
+      // than telling a caller with a good key that it is invalid.
+      if (
+        e instanceof NotFoundException ||
+        e instanceof UnprocessableEntityException ||
+        e instanceof BadRequestException
+      ) {
+        return null;
+      }
+      throw e;
     }
   }
 
