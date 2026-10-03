@@ -134,7 +134,10 @@ empty value to remove it.`,
       value: z.string().describe('The tax id, e.g. "IT01234567890". Empty to remove'),
       type: z.string().optional().describe('Stripe tax id type, e.g. "eu_vat". Inferred from the country when omitted'),
     },
-    async ({ value, type }) => {
+    async ({ value: raw, type }) => {
+      // Blank is removal. Untrimmed, "  " read as a value and was refused for having no
+      // type to infer, so the documented way to remove the id did not work with a space.
+      const value = raw.trim();
       const auth = await enforceAdmin(adapter, "set_tax_id");
       if ("isError" in auth) return auth;
       if (!stripeConfigured()) return err("Billing is not configured (STRIPE_SECRET_KEY unset).");

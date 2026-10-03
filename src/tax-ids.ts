@@ -67,19 +67,31 @@ export async function setCustomerTaxId(
   const existing = await stripe.customers.listTaxIds(customerId, { limit: 20 });
   const value = input?.value.trim();
 
-  // Delete first: Stripe rejects a duplicate (same type AND value), so a
-  // re-save of an unchanged id would fail if the old one were still there.
-  await Promise.all(
-    existing.data.map((t) => stripe.customers.deleteTaxId(customerId, t.id)),
-  );
-  if (!input || !value) return null;
+  if (!input || !value) {
+    await Promise.all(existing.data.map((t) => stripe.customers.deleteTaxId(customerId, t.id)));
+    return null;
+  }
 
-  const created = await stripe.customers.createTaxId(customerId, {
-    type: input.type as Parameters<
-      typeof stripe.customers.createTaxId
-    >[1]["type"],
-    value,
-  });
+  // CREATE FIRST, then remove the others. This used to delete every existing id
+  // before creating the new one, so a value Stripe refused (a typo, a type that
+  // does not match the format) left the customer with NO tax id at all — and the
+  // next invoice without the VAT number that reverse-charges it. A refused create
+  // now changes nothing. An unchanged re-save keeps the id it already has, since
+  // Stripe rejects a duplicate of the same type and value.
+  const same = existing.data.find((t) => t.type === input.type && t.value === value);
+  const created =
+    same ??
+    (await stripe.customers.createTaxId(customerId, {
+      type: input.type as Parameters<
+        typeof stripe.customers.createTaxId
+      >[1]["type"],
+      value,
+    }));
+  await Promise.all(
+    existing.data
+      .filter((t) => t.id !== created.id)
+      .map((t) => stripe.customers.deleteTaxId(customerId, t.id)),
+  );
   return {
     id: created.id,
     type: created.type,
