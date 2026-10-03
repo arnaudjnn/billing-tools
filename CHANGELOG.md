@@ -1,3 +1,10 @@
+## [25.8.7](https://github.com/arnaudjnn/billing-tools/compare/v25.8.6...v25.8.7) (2026-10-03)
+
+
+### Bug Fixes
+
+* **billing:** credit sales were paid out of the wallet they were topping up ([1f2b1d4](https://github.com/arnaudjnn/billing-tools/commit/1f2b1d432a4f4d75e27d14a6eaab44048cc1930f))
+
 ## [25.8.6](https://github.com/arnaudjnn/billing-tools/compare/v25.8.5...v25.8.6) (2026-10-03)
 
 
