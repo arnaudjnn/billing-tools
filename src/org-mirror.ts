@@ -79,12 +79,25 @@ export function createWorkOSOrgMirror(opts: WorkOSOrgMirrorOptions): WorkOSOrgMi
       orgId = (await workos().organizations.getOrganizationByExternalId(localId)).id;
     } catch (e) {
       if (!(e instanceof NotFoundException)) throw e;
-      orgId = (
-        await workos().organizations.createOrganization({
-          name: resolvedName,
-          externalId: localId,
-        })
-      ).id;
+      try {
+        orgId = (
+          await workos().organizations.createOrganization({
+            name: resolvedName,
+            externalId: localId,
+          })
+        ).id;
+      } catch (createError) {
+        // Two first reads of the same row race: both miss, both create, and WorkOS
+        // refuses the second because `externalId` is unique. That refusal means the
+        // org EXISTS, which is what this function was asked for — so look again
+        // rather than failing a request the other one already satisfied. Anything
+        // the second look cannot find is a real failure, reported as the create's.
+        try {
+          orgId = (await workos().organizations.getOrganizationByExternalId(localId)).id;
+        } catch {
+          throw createError;
+        }
+      }
     }
     await opts.writePointer(localId, orgId);
     return orgId;
