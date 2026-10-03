@@ -543,8 +543,10 @@ but you can hand a person a link that opens on the card form.`,
       const auth = await enforceAccess(adapter);
       if ("isError" in auth) return auth;
       if (!stripeConfigured()) return NO_STRIPE;
-      const cid = await customerId(auth.orgId);
-      const invoices = await listInvoices(cid, limit);
+      // A READ never provisions: an org that never paid has no customer and so no invoices.
+      // `customerId` would create one (and its welcome credits) just to answer "none".
+      const cid = await getBillingCustomerId(adapter, auth.orgId);
+      const invoices = cid ? await listInvoices(cid, limit) : [];
       return { content: [{ type: "text" as const, text: JSON.stringify({ invoices }, null, 2) }] };
     },
   );
@@ -564,7 +566,9 @@ but you can hand a person a link that opens on the card form.`,
       const auth = await enforceAccess(adapter);
       if ("isError" in auth) return auth;
       if (!stripeConfigured()) return NO_STRIPE;
-      const cid = await customerId(auth.orgId);
+      // No customer, no invoices — and never a customer created to say so.
+      const cid = await getBillingCustomerId(adapter, auth.orgId);
+      if (!cid) return NOT_FOUND;
       const invoice = await getInvoice(cid, invoice_id);
       if (!invoice) return NOT_FOUND;
       return { content: [{ type: "text" as const, text: JSON.stringify({ invoice }, null, 2) }] };
@@ -580,7 +584,9 @@ use view_invoice for those.`,
       const auth = await enforceAccess(adapter);
       if ("isError" in auth) return auth;
       if (!stripeConfigured()) return NO_STRIPE;
-      const cid = await customerId(auth.orgId);
+      // No customer, no invoices — and never a customer created to say so.
+      const cid = await getBillingCustomerId(adapter, auth.orgId);
+      if (!cid) return NOT_FOUND;
       const invoice = await getInvoice(cid, invoice_id);
       if (!invoice) return NOT_FOUND;
       if (!invoice.invoice_pdf) {

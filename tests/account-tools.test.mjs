@@ -282,3 +282,53 @@ test("a workspace with no billing customer is told so", async () => {
   const adapter = Object.assign(fakeAdapter(), { getBillingCustomerId: async () => null });
   await assert.rejects(surface(adapter).call("set_tax_id", { value: "IT01234567890", type: "eu_vat" }), /No billing customer/);
 });
+
+// ── a read never provisions a customer ───────────────────────────────────────
+
+test("an org with no Stripe customer: invoice reads answer empty / not-found, and create none", async () => {
+  // REGRESSION: list/view/download_invoice resolved the customer through the provisioning
+  // helper, so asking a never-billed workspace for an invoice CREATED a Stripe customer
+  // (and granted its welcome credits) just to answer "none".
+  const created = [];
+  __setStripeForTests({
+    customers: {
+      async create(params) {
+        created.push(params);
+        return { id: "cus_new" };
+      },
+      async createBalanceTransaction() {
+        created.push("balance");
+        return {};
+      },
+    },
+    invoices: {
+      async retrieve() {
+        assert.fail("no customer means nothing to retrieve");
+      },
+      async list() {
+        assert.fail("no customer means nothing to list");
+      },
+    },
+    charges: {
+      async retrieve() {
+        assert.fail("no customer means nothing to retrieve");
+      },
+      async list() {
+        assert.fail("no customer means nothing to list");
+      },
+    },
+  });
+  const writes = [];
+  const adapter = Object.assign(fakeAdapter(), {
+    getBillingCustomerId: async () => null,
+    setBillingCustomerId: async (...a) => writes.push(a),
+  });
+  const { call } = surface(adapter);
+
+  assert.deepEqual(await call("list_invoices"), { invoices: [] });
+  await assert.rejects(call("view_invoice", { invoice_id: "in_1" }), /^Error: No such invoice\.$/);
+  await assert.rejects(call("download_invoice", { invoice_id: "in_1" }), /^Error: No such invoice\.$/);
+  await assert.rejects(call("view_invoice", { invoice_id: "ch_1" }), /^Error: No such invoice\.$/);
+  assert.deepEqual(created, [], "no Stripe customer, no welcome credits");
+  assert.deepEqual(writes, [], "no billing pointer written");
+});
