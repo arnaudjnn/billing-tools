@@ -1,4 +1,5 @@
-import { getStripe } from "./billing.js";
+import type Stripe from "stripe";
+import { getStripe, paidFromWallet } from "./billing.js";
 import { getWorkOS } from "./workos.js";
 import {
   ledgerGaps,
@@ -304,14 +305,19 @@ export async function checkBillingSetup(opts: {
   // the wallet aside, so any found here escaped — a renewal whose draft window both the
   // webhook and the poller missed, or a first invoice Checkout finalized itself. Each one is
   // revenue taken as credits, which is why it is an error and not a warning.
-  const fromWallet: string[] = [];
+  // A shortfall already collected by `repayWalletShortfall` is settled: its repayment invoice
+  // carries `metadata.repays`, so only the ones nothing repaid are reported.
+  const paid: Stripe.Invoice[] = [];
   for await (const inv of stripe.invoices.list({ status: "paid", limit: 100 })) {
-    const sells = inv.billing_reason?.startsWith("subscription") || Number(inv.metadata?.credits) > 0;
-    if (sells && (inv.starting_balance ?? 0) < 0) {
-      fromWallet.push(`${inv.id} (${-(inv.starting_balance ?? 0)} credits)`);
-    }
-    if (fromWallet.length >= 10) break;
+    paid.push(inv);
+    if (paid.length >= 100) break;
   }
+  const repaid = new Set(paid.map((i) => i.metadata?.repays).filter(Boolean));
+  const fromWallet = paid
+    .filter((inv) => inv.billing_reason?.startsWith("subscription") || Number(inv.metadata?.credits) > 0)
+    .filter((inv) => paidFromWallet(inv) > 0 && !repaid.has(inv.id))
+    .slice(0, 10)
+    .map((inv) => `${inv.id} (${paidFromWallet(inv)} credits)`);
   checks.push(
     fromWallet.length === 0
       ? { level: "ok", title: "Invoices paid from the wallet", detail: "none in the last 100 paid invoices" }

@@ -8,6 +8,8 @@ import {
   getStripe,
   isCheckoutPaymentEvent,
   paidFromWallet,
+  repayWalletShortfall,
+  type WalletRepayment,
 } from "./billing.js";
 import {
   grantFor,
@@ -80,10 +82,16 @@ export interface BillingSyncOptions {
      *  mirror row is already removed). */
     onUserDeleted?(workosUserId: string): Promise<void>;
     /** A PAID subscription invoice was settled partly from the wallet (`starting_balance <
-     *  0`): its draft was finalized by Stripe before this library could set the wallet
-     *  aside, or Checkout finalized it. `credits` is how much of the wallet it took.
-     *  Default: logged as an error — it is revenue taken as credits, never silent. */
-    onPaidFromWallet?(info: { orgId: string | null; invoiceId: string; credits: number }): Promise<void> | void;
+     *  0`): Checkout finalized its first invoice, or a renewal draft escaped both legs. The
+     *  shortfall is collected and the credits returned (`repayWalletShortfall`) BEFORE this
+     *  fires; `repayment` says how that went. Default: an error log unless it was charged. */
+    onPaidFromWallet?(info: {
+      orgId: string | null;
+      invoiceId: string;
+      credits: number;
+      /** What was done about it: `charged` means collected and the credits returned. */
+      repayment: WalletRepayment;
+    }): Promise<void> | void;
     /** A subscription invoice failed to collect (dunning). The org's status is
      *  already set to `past_due`; use this to notify the user / gate access.
      *  Stripe Smart Retries + the card-updater keep retrying automatically. */
@@ -320,12 +328,19 @@ export function createStripeEventHandler(opts: {
         return;
       }
       const fromWallet = invoice.billing_reason?.startsWith("subscription")
-        ? paidFromWallet(invoice as { starting_balance?: number | null })
+        ? paidFromWallet(invoice as Stripe.Invoice)
         : 0;
       if (fromWallet > 0) {
-        const info = { orgId: subscriptionRefOf(invoice).orgId, invoiceId: invoice.id!, credits: fromWallet };
+        // Collect the shortfall in cash and give the credits back — see `repayWalletShortfall`.
+        // Then REPORT it either way: it is an escape from the set-aside, and the hook is how
+        // an app learns a repayment is still open.
+        const orgId = subscriptionRefOf(invoice).orgId;
+        const repayment = await repayWalletShortfall(invoice as Stripe.Invoice, orgId);
+        const info = { orgId, invoiceId: invoice.id!, credits: fromWallet, repayment };
         if (opts.hooks?.onPaidFromWallet) await opts.hooks.onPaidFromWallet(info);
-        else console.error(`[billing] subscription invoice ${info.invoiceId} was paid ${fromWallet} credits from the wallet`, info);
+        else if (repayment.status !== "charged") {
+          console.error(`[billing] subscription invoice ${info.invoiceId} was paid ${fromWallet} credits from the wallet`, info);
+        }
       }
       if (invoice.billing_reason !== "subscription_create" && invoice.billing_reason !== "subscription_cycle") return;
       const ref = subscriptionRefOf(invoice);

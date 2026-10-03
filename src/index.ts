@@ -699,6 +699,8 @@ export {
   finalizeSubscriptionDraft,
   grantInvoiceCredits,
   paidFromWallet,
+  repayWalletShortfall,
+  type WalletRepayment,
   withWalletSetAside,
   isCheckoutPaymentEvent,
   sellCredits,

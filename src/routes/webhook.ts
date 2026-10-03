@@ -1,6 +1,6 @@
 import type Stripe from "stripe";
 import {
-  finalizeSubscriptionDraft, getStripe, grantCredits, grantInvoiceCredits, isCheckoutPaymentEvent } from "../billing.js";
+  finalizeSubscriptionDraft, getStripe, grantCredits, grantInvoiceCredits, isCheckoutPaymentEvent, paidFromWallet, repayWalletShortfall } from "../billing.js";
 
 // Stripe webhook handler. Grants credits on one-time top-up completion.
 // Subscription events are intentionally NOT handled here — subscription/plan
@@ -60,6 +60,11 @@ export function createStripeWebhookHandler(opts: WebhookOptions = {}) {
       return Response.json({ error: `Webhook signature verification failed: ${message}` }, { status: 400 });
     }
 
+    const isWalletPaidSubscription = (e: Stripe.Event): boolean => {
+      const inv = e.data.object as Stripe.Invoice;
+      return Boolean(inv.billing_reason?.startsWith("subscription")) && paidFromWallet(inv) > 0;
+    };
+
     /** Credits a library-issued invoice carries, or 0. `metadata.credits` is written by
      *  `purchaseCredits` and by `tryAutoReload`, and by nothing else. */
     const creditsOn = (e: Stripe.Event): number => {
@@ -105,6 +110,16 @@ export function createStripeWebhookHandler(opts: WebhookOptions = {}) {
       // finalized outside the wallet before Stripe finalizes it against it an hour from now.
       // Idempotent, so the poller (or an `onOtherEvent` running the same handler) is a no-op.
       await finalizeSubscriptionDraft(event.data.object as Stripe.Invoice);
+      await opts.onOtherEvent?.(event);
+    } else if (event.type === "invoice.paid" && isWalletPaidSubscription(event)) {
+      // A subscription invoice the wallet paid part of — Checkout's first invoice, or a
+      // renewal that escaped `invoice.created`. Money, so collected here rather than left to
+      // `onOtherEvent`; idempotent, so the same handler there raises nothing more.
+      const invoice = event.data.object as Stripe.Invoice;
+      const orgId =
+        (invoice as { parent?: { subscription_details?: { metadata?: Record<string, string> | null } | null } })
+          .parent?.subscription_details?.metadata?.org_id ?? null;
+      await repayWalletShortfall(invoice, orgId);
       await opts.onOtherEvent?.(event);
     } else if (event.type === "invoice.paid" && creditsOn(event)) {
       // An invoice this library SENT for a credit purchase — `collection_method:

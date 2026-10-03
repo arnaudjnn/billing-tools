@@ -22,7 +22,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "vitest";
 import Stripe from "stripe";
 
-import { __setStripeForTests, finalizeSubscriptionDraft, withWalletSetAside } from "../dist/billing.js";
+import { __setStripeForTests, finalizeSubscriptionDraft, repayWalletShortfall, withWalletSetAside } from "../dist/billing.js";
 import { __setPlanPricesForTests } from "../dist/plans.js";
 import { createStripeWebhookHandler } from "../dist/routes/webhook.js";
 import { changePlan } from "../dist/subscription.js";
@@ -74,6 +74,7 @@ function account({ wallet = 0 } = {}) {
     inv.starting_balance = customer.balance;
     if (applied > 0) balanceTxn(applied, { type: "applied_to_invoice", invoice: inv.id });
     inv.amount_due = inv.total - applied;
+    inv.ending_balance = customer.balance;
     inv.status = inv.amount_due === 0 ? "paid" : "open";
     return inv;
   };
@@ -95,7 +96,9 @@ function account({ wallet = 0 } = {}) {
     issued.set(inv.id, inv);
     return { ...inv };
   };
-  return {
+  let api;
+  const self = () => api;
+  api = {
     webhooks: real.webhooks,
     customer,
     txns,
@@ -121,6 +124,29 @@ function account({ wallet = 0 } = {}) {
         );
       },
     },
+    // Read by the poller's renewal-grant branch after the repayment; no plan here grants.
+    subscriptions: {
+      async retrieve(id) {
+        return { id, metadata: {}, items: { data: [] } };
+      },
+    },
+    cards: ["pm_card"],
+    declines: false,
+    pendingItems: [],
+    paymentMethods: {
+      async list() {
+        return { data: self().cards.map((id) => ({ id })) };
+      },
+    },
+    invoiceItems: {
+      async create(params, opts) {
+        return idempotent(opts?.idempotencyKey, params, () => {
+          const item = { id: `ii_${++seq}`, ...params };
+          self().pendingItems.push(item);
+          return item;
+        });
+      },
+    },
     invoices: {
       async retrieve(id) {
         return { ...issued.get(id) };
@@ -128,8 +154,23 @@ function account({ wallet = 0 } = {}) {
       async finalizeInvoice(id) {
         return { ...finalize(issued.get(id)) };
       },
+      async create(params, opts) {
+        return idempotent(opts?.idempotencyKey, params, () => {
+          const lines = self().pendingItems.splice(0);
+          const total = lines.reduce((a, l) => a + l.amount, 0);
+          return draft({ total, amount_due: total, billing_reason: "manual", metadata: params.metadata ?? {} });
+        });
+      },
+      async pay(id) {
+        const inv = issued.get(id);
+        if (self().declines) throw new Error("Your card was declined.");
+        inv.amount_paid = inv.amount_due;
+        inv.status = "paid";
+        return { ...inv };
+      },
     },
   };
+  return self();
 }
 
 function signed(evt) {
@@ -240,9 +281,51 @@ test("invoice.created is delivered by the webhook AND polled by default", () => 
 
 // ── detection ────────────────────────────────────────────────────────────────
 
-test("a paid renewal that took from the wallet is reported", async () => {
-  const stripe = account({ wallet: 0 });
+/** A subscription's FIRST invoice exactly as Checkout leaves it: finalized and paid inside
+ *  the session, with the welcome credits applied. Measured: 4 208 total, 4 108 charged. */
+function checkoutFirstInvoice(stripe, { total = 4_208, took = 100 } = {}) {
+  stripe.customer.balance += took; // what Stripe applied
+  const inv = stripe.draft({
+    billing_reason: "subscription_create",
+    total,
+    status: "paid",
+    starting_balance: -took,
+    amount_due: total - took,
+    amount_paid: total - took,
+    number: "SCRT-0001",
+    parent: { subscription_details: { subscription: "sub_1", metadata: { org_id: "org_1" } } },
+  });
+  stripe.issued.get(inv.id).status = "paid";
+  return stripe.issued.get(inv.id);
+}
+const paidEvt = (inv, n = 1) => ({ id: `evt_paid_${inv.id}_${n}`, object: "event", type: "invoice.paid", data: { object: { ...inv } } });
+
+test("Checkout's first invoice: the wallet's share is collected by card and the credits come back", async () => {
+  // REGRESSION (testmode, Stripe TEST in_1UMXyu…): a Hobby→Pro upgrade's first invoice
+  // was paid 100 credits from the wallet. Checkout finalizes it itself — no draft, no
+  // `invoice.created` window — so it is repaid after the fact instead.
+  const stripe = account({ wallet: 100 });
   __setStripeForTests(stripe);
+  const first = checkoutFirstInvoice(stripe);
+  assert.equal(stripe.wallet(), 0, "precondition: Stripe applied the wallet");
+
+  const res = await createStripeWebhookHandler({ currency: "eur" })(signed(paidEvt(first)));
+  assert.equal(res.status, 200);
+
+  const repay = [...stripe.issued.values()].find((i) => i.metadata?.repays === first.id);
+  assert.ok(repay, "a repayment invoice was raised");
+  assert.equal(repay.total, 100);
+  assert.equal(repay.status, "paid");
+  assert.equal(repay.amount_paid, 100, "by the card");
+  assert.equal(repay.starting_balance, 0, "and not, in turn, from the wallet");
+  assert.equal(stripe.wallet(), 100, "the credits are back");
+  assert.equal(first.amount_paid + repay.amount_paid, first.total, "cash collected = the subscription's price");
+});
+
+test("the webhook and the poller (and re-deliveries) raise ONE repayment", async () => {
+  const stripe = account({ wallet: 100 });
+  __setStripeForTests(stripe);
+  const first = checkoutFirstInvoice(stripe);
   const reported = [];
   const handle = createStripeEventHandler({
     adapter: {},
@@ -250,21 +333,66 @@ test("a paid renewal that took from the wallet is reported", async () => {
     currency: "eur",
     hooks: { onPaidFromWallet: (info) => reported.push(info) },
   });
-  const paid = {
-    id: "in_escaped",
-    object: "invoice",
-    customer: "cus_1",
-    status: "paid",
-    billing_reason: "subscription_cycle",
-    starting_balance: -1_500,
-    metadata: {},
-    parent: { subscription_details: { subscription: null, metadata: { org_id: "org_1" } } },
-  };
-  await handle({ id: "evt_p", type: "invoice.paid", data: { object: paid } });
-  assert.deepEqual(reported, [{ orgId: "org_1", invoiceId: "in_escaped", credits: 1_500 }]);
+  await createStripeWebhookHandler({ currency: "eur" })(signed(paidEvt(first, 1)));
+  await handle(paidEvt(first, 2));
+  await createStripeWebhookHandler({ currency: "eur" })(signed(paidEvt(first, 3)));
+  const repays = [...stripe.issued.values()].filter((i) => i.metadata?.repays === first.id);
+  assert.equal(repays.length, 1);
+  assert.equal(stripe.wallet(), 100, "granted once");
+  assert.equal(reported.length, 1);
+  assert.equal(reported[0].credits, 100);
+  assert.equal(reported[0].orgId, "org_1");
+  assert.equal(reported[0].repayment.status, "charged");
+});
 
-  await handle({ id: "evt_p2", type: "invoice.paid", data: { object: { ...paid, id: "in_clean", starting_balance: 0 } } });
-  assert.equal(reported.length, 1, "a clean renewal reports nothing");
+test("a renewal Stripe finalized against a LARGER wallet repays what it took, not what was held", async () => {
+  // REGRESSION, measured live: `starting_balance` is the balance BEFORE application. On a
+  // 5 000-credit wallet an €18.00 renewal reads -5000 while only 1 800 was applied, and
+  // reading that as the shortfall charged the card €50.00 and grew the wallet to 8 200.
+  const stripe = account({ wallet: 5_000 });
+  __setStripeForTests(stripe);
+  const inv = stripe.draft({ total: 1_800, amount_due: 1_800, parent: { subscription_details: { metadata: { org_id: "org_1" } } } });
+  stripe.autoFinalize(inv.id); // the escape: both legs missed the draft
+  const paid = stripe.collect(inv.id);
+  assert.equal(paid.starting_balance, -5_000);
+
+  const r = await repayWalletShortfall(paid, "org_1");
+  assert.equal(r.status, "charged");
+  assert.equal(r.credits, 1_800);
+  assert.equal(stripe.issued.get(r.invoiceId).total, 1_800);
+  assert.equal(stripe.wallet(), 5_000, "whole again — not 8 200");
+});
+
+test("a declined repayment stays open, and is credited when it is paid", async () => {
+  const stripe = account({ wallet: 100 });
+  stripe.declines = true;
+  __setStripeForTests(stripe);
+  const first = checkoutFirstInvoice(stripe);
+  const r = await repayWalletShortfall(first, "org_1");
+  assert.equal(r.status, "open");
+  assert.equal(stripe.wallet(), 0, "nothing granted for money not collected");
+
+  // The customer pays it from its hosted page; Stripe sends invoice.paid.
+  const paid = stripe.collect(r.invoiceId);
+  await createStripeWebhookHandler({ currency: "eur" })(signed(paidEvt(paid)));
+  assert.equal(stripe.wallet(), 100);
+});
+
+test("no card on file: nothing is raised, and it is reported", async () => {
+  const stripe = account({ wallet: 100 });
+  stripe.cards = [];
+  __setStripeForTests(stripe);
+  const first = checkoutFirstInvoice(stripe);
+  const r = await repayWalletShortfall(first, "org_1");
+  assert.deepEqual(r, { status: "no_card", credits: 100 });
+});
+
+test("an invoice that took nothing from the wallet raises nothing", async () => {
+  const stripe = account({ wallet: 0 });
+  __setStripeForTests(stripe);
+  const inv = checkoutFirstInvoice(stripe, { took: 0 });
+  assert.deepEqual(await repayWalletShortfall(inv), { status: "nothing_taken" });
+  assert.equal([...stripe.issued.values()].length, 1);
 });
 
 // ── an invoice_now plan change ───────────────────────────────────────────────

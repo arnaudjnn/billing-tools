@@ -735,7 +735,7 @@ export function creditsOwedFor(invoice: {
  * Everything here is derived from the invoice alone, so every caller sends the same request.
  */
 export async function grantInvoiceCredits(
-  invoice: Pick<Stripe.Invoice, "id" | "customer" | "metadata">,
+  invoice: Pick<Stripe.Invoice, "id" | "customer" | "metadata"> & { currency?: string | null },
   currency: string,
 ): Promise<number> {
   const credits = creditsOwedFor(invoice);
@@ -745,7 +745,9 @@ export async function grantInvoiceCredits(
     customer,
     credits,
     invoice.metadata?.auto_reload === "true" ? `Auto-reload: ${credits} credits` : `Purchase: ${credits} credits`,
-    currency,
+    // The invoice's own currency when it carries one, so a webhook configured with a
+    // different default still sends the request the synchronous grant sent.
+    invoice.currency ?? currency,
     `credit:invoice:${invoice.id}`,
   );
   return credits;
@@ -871,6 +873,98 @@ export async function finalizeSubscriptionDraft(invoice: {
   }
 }
 
+export type WalletRepayment =
+  | { status: "charged"; invoiceId: string; credits: number }
+  /** Raised but not collected (a decline, a bank asking for the cardholder): payable from
+   *  its hosted page, and credited by `invoice.paid` when it is. */
+  | { status: "open"; invoiceId: string; credits: number; hostedInvoiceUrl: string | null }
+  | { status: "no_card"; credits: number }
+  | { status: "nothing_taken" };
+
+/**
+ * Collect in cash what a subscription invoice took from the wallet, and give the credits back.
+ *
+ * Checkout finalizes the FIRST invoice of a subscription itself, inside the session — there is
+ * no draft and no `invoice.created` window, so `finalizeSubscriptionDraft` cannot set the
+ * wallet aside first. Measured in Stripe TEST: a Hobby→Pro upgrade's first invoice, 4 208
+ * total, 4 108 charged, `starting_balance -100` — the welcome credits paid part of the seat.
+ *
+ * Setting the wallet aside when the SESSION is created was the alternative, and it was
+ * rejected for what it risks: the wallet would sit at zero for the session's whole life (30
+ * minutes at the least, 24 hours by default), refusing every metered call, and its return
+ * would hang on a `completed`/`expired` event or a sweep arriving — a missed one strands the
+ * customer's money. This instead acts AFTER the fact, when the amount is known and nothing is
+ * held: the shortfall is sold back to the customer as a credit purchase — an invoice for
+ * exactly what was taken, finalized outside the wallet, charged to the card on file, and
+ * granted through `grantInvoiceCredits` like any other credit sale. The subscription is then
+ * paid in full in cash and the wallet ends where it started. Nothing is ever held, so nothing
+ * can be stranded; a charge that fails leaves a payable invoice, and the credits follow when
+ * it is paid.
+ *
+ * Every key is derived from the original invoice, so the webhook and the poller both calling
+ * this raise ONE repayment. It is also the safety net for a renewal whose draft both legs
+ * missed.
+ */
+export async function repayWalletShortfall(
+  invoice: Pick<Stripe.Invoice, "id" | "customer" | "currency" | "number"> & {
+    starting_balance?: number | null;
+    ending_balance?: number | null;
+    total?: number | null;
+  },
+  orgId?: string | null,
+): Promise<WalletRepayment> {
+  const credits = paidFromWallet(invoice);
+  const customer = typeof invoice.customer === "string" ? invoice.customer : invoice.customer?.id;
+  if (!credits || !customer || !invoice.id) return { status: "nothing_taken" };
+  const stripe = getStripe();
+  const currency = invoice.currency;
+  const key = `repay:${invoice.id}`;
+  const card = (await stripe.paymentMethods.list({ customer, type: "card", limit: 1 })).data[0];
+  if (!card) return { status: "no_card", credits };
+
+  const description = `Credits applied to ${invoice.number ?? invoice.id}, restored`;
+  await stripe.invoiceItems.create(
+    { customer, currency, amount: credits, description },
+    { idempotencyKey: `${key}:item` },
+  );
+  const draft = await stripe.invoices.create(
+    {
+      customer,
+      currency,
+      collection_method: "charge_automatically",
+      default_payment_method: card.id,
+      auto_advance: false,
+      pending_invoice_items_behavior: "include",
+      description,
+      // `credits` is what `grantInvoiceCredits` grants — here and from `invoice.paid` alike.
+      metadata: { ...(orgId ? { org_id: orgId } : {}), credits: String(credits), repays: invoice.id },
+    },
+    { idempotencyKey: `${key}:invoice` },
+  );
+  if (!draft.id) return { status: "no_card", credits };
+  // A replay finds it already finalized (and maybe paid): only a draft is finalized here.
+  // Read FRESH: a replayed `invoices.create` returns the response first recorded — a draft —
+  // even when the first call went on to finalize and pay it.
+  const fresh = await stripe.invoices.retrieve(draft.id);
+  const current = fresh.status === "draft" ? await finalizeOutsideWallet(customer, draft.id, currency) : fresh;
+  let settled = current;
+  if (current.status === "open") {
+    try {
+      settled = await stripe.invoices.pay(draft.id, { off_session: true });
+    } catch {
+      settled = await stripe.invoices.retrieve(draft.id);
+    }
+  }
+  if (settled.status !== "paid") {
+    return { status: "open", invoiceId: draft.id, credits, hostedInvoiceUrl: settled.hosted_invoice_url ?? null };
+  }
+  await grantInvoiceCredits(
+    { id: draft.id, customer, metadata: { ...(orgId ? { org_id: orgId } : {}), credits: String(credits), repays: invoice.id } },
+    currency,
+  );
+  return { status: "charged", invoiceId: draft.id, credits };
+}
+
 /**
  * Whether a PAID invoice was settled, in part, out of the wallet — `starting_balance < 0`.
  *
@@ -880,8 +974,20 @@ export async function finalizeSubscriptionDraft(invoice: {
  * can intervene). Detection, so it is visible rather than silent: `createBillingSync`
  * reports it through `hooks.onPaidFromWallet` and the doctor lists recent ones.
  */
-export function paidFromWallet(invoice: { starting_balance?: number | null }): number {
-  return invoice.starting_balance && invoice.starting_balance < 0 ? -invoice.starting_balance : 0;
+export function paidFromWallet(invoice: {
+  starting_balance?: number | null;
+  ending_balance?: number | null;
+  total?: number | null;
+}): number {
+  const start = invoice.starting_balance ?? 0;
+  if (start >= 0) return 0;
+  // What the invoice TOOK, not what the wallet held: `starting_balance` is the balance before
+  // application, so a 5 000-credit wallet on an 1 800 renewal reads -5000 while only 1 800
+  // was applied. Measured live — reading it as the amount repaid €50 for an €18 renewal.
+  // `ending_balance` is set once finalized; the cap by `total` covers an invoice without it.
+  const applied =
+    invoice.ending_balance != null ? invoice.ending_balance - start : Math.min(-start, invoice.total ?? -start);
+  return Math.max(0, applied);
 }
 
 export async function sellCredits(

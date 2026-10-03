@@ -256,3 +256,16 @@ test("the renewal backstop: no poller, or one at 30 min or slower, is a warning"
   assert.equal(await level({}), "ok", "the default interval is 60 s");
   assert.equal(await level(undefined), undefined, "not said, not checked");
 });
+
+test("a wallet shortfall already repaid (`metadata.repays`) is settled, not reported", async () => {
+  __setStripeForTests(
+    fakeStripe({
+      invoices: [
+        { id: "in_first", status: "paid", billing_reason: "subscription_create", starting_balance: -100, metadata: {}, lines: { data: [] } },
+        { id: "in_repay", status: "paid", billing_reason: "manual", starting_balance: 0, metadata: { credits: "100", repays: "in_first" }, lines: { data: [] } },
+      ],
+    }),
+  );
+  const r = await checkBillingSetup({ taxMode: "none" });
+  assert.equal(byTitle(r, "Invoices paid from the wallet").level, "ok");
+});
