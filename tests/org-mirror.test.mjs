@@ -241,6 +241,17 @@ test("toOrgId of an org that does not exist, or has no externalId, is null", asy
   assert.equal(await mirror.toOrgId(bare.id), null);
 });
 
+test("toOrgId rethrows anything that is not 'no such org' — an outage is not 'no mapping'", async () => {
+  // REGRESSION: every error was swallowed into null, so a WorkOS outage or a revoked API
+  // key answered exactly like a deleted org.
+  const wos = fakeWorkOS();
+  wos.organizations.getOrganization = async () => {
+    throw new Error("503 Service Unavailable");
+  };
+  __setWorkOSForTests(wos);
+  await assert.rejects(createWorkOSOrgMirror(pointerStore()).toOrgId("org_1"), /503/);
+});
+
 // ── rename / delete / membership ─────────────────────────────────────────────
 
 test("rename and delete tolerate an org already gone, and nothing else", async () => {

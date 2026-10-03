@@ -120,8 +120,12 @@ export function createWorkOSOrgMirror(opts: WorkOSOrgMirrorOptions): WorkOSOrgMi
       if (local) return local;
       try {
         return (await workos().organizations.getOrganization(workosOrgId)).externalId ?? null;
-      } catch {
-        return null;
+      } catch (e) {
+        // Only "no such org" is null. Anything else (an outage, a 401, a rate limit) is
+        // rethrown: answered as null it read as "this org maps to nothing", the same
+        // answer a deleted org gets, and a caller cannot tell an outage from a tenancy fact.
+        if (e instanceof NotFoundException) return null;
+        throw e;
       }
     },
 
