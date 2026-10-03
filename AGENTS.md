@@ -696,10 +696,20 @@ auto-advance collects the card. The webhook route does it natively; the poller i
 for a missed delivery, which **only works if it polls well inside that hour — run
 `createBillingSync` under 30 minutes** (the doctor warns at 30, and when there is none). An
 `invoice_now` plan change finalizes inside `subscriptions.update`, so `changePlan` wraps that
-call in `withWalletSetAside`. **What escapes** — a draft both legs missed, or a first invoice
-Checkout finalizes itself, where nothing can intervene — is DETECTED rather than silent:
-`hooks.onPaidFromWallet` on the sync (default: an error log) and the doctor's "Invoices paid
-from the wallet", which is an error naming each invoice.
+call in `withWalletSetAside`. **What escapes** — a first invoice Checkout finalizes inside the
+session (no draft, no `invoice.created` window; measured: a Hobby→Pro upgrade paid 100 welcome
+credits of its €42.08), or a draft both legs missed — is REPAID on `invoice.paid`
+(`repayWalletShortfall`, in the webhook route and the event handler): an invoice for exactly
+what was taken, finalized outside the wallet, charged to the card, and granted back like any
+credit sale, keyed on the original invoice so one is raised however often it is delivered.
+Setting the wallet aside when the Checkout SESSION is created was rejected: it zeroes the wallet
+for the session's whole life (≥30 min) and its return hangs on an event arriving — a missed one
+strands the customer's money, while a repayment holds nothing. **The amount is what the invoice
+TOOK — `ending_balance − starting_balance` — not `-starting_balance`**, which is the wallet
+before application: read that way, a 5 000-credit wallet on an €18 renewal was "repaid" €50
+(measured live, section 16b). Reported through `hooks.onPaidFromWallet` (with the repayment's
+outcome) and the doctor's "Invoices paid from the wallet", which skips any with a paid
+`metadata.repays`.
 
 **The credits are granted by payment, never by acceptance.** `metadata.credits` on the
 invoice is the negotiated quantity and the amount is the negotiated price — the one place in
