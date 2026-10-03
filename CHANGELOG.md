@@ -1,3 +1,14 @@
+## [25.8.2](https://github.com/arnaudjnn/billing-tools/compare/v25.8.1...v25.8.2) (2026-10-03)
+
+
+### Bug Fixes
+
+* **auth:** config.internalDomains matched only when already normalised ([4911f74](https://github.com/arnaudjnn/billing-tools/commit/4911f744be9b3ae095e700b9de3eb7bf5ce7477f))
+* **keys:** create_api_key minted a key named "" from a blank name ([f486bdb](https://github.com/arnaudjnn/billing-tools/commit/f486bdbd12aadca6282a5f477b38fcd0d09986fd))
+* **org-mirror:** two first reads of one row failed the second ([ccf3999](https://github.com/arnaudjnn/billing-tools/commit/ccf3999787fdb64a43c85840acbfb12ff3adc573))
+* **tax-ids:** a tax id Stripe refused deleted the one on file ([d476f35](https://github.com/arnaudjnn/billing-tools/commit/d476f35b419cf6a01eb0b090eb8c3a8263cca07b))
+* **webhook:** a delayed-payment top-up was credited before it was paid ([177a5dc](https://github.com/arnaudjnn/billing-tools/commit/177a5dc792734c2df261ba4bf282c48a4d6f6d3e))
+
 ## [25.8.1](https://github.com/arnaudjnn/billing-tools/compare/v25.8.0...v25.8.1) (2026-09-28)
 
 
