@@ -1,3 +1,10 @@
+## [25.8.6](https://github.com/arnaudjnn/billing-tools/compare/v25.8.5...v25.8.6) (2026-10-03)
+
+
+### Bug Fixes
+
+* **plan-request:** quote_plan_change answered "quoted" and dropped the quote ([9de0ef8](https://github.com/arnaudjnn/billing-tools/commit/9de0ef864e443248d1c7e01270a887bd41b6d3f5))
+
 ## [25.8.5](https://github.com/arnaudjnn/billing-tools/compare/v25.8.4...v25.8.5) (2026-10-03)
 
 
