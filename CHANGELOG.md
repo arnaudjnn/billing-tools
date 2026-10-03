@@ -5,6 +5,10 @@
 
 * **auth:** a WorkOS outage told every caller their API key was invalid ([55fe8c5](https://github.com/arnaudjnn/billing-tools/commit/55fe8c51a653bfa116ee8b54b6b720469ec1b315))
 
+### Behaviour change
+
+* **An API key that cannot be CHECKED is now HTTP 503, not 401.** `validateApiKey` returns `null` only when WorkOS rejects the key (unknown, revoked, malformed), which is still a 401. A network failure, a WorkOS 5xx or 429, or the deployment's own WorkOS key being refused now propagates, and the REST route and MCP transport answer **503 with `Retry-After: 5`** and an `{ "error": … }` body. A client should retry a 503 and keep its key. On MCP the transport validates the key for `tools/call` requests itself, so this is an HTTP 503 in the default mode too, not a JSON-RPC result. A custom `BillingAdapter` should follow the same contract: return `null` to reject, throw for "could not tell". A throw used to surface as a 500 and is now a 503.
+
 ## [25.8.3](https://github.com/arnaudjnn/billing-tools/compare/v25.8.2...v25.8.3) (2026-10-03)
 
 
