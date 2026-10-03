@@ -171,6 +171,25 @@ export interface CreateBillingOptions {
   };
 }
 
+/** `http(s)://host…` — the only kind of link an email can carry. */
+function isAbsoluteUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" || u.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+/** An invitation's accept link as an email can carry it: absolute as given, or a path
+ *  appended to `baseUrl` — appended rather than URL-resolved, so a deployment served under
+ *  a path prefix keeps it. */
+function absoluteAcceptUrl(acceptUrl: string, baseUrl: string): string {
+  if (isAbsoluteUrl(acceptUrl)) return acceptUrl;
+  const path = acceptUrl.startsWith("/") ? acceptUrl : `/${acceptUrl}`;
+  return `${baseUrl.replace(/\/+$/, "")}${path}`;
+}
+
 export function createBilling(opts: CreateBillingOptions) {
   const resolved = resolveConfig(opts.config);
 
@@ -186,6 +205,14 @@ export function createBilling(opts: CreateBillingOptions) {
   // for a consumer that renders in-process — a deployment can have both, and one that has
   // neither still gets WorkOS's own email.
   const invitations = opts.members?.invitations;
+  // The event's `acceptUrl` lands in an email, so it must be absolute — and it is resolved
+  // against `config.baseUrl` below. A deployment that would email a relative link is
+  // refused at construction rather than discovered by the person who cannot click it.
+  if (invitations && notify && !isAbsoluteUrl(resolved.baseUrl ?? "")) {
+    throw new Error(
+      `createBilling: config.baseUrl must be an absolute URL to send invitations (got "${resolved.baseUrl ?? ""}").`,
+    );
+  }
   const invitationsWithEvents =
     invitations && notify
       ? {
@@ -211,7 +238,14 @@ export function createBilling(opts: CreateBillingOptions) {
                 roleSlug: invitation.roleSlug,
                 // The service builds this from its own accept path; the fallback is that
                 // service's own default, for a custom implementation that records none.
-                acceptUrl: invitation.acceptUrl ?? `${resolved.baseUrl}/invita/${invitation.id}`,
+                // A service without its own `baseUrl` records a PATH ("/invita/<id>"); it was
+                // passed through as-is because only a missing value fell back, and every
+                // invitation email carried a link nobody could click. Resolved against
+                // `config.baseUrl` now, which keeps a custom `acceptPath`.
+                acceptUrl: absoluteAcceptUrl(
+                  invitation.acceptUrl ?? `/invita/${invitation.id}`,
+                  resolved.baseUrl,
+                ),
                 organizationId: invitation.organizationId,
                 ...(inviterUserId ? { inviterUserId } : {}),
               },

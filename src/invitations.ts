@@ -79,7 +79,8 @@ export interface WorkOSInvitationsOptions {
   clientId?: string;
   /** ws↔org id map (share the adapter's). Omit → orgId IS the WorkOS org id. */
   map?: WorkOSOrgMap;
-  /** Base URL for the custom-email accept link. */
+  /** Absolute base URL for the accept link (`https://app.example.com`). Required with
+   *  `hooks.sendEmail`; without it `acceptUrl` is a path for the caller to resolve. */
   baseUrl?: string;
   /** Accept-link path prefix. Default "/invita". */
   acceptPath?: string;
@@ -96,13 +97,39 @@ export interface InvitationService {
 
 const PAGE = 100;
 
+/** `http(s)://host…` — the only kind of link an email can carry. */
+function isAbsoluteUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" || u.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
 export function createWorkOSInvitations(
   opts: WorkOSInvitationsOptions = {},
 ): InvitationService {
   // Shared, lazily-memoized WorkOS client (see workos.ts).
   const workos = () => getWorkOS({ apiKey: opts.apiKey, clientId: opts.clientId });
   const hooks = opts.hooks ?? {};
-  const baseUrl = opts.baseUrl ?? "";
+  // The accept link goes into an email, where a relative URL is a link nobody can click.
+  // It defaulted to "" — so a service built without `baseUrl` produced "/invita/<id>", and
+  // a deployment that let `createBilling` send the invitation emailed exactly that. Refused
+  // here: a `baseUrl` that is not absolute is never what was meant, and a `sendEmail` hook
+  // without one has no link to put in its email. Without either, the record's `acceptUrl`
+  // stays a PATH, which `createBilling` resolves against `config.baseUrl`.
+  if (opts.baseUrl !== undefined && !isAbsoluteUrl(opts.baseUrl)) {
+    throw new Error(
+      `createWorkOSInvitations: baseUrl must be an absolute URL (https://…), got "${opts.baseUrl}".`,
+    );
+  }
+  if (hooks.sendEmail && !opts.baseUrl) {
+    throw new Error(
+      "createWorkOSInvitations: hooks.sendEmail needs baseUrl — the accept link it is handed would be a relative path.",
+    );
+  }
+  const baseUrl = (opts.baseUrl ?? "").replace(/\/+$/, "");
   const acceptPath = opts.acceptPath ?? "/invita";
 
   const toWid = (orgId: string): Promise<string> =>
