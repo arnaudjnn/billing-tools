@@ -292,10 +292,17 @@ export async function isInternalOrg(
   orgId: string,
   internalDomains: string[],
 ): Promise<boolean> {
-  if (internalDomains.length === 0) return false;
-  const set = new Set(internalDomains.map((d) => d.toLowerCase()));
+  // Normalised the way `internalDomainsFromEnv` normalises: a list handed straight to
+  // `config.internalDomains` ("Acme.com ", or a trailing empty entry from a split)
+  // otherwise matched nothing — or, for an empty entry, an org reporting an empty domain.
+  const norm = (d: string) => d.trim().toLowerCase();
+  const set = new Set(internalDomains.map(norm).filter(Boolean));
+  if (set.size === 0) return false;
   const domains = await adapter.getOrgDomains(orgId);
-  return domains.some((d) => set.has(d.toLowerCase()));
+  return domains.some((d) => {
+    const n = norm(d);
+    return n !== "" && set.has(n);
+  });
 }
 
 // Metering gate for paid tools. Free (cost 0), Stripe-unset, and internal orgs
