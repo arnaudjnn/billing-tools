@@ -1,6 +1,8 @@
 "use client";
 
 import { resolveMessages, type PartialMessages } from "../i18n.js";
+import { paymentFormState, submitRefusal, SUBMITTING, type PaymentFormState } from "./form-state.js";
+export { paymentFormState, submitRefusal, type PaymentFormState } from "./form-state.js";
 import {
   AddressElement,
   Elements,
@@ -174,8 +176,15 @@ export type BillingPaymentFormProps = {
    * rather than holding it.
    */
   intent?: "payment" | "setup";
-  /** Rendered as the submit button. Receives the live submitting state. */
-  children: (state: { submitting: boolean }) => React.ReactNode;
+  /**
+   * Rendered as the submit button. Receives the live state: put `disabled` on the button.
+   * `ready` is false until Stripe has loaded and the fields are mounted, and `error` says
+   * why the form cannot be used when it failed to load. The form also disables everything
+   * inside this render while `disabled`, so a button that ignores it is still inert.
+   */
+  children: (state: PaymentFormRenderState) => React.ReactNode;
+  /** Called once Stripe has loaded and the payment fields are ready to type into. */
+  onReady?: () => void;
   /** Called after the intent is confirmed without a redirect. */
   /**
    * Prefill the billing address (and cardholder name) from what the org already
@@ -231,6 +240,7 @@ export function BillingPaymentForm({
   intent = "payment",
   messages,
   children,
+  onReady,
   onSuccess,
   onError,
   className,
@@ -238,11 +248,28 @@ export function BillingPaymentForm({
   const stripe = useStripe();
   const elements = useElements();
   const [submitting, setSubmitting] = React.useState(false);
+  const [elementReady, setElementReady] = React.useState(false);
+  const [loadError, setLoadError] = React.useState<string | null>(null);
   const t = resolveMessages(messages);
+  const state = paymentFormState({
+    sdkReady: Boolean(stripe && elements),
+    elementReady,
+    elementRequired: true,
+    loadError,
+    submitting,
+  });
+  useReadyCallback(state.ready, onReady);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!stripe || !elements || submitting) return;
+    // Not ready is REPORTED, not dropped: a press that does nothing is the bug this fixes.
+    const refusal = submitRefusal(state, submitting, t);
+    if (refusal === SUBMITTING) return;
+    if (refusal) {
+      onError?.(refusal);
+      return;
+    }
+    if (!stripe || !elements) return;
     setSubmitting(true);
     try {
       // Surface field-level problems before touching the intent.
@@ -295,6 +322,12 @@ export function BillingPaymentForm({
       */}
       <PaymentElement
         options={{ layout: { type: "tabs" }, wallets: { link: "never" } }}
+        onReady={() => setElementReady(true)}
+        onLoadError={(event) => {
+          const message = event.error?.message ?? t.paymentFormLoadFailed;
+          setLoadError(message);
+          onError?.(message);
+        }}
       />
       {/* Card FIRST, address second. The card is what the customer came to type;
           the address is the paperwork that follows it. Stripe re-validates on
@@ -324,9 +357,36 @@ export function BillingPaymentForm({
         />
       )}
       {collectTaxId && <TaxIdElement options={{}} />}
-      {children({ submitting })}
+      <SubmitArea disabled={state.disabled}>{children({ submitting, ...state })}</SubmitArea>
     </form>
   );
+}
+
+/** What a payment form's `children` render receives. */
+export type PaymentFormRenderState = { submitting: boolean } & PaymentFormState;
+
+/**
+ * The consumer's button, inside a `<fieldset disabled>` while the form cannot submit. A
+ * fieldset disables every control in it natively, so a button that forgets `disabled` is
+ * still inert; `display: contents` keeps it out of the consumer's layout.
+ */
+function SubmitArea({ disabled, children }: { disabled: boolean; children: React.ReactNode }) {
+  return (
+    <fieldset disabled={disabled} aria-busy={disabled} style={{ display: "contents" }}>
+      {children}
+    </fieldset>
+  );
+}
+
+/** `onReady`, once, the first time the form becomes ready. */
+function useReadyCallback(ready: boolean, onReady?: () => void) {
+  const fired = React.useRef(false);
+  React.useEffect(() => {
+    if (ready && !fired.current) {
+      fired.current = true;
+      onReady?.();
+    }
+  }, [ready, onReady]);
 }
 
 export { AddressElement, PaymentElement, TaxIdElement, useElements, useStripe };
@@ -561,7 +621,12 @@ export type BillingCheckoutSessionFormProps = {
    * with nothing wrong with it.
    */
   paymentMethod?: string;
-  children: (state: { submitting: boolean }) => React.ReactNode;
+  /** Rendered as the submit button — see `BillingPaymentForm`'s `children`. */
+  children: (state: PaymentFormRenderState) => React.ReactNode;
+  /** Called once the checkout has loaded and the fields (if any) are ready. */
+  onReady?: () => void;
+  /** Overrides for the few words this form supplies itself. English by default. */
+  messages?: PartialMessages;
   /** Called once the session is confirmed without a redirect. */
   onSuccess?: () => void;
   /** Called with a human-readable message when Stripe declines or validation fails. */
@@ -586,12 +651,17 @@ export function BillingCheckoutSessionForm({
   link = false,
   paymentMethod,
   children,
+  onReady,
+  messages,
   onSuccess,
   onError,
   className,
 }: BillingCheckoutSessionFormProps) {
   const result = useCheckoutElements();
   const [submitting, setSubmitting] = React.useState(false);
+  const [elementReady, setElementReady] = React.useState(false);
+  const [elementError, setElementError] = React.useState<string | null>(null);
+  const t = resolveMessages(messages);
 
   // The Tax ID Element is a PUBLIC PREVIEW: Stripe.js only exposes it to accounts
   // that have been granted it, and the beta flag alone doesn't grant it. Rendering
@@ -615,9 +685,36 @@ export function BillingCheckoutSessionForm({
   // its own row.
   const payWith = paymentMethod ?? null;
 
+  // The checkout SDK reports its own failure (`type: "error"`) — a bad key, an expired
+  // session. It used to be swallowed by the same early return as "still loading".
+  const sdkError =
+    result.type === "error" ? (result.error?.message ?? t.paymentFormLoadFailed) : null;
+  const state = paymentFormState({
+    sdkReady: result.type === "success",
+    elementReady,
+    // A saved card mounts no Payment Element, so there is nothing to wait for.
+    elementRequired: !payWith,
+    loadError: sdkError ?? elementError,
+    submitting,
+  });
+  useReadyCallback(state.ready, onReady);
+  const reported = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (sdkError && reported.current !== sdkError) {
+      reported.current = sdkError;
+      onError?.(sdkError);
+    }
+  }, [sdkError, onError]);
+
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (result.type !== "success" || submitting) return;
+    const refusal = submitRefusal(state, submitting, t);
+    if (refusal === SUBMITTING) return;
+    if (refusal) {
+      onError?.(refusal);
+      return;
+    }
+    if (result.type !== "success") return;
     setSubmitting(true);
     try {
       // Only when there ARE elements: with a saved card selected the Payment
@@ -657,6 +754,12 @@ export function BillingCheckoutSessionForm({
               layout: { type: "tabs" },
               wallets: { link: link ? "auto" : "never" },
             }}
+            onReady={() => setElementReady(true)}
+            onLoadError={(event: { error?: { message?: string } }) => {
+              const message = event.error?.message ?? t.paymentFormLoadFailed;
+              setElementError(message);
+              onError?.(message);
+            }}
           />
           {/* Card first here too, so the two forms read the same way. The address
               still drives the tax recalculation; it just sits below now. */}
@@ -664,7 +767,7 @@ export function BillingCheckoutSessionForm({
           {collectTaxId && taxIdAvailable && <CheckoutTaxIdElement options={{}} />}
         </>
       )}
-      {children({ submitting })}
+      <SubmitArea disabled={state.disabled}>{children({ submitting, ...state })}</SubmitArea>
     </form>
   );
 }

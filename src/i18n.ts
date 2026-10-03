@@ -158,6 +158,10 @@ export interface Messages {
   paymentDetailsInvalid: string;
   cardNotSaved: string;
   paymentFailed: string;
+  /** A submit that arrived before Stripe finished loading the form. */
+  paymentFormNotReady: string;
+  /** Stripe.js or the payment fields failed to load, and said nothing usable. */
+  paymentFormLoadFailed: string;
   /**
    * The structured refusal reasons tool results carry (`{ ok: false, reason }`),
    * one key per distinct meaning — see `describeReason`. They exist because a
@@ -235,6 +239,8 @@ export const DEFAULT_MESSAGES: Messages = {
   paymentDetailsInvalid: "Invalid payment details",
   cardNotSaved: "Card not saved",
   paymentFailed: "Payment failed",
+  paymentFormNotReady: "The payment form is still loading — try again in a moment",
+  paymentFormLoadFailed: "The payment form could not load. Reload the page to try again.",
   reasonNotCapped: "This plan has no per-member allowance to raise",
   reasonNotBlocked: "No limit is refusing you yet, so there is nothing to top up",
   reasonSeatsFixed:
