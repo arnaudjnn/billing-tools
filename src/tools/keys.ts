@@ -89,8 +89,11 @@ email-verification flow for a caller with none, and it names what it mints "API 
 workspace with several of them cannot tell from list_api_keys which is which, and cannot
 safely revoke one. Free.`,
     {
+      // Trimmed BEFORE the length check: `min(1)` alone let "   " through, minting a
+      // key named "" — the indistinguishable key this tool exists to avoid.
       name: z
         .string()
+        .trim()
         .min(1)
         .max(80)
         .describe(`What this key is for — "CI", "staging worker". Shown by list_api_keys`),
