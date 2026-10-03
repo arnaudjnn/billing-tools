@@ -1,3 +1,10 @@
+## [25.8.4](https://github.com/arnaudjnn/billing-tools/compare/v25.8.3...v25.8.4) (2026-10-03)
+
+
+### Bug Fixes
+
+* **auth:** a WorkOS outage told every caller their API key was invalid ([55fe8c5](https://github.com/arnaudjnn/billing-tools/commit/55fe8c51a653bfa116ee8b54b6b720469ec1b315))
+
 ## [25.8.3](https://github.com/arnaudjnn/billing-tools/compare/v25.8.2...v25.8.3) (2026-10-03)
 
 
