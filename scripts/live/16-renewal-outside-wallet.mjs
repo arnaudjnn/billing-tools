@@ -9,7 +9,10 @@
 //
 //   16a  wallet 5 000, renewal draft → finalized by us, then collected: card pays in full
 //   16b  CONTROL — the same renewal left to Stripe: the wallet pays it, and the sync
-//        reports it through `onPaidFromWallet` (detection, so an escape is never silent)
+//        collects the shortfall by card and returns the credits (`repayWalletShortfall`),
+//        reporting it through `onPaidFromWallet`
+//   16c  a FIRST invoice finalized at creation — the shape Checkout produces, where no
+//        `invoice.created` window exists — on a wallet of 100: repaid the same way
 //
 // Each on its own clock and customer (`midCycle`), parked near the period end. The wallet is
 // seeded AFTER the subscription starts, so the first invoice is not what is measured.
@@ -17,8 +20,8 @@
 import { createStripeEventHandler } from "../../dist/sync.js";
 import { pollStripeEvents } from "../../dist/events.js";
 import { getCreditBalance, grantCredits } from "../../dist/billing.js";
-import { eur, note, ok, retry } from "../lib/harness.mjs";
-import { RUN, STARTER_PLAN } from "../lib/scratch-stripe.mjs";
+import { defer, eur, ignoreMissing, note, ok, retry } from "../lib/harness.mjs";
+import { RUN, STARTER_PLAN, attachTestCard, createClockCustomer } from "../lib/scratch-stripe.mjs";
 import { midCycle } from "../lib/scenario.mjs";
 
 const WALLET = 5_000;
@@ -100,7 +103,9 @@ export async function run(ctx) {
       if (!r || r.status === "draft") throw new Error("renewal not finalized yet");
       return r;
     });
-    const took = -(inv.starting_balance ?? 0);
+    // What the invoice TOOK: `starting_balance` is the wallet before application, so the
+    // amount applied is the move to `ending_balance`, not the whole starting figure.
+    const took = (inv.ending_balance ?? 0) - (inv.starting_balance ?? 0);
     ok("16b (control): Stripe alone pays the renewal from the wallet", took > 0, `${took} credits, ${eur(inv.amount_paid)} charged of ${eur(inv.total)}`);
 
     const reported = [];
@@ -111,7 +116,59 @@ export async function run(ctx) {
       hooks: { onPaidFromWallet: (info) => reported.push(info) },
     });
     await handle({ id: `evt_${RUN}_control`, type: "invoice.paid", data: { object: inv } });
-    ok("16b: and the sync REPORTS it", reported.length === 1 && reported[0].credits === took, JSON.stringify(reported));
-    note(`control renewal ${inv.id}: ${eur(inv.amount_paid)} cash, ${took} credits`);
+    ok("16b: the sync REPORTS it", reported.length === 1 && reported[0].credits === took, JSON.stringify(reported.map((r) => ({ ...r, repayment: r.repayment?.status }))));
+    await repaid("16b", s.customerId, inv, reported[0]?.repayment, WALLET);
+    note(`control renewal ${inv.id}: ${eur(inv.amount_paid)} cash, ${took} credits — then repaid`);
+  }
+
+  // ── 16c — a first invoice finalized at creation (Checkout's shape) ──────────
+  {
+    // Not `midCycle`: that creates the subscription BEFORE the wallet holds anything. Here the
+    // wallet is funded first — the welcome credits a Hobby workspace holds when it upgrades.
+    const { customerId } = await createClockCustomer(stripe, { orgId: ctx.orgId, name: `${RUN} first-invoice` });
+    await attachTestCard(stripe, customerId);
+    await grantCredits(customerId, 100, "Welcome credits", "eur", `${RUN}:first-seed`);
+    const sub = await stripe.subscriptions.create({
+      customer: customerId,
+      items: [{ price: ctx.prices.get(`${STARTER_PLAN}_standard_monthly`), quantity: 1 }],
+      metadata: { org_id: ctx.orgId, plan: STARTER_PLAN },
+    });
+    defer(`subscription ${sub.id}`, () => stripe.subscriptions.cancel(sub.id).catch(ignoreMissing));
+    const first = await stripe.invoices.retrieve(sub.latest_invoice);
+    ok(
+      "16c: Stripe applied the wallet to the first invoice (the measured defect)",
+      first.status === "paid" && first.starting_balance === -100,
+      `${eur(first.amount_paid)} of ${eur(first.total)}, starting_balance ${first.starting_balance}`,
+    );
+    const reported = [];
+    const handle = createStripeEventHandler({
+      adapter,
+      plans,
+      currency: "eur",
+      hooks: { onPaidFromWallet: (info) => reported.push(info) },
+    });
+    await handle({ id: `evt_${RUN}_first`, type: "invoice.paid", data: { object: first } });
+    await handle({ id: `evt_${RUN}_first_again`, type: "invoice.paid", data: { object: first } });
+    await repaid("16c", customerId, first, reported[0]?.repayment, 100);
+  }
+
+  /** The shortfall was collected by card, once, and the wallet is whole again. */
+  async function repaid(label, customerId, original, repayment, walletBefore) {
+    ok(`${label}: the shortfall was charged`, repayment?.status === "charged", JSON.stringify(repayment));
+    const repays = (await stripe.invoices.list({ customer: customerId, limit: 20 })).data.filter(
+      (i) => i.metadata?.repays === original.id,
+    );
+    ok(`${label}: ONE repayment invoice`, repays.length === 1, String(repays.length));
+    const r = repays[0];
+    if (!r) return;
+    ok(`${label}: repaid by the CARD`, r.status === "paid" && r.amount_paid === r.total, `${eur(r.amount_paid)} of ${eur(r.total)}`);
+    ok(`${label}: and not, in turn, by the wallet`, r.starting_balance === 0, `starting_balance ${r.starting_balance}`);
+    ok(
+      `${label}: cash collected = the subscription's price`,
+      original.amount_paid + r.amount_paid === original.total,
+      `${eur(original.amount_paid)} + ${eur(r.amount_paid)} = ${eur(original.total)}`,
+    );
+    const now = await getCreditBalance(customerId, "eur");
+    ok(`${label}: the wallet is whole again`, now === walletBefore, `${now} vs ${walletBefore}`);
   }
 }
