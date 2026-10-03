@@ -1,3 +1,11 @@
+## [25.8.3](https://github.com/arnaudjnn/billing-tools/compare/v25.8.2...v25.8.3) (2026-10-03)
+
+
+### Bug Fixes
+
+* **invoices:** reading invoices created a Stripe customer for an org with none ([5aa5da2](https://github.com/arnaudjnn/billing-tools/commit/5aa5da2377c300f6f52255e61623a7657c506c5d))
+* **org-mirror:** toOrgId answered a WorkOS outage as "no org" ([375d8ee](https://github.com/arnaudjnn/billing-tools/commit/375d8ee9bba1d42c9caadebbb1ebe889f915ce67))
+
 ## [25.8.2](https://github.com/arnaudjnn/billing-tools/compare/v25.8.1...v25.8.2) (2026-10-03)
 
 
