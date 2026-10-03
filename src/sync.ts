@@ -1,6 +1,6 @@
 import type Stripe from "stripe";
 import { pollStripeEvents, pollWorkOSEvents, type PollResult } from "./events.js";
-import { creditsOwedFor, grantCredits, getStripe } from "./billing.js";
+import { creditsOwedFor, grantCredits, getStripe, isCheckoutPaymentEvent } from "./billing.js";
 import {
   grantFor,
   planForPriceId,
@@ -115,6 +115,7 @@ function queryCursorStore(query: MirrorQuery): CursorStore {
 // they bought. `ensureWebhookEndpoint` registers exactly this list.
 export const PAYMENT_EVENT_TYPES = [
   "checkout.session.completed",
+  "checkout.session.async_payment_succeeded",
   "invoice.paid",
   "invoice.payment_failed",
 ];
@@ -257,9 +258,12 @@ export function createStripeEventHandler(opts: {
     // Same credit the webhook route performs, reached by polling instead. Only
     // one-time top-ups (`mode: "payment"`); a subscription checkout grants its
     // credits through invoice.paid below.
-    if (event.type === "checkout.session.completed") {
+    // Not before it is PAID: a delayed method completes the session `unpaid` and pays
+    // later, as `async_payment_succeeded` — see `isCheckoutPaymentEvent`.
+    if (isCheckoutPaymentEvent(event.type)) {
       const session = event.data.object as Stripe.Checkout.Session;
       if (session.mode !== "payment") return;
+      if (session.payment_status === "unpaid") return;
       const customerId =
         typeof session.customer === "string" ? session.customer : session.customer?.id;
       const credits = parseInt(session.metadata?.credits || "0", 10);

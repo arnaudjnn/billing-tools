@@ -26,6 +26,7 @@ import { getStripe } from "./billing.js";
  */
 export const BILLING_WEBHOOK_EVENTS = [
   "checkout.session.completed",
+  "checkout.session.async_payment_succeeded",
   "invoice.paid",
   "invoice.payment_failed",
 ] as const satisfies readonly Stripe.WebhookEndpointCreateParams.EnabledEvent[];

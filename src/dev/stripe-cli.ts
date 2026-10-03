@@ -257,9 +257,10 @@ export async function startLocalWebhooks(
 // Duplicated from webhook-setup.ts rather than imported: that module pulls in
 // `billing.ts` → the Stripe SDK, and this entry point is deliberately reachable
 // with nothing installed but Node (it is also the only module here allowed to
-// touch child_process and fs). Three strings are a cheaper price than that edge.
+// touch child_process and fs). Four strings are a cheaper price than that edge.
 const LOCAL_WEBHOOK_EVENTS = [
   "checkout.session.completed",
+  "checkout.session.async_payment_succeeded",
   "invoice.paid",
   "invoice.payment_failed",
 ] as const;

@@ -1,6 +1,6 @@
 import type Stripe from "stripe";
 import {
-  creditsOwedFor, getStripe, grantCredits } from "../billing.js";
+  creditsOwedFor, getStripe, grantCredits, isCheckoutPaymentEvent } from "../billing.js";
 
 // Stripe webhook handler. Grants credits on one-time top-up completion.
 // Subscription events are intentionally NOT handled here — subscription/plan
@@ -72,13 +72,21 @@ export function createStripeWebhookHandler(opts: WebhookOptions = {}) {
     // through to onOtherEvent, because fulfilling one is app-specific work
     // (provisioning) that this route can't do — and silently swallowing it, as
     // this did, left the webhook unable to fulfil anything at all.
+    //
+    // And only once it is PAID. `checkout.session.completed` fires when the customer
+    // finishes the form, which for a delayed method (SEPA Debit, a bank transfer — the
+    // default payment-method configuration offers whatever the account has enabled)
+    // is days before the money arrives, with `payment_status: "unpaid"`. Crediting
+    // there handed out credits for a debit that could still fail. The money lands as
+    // `checkout.session.async_payment_succeeded`, credited under the SAME key, so a
+    // session is credited once whichever of the two carries the payment.
     const isTopUp =
-      event.type === "checkout.session.completed" &&
+      isCheckoutPaymentEvent(event.type) &&
       (event.data.object as Stripe.Checkout.Session).mode === "payment";
 
     if (isTopUp) {
       const session = event.data.object as Stripe.Checkout.Session;
-      {
+      if (session.payment_status !== "unpaid") {
         const customerId = customerIdOf(session.customer as string | { id: string });
         const credits = parseInt(session.metadata?.credits || "0", 10);
         if (customerId && credits > 0) {

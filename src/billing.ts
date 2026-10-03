@@ -352,6 +352,16 @@ export async function usageSinceWindows(
   return totals;
 }
 
+/**
+ * The two events that can carry a one-time Checkout payment: `completed` for an
+ * immediate method, `async_payment_succeeded` for a delayed one (SEPA Debit, a bank
+ * transfer), where `completed` arrives `payment_status: "unpaid"` and the money days
+ * later. A credit is granted on whichever arrives PAID, keyed on the session id.
+ */
+export function isCheckoutPaymentEvent(type: string): boolean {
+  return type === "checkout.session.completed" || type === "checkout.session.async_payment_succeeded";
+}
+
 export async function grantCredits(
   stripeCustomerId: string,
   amount: number,
