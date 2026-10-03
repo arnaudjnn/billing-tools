@@ -1,5 +1,5 @@
 import type Stripe from "stripe";
-import { ensureStripeCustomer, getBillingCustomerId, getStripe } from "./billing.js";
+import { ensureStripeCustomer, getBillingCustomerId, getStripe, withWalletSetAside } from "./billing.js";
 import { createCheckoutSession } from "./checkout.js";
 import {
   defaultBasket,
@@ -641,8 +641,16 @@ export async function changePlan(
     }
   }
 
-  const updated = await sendChange(
-    sub.id,
+  const changeKey = ["plan", sub.id, target.key, interval, itemFingerprint(items, carried), timing, proration].join(":");
+  // `always_invoice` creates AND finalizes the proration invoice inside this one update, so
+  // the wallet is set aside around the call — otherwise the customer's credit balance pays
+  // the upgrade. A `create_prorations` change lands on the renewal draft instead, which
+  // `finalizeSubscriptionDraft` handles on `invoice.created`.
+  const send = (params: Stripe.SubscriptionUpdateParams, key: string) =>
+    pending && customerId
+      ? withWalletSetAside(customerId, sub.currency, key, () => sendChange(sub.id, params, key))
+      : sendChange(sub.id, params, key);
+  const updated = await send(
     {
       // Stripped for the same reason, on the same path.
       items: pending ? items.map(({ tax_rates: _tax, ...rest }) => rest) : items,
@@ -658,7 +666,7 @@ export async function changePlan(
     //
     // The MUTATION is in the key, not just the target — see `itemFingerprint`. A genuine
     // double-click sends the identical diff, so it still dedupes.
-    ["plan", sub.id, target.key, interval, itemFingerprint(items, carried), timing, proration].join(":"),
+    changeKey,
   );
 
   // The payment FAILED and Stripe is holding the change — measured: `status: "active"`,

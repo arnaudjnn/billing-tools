@@ -690,10 +690,16 @@ export {
 // handling `invoice.paid` itself must send byte-for-byte or Stripe's idempotency refuses
 // it; `finalizeOutsideWallet` is how a consumer raising its OWN credit invoice keeps Stripe
 // from settling it out of the wallet.
+// `finalizeSubscriptionDraft` and `withWalletSetAside` are the same guard for a consumer
+// handling `invoice.created` or raising a plan change itself; `paidFromWallet` is the
+// detection — what a paid invoice took from the wallet, which should always be 0.
 export {
   creditsOwedFor,
   finalizeOutsideWallet,
+  finalizeSubscriptionDraft,
   grantInvoiceCredits,
+  paidFromWallet,
+  withWalletSetAside,
   isCheckoutPaymentEvent,
   sellCredits,
   spendAlertRefusal,

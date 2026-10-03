@@ -770,21 +770,41 @@ export async function finalizeOutsideWallet(
   invoiceId: string,
   currency: string,
 ): Promise<Stripe.Invoice> {
+  return withWalletSetAside(stripeCustomerId, currency, invoiceId, () =>
+    getStripe().invoices.finalizeInvoice(invoiceId),
+  );
+}
+
+/**
+ * Run `fn` — any Stripe call that FINALIZES an invoice — with the wallet set aside.
+ *
+ * `finalizeOutsideWallet` is this around `finalizeInvoice`. It is separate because not every
+ * finalization is a `finalizeInvoice` call: an `always_invoice` plan change creates and
+ * finalizes its proration invoice inside `subscriptions.update`, so the set-aside has to
+ * wrap that call instead. `key` names the operation, so a retry neither sets aside nor
+ * restores twice.
+ */
+export async function withWalletSetAside<T>(
+  stripeCustomerId: string,
+  currency: string,
+  key: string,
+  fn: () => Promise<T>,
+): Promise<T> {
   const stripe = getStripe();
   const held = await getCreditBalance(stripeCustomerId, currency);
-  if (held <= 0) return stripe.invoices.finalizeInvoice(invoiceId);
+  if (held <= 0) return fn();
   await stripe.customers.createBalanceTransaction(
     stripeCustomerId,
     {
       amount: held,
       currency,
-      description: `Wallet set aside while ${invoiceId} is issued`,
-      metadata: { kind: "adjustment", set_aside_for: invoiceId },
+      description: `Wallet set aside while ${key} is issued`,
+      metadata: { kind: "adjustment", set_aside_for: key },
     },
-    { idempotencyKey: `wallet-aside:${invoiceId}` },
+    { idempotencyKey: `wallet-aside:${key}` },
   );
   try {
-    return await stripe.invoices.finalizeInvoice(invoiceId);
+    return await fn();
   } finally {
     // The restore is the customer's money: retried, and loud if it still fails.
     let restored = false;
@@ -796,10 +816,10 @@ export async function finalizeOutsideWallet(
           {
             amount: -held,
             currency,
-            description: `Wallet restored after ${invoiceId} was issued`,
-            metadata: { kind: "adjustment", restored_for: invoiceId },
+            description: `Wallet restored after ${key} was issued`,
+            metadata: { kind: "adjustment", restored_for: key },
           },
-          { idempotencyKey: `wallet-restore:${invoiceId}` },
+          { idempotencyKey: `wallet-restore:${key}` },
         );
         restored = true;
       } catch (e) {
@@ -808,11 +828,60 @@ export async function finalizeOutsideWallet(
     }
     if (!restored) {
       console.error(
-        `[billing] could not restore ${held} credits set aside for ${invoiceId} on ${stripeCustomerId}:`,
+        `[billing] could not restore ${held} credits set aside for ${key} on ${stripeCustomerId}:`,
         lastError,
       );
     }
   }
+}
+
+/**
+ * Finalize a SUBSCRIPTION invoice ourselves, outside the wallet, before Stripe does.
+ *
+ * A renewal (and a `create_prorations` change, and a scheduled downgrade) is created as a
+ * draft and auto-finalized by Stripe about an hour later — at which point the customer's
+ * credit balance, which is the wallet, pays it. Credits bought for usage then pay for seats,
+ * which is the credit-sale defect again on the largest recurring charge. So on
+ * `invoice.created` the draft is finalized here, with the wallet set aside, and Stripe's own
+ * auto-advance then collects it from the card.
+ *
+ * Idempotent: an invoice that is no longer a draft — already finalized by us, by Stripe, or
+ * by a concurrent delivery of the same event — is left alone. Both the webhook and the poller
+ * call this; whichever runs second finds nothing to do. Returns whether it finalized.
+ */
+export async function finalizeSubscriptionDraft(invoice: {
+  id?: string | null;
+  billing_reason?: string | null;
+}): Promise<boolean> {
+  if (!invoice.id || !invoice.billing_reason?.startsWith("subscription")) return false;
+  const stripe = getStripe();
+  const fresh = await stripe.invoices.retrieve(invoice.id);
+  if (fresh.status !== "draft") return false;
+  const customer = typeof fresh.customer === "string" ? fresh.customer : fresh.customer?.id;
+  if (!customer) return false;
+  try {
+    await finalizeOutsideWallet(customer, invoice.id, fresh.currency);
+    return true;
+  } catch (e) {
+    // Lost a race with another finalizer (Stripe's own, or a second delivery): fine, as
+    // long as the invoice really is no longer a draft. Anything else is a real failure.
+    const again = await stripe.invoices.retrieve(invoice.id);
+    if (again.status !== "draft") return false;
+    throw e;
+  }
+}
+
+/**
+ * Whether a PAID invoice was settled, in part, out of the wallet — `starting_balance < 0`.
+ *
+ * Every invoice this library finalizes sets the wallet aside, so this should never be true.
+ * When it is, a path escaped: a webhook and a poll both missed a renewal's one-hour draft
+ * window, or a Checkout-created first invoice (finalized by Checkout itself, where nothing
+ * can intervene). Detection, so it is visible rather than silent: `createBillingSync`
+ * reports it through `hooks.onPaidFromWallet` and the doctor lists recent ones.
+ */
+export function paidFromWallet(invoice: { starting_balance?: number | null }): number {
+  return invoice.starting_balance && invoice.starting_balance < 0 ? -invoice.starting_balance : 0;
 }
 
 export async function sellCredits(

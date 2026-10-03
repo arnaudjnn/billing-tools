@@ -91,6 +91,13 @@ export async function checkBillingSetup(opts: {
   /** Flag customers with more than one ACTIVE subscription (double billing).
    *  Default true. */
   expectSingleSubscription?: boolean;
+  /**
+   * How this deployment runs the event poller (`createBillingSync`): `false` for not at all,
+   * or its interval. It is the backstop for a missed `invoice.created` webhook, and a
+   * subscription draft is finalized by Stripe — against the wallet — about an hour after it
+   * is created, so a poll slower than that window protects nothing. Omitted: not checked.
+   */
+  sync?: false | { intervalMs?: number };
 } = {}): Promise<DoctorResult> {
   const stripe = getStripe();
   const checks: Check[] = [];
@@ -275,6 +282,46 @@ export async function checkBillingSetup(opts: {
           },
     );
   }
+
+  if (opts.sync !== undefined) {
+    const interval = opts.sync === false ? null : (opts.sync.intervalMs ?? 60_000);
+    checks.push(
+      interval !== null && interval < 30 * 60_000
+        ? { level: "ok", title: "Renewal backstop", detail: `event poller every ${Math.round(interval / 1000)}s` }
+        : {
+            level: "warn",
+            title: "Renewal backstop",
+            detail:
+              interval === null
+                ? "no event poller: a missed invoice.created webhook lets Stripe finalize a renewal against the wallet"
+                : `event poller every ${Math.round(interval / 60_000)} min — too slow to catch a renewal draft inside Stripe's ~1 h window`,
+            fix: "createBillingSync(...).start({ intervalMs: 60_000 }) — anything under 30 minutes",
+          },
+    );
+  }
+
+  // Invoices that were settled out of the wallet. Every invoice this library finalizes sets
+  // the wallet aside, so any found here escaped — a renewal whose draft window both the
+  // webhook and the poller missed, or a first invoice Checkout finalized itself. Each one is
+  // revenue taken as credits, which is why it is an error and not a warning.
+  const fromWallet: string[] = [];
+  for await (const inv of stripe.invoices.list({ status: "paid", limit: 100 })) {
+    const sells = inv.billing_reason?.startsWith("subscription") || Number(inv.metadata?.credits) > 0;
+    if (sells && (inv.starting_balance ?? 0) < 0) {
+      fromWallet.push(`${inv.id} (${-(inv.starting_balance ?? 0)} credits)`);
+    }
+    if (fromWallet.length >= 10) break;
+  }
+  checks.push(
+    fromWallet.length === 0
+      ? { level: "ok", title: "Invoices paid from the wallet", detail: "none in the last 100 paid invoices" }
+      : {
+          level: "error",
+          title: "Invoices paid from the wallet",
+          detail: fromWallet.join(", "),
+          fix: "Reconcile each by hand (the customer paid that much less in cash). Then check the webhook delivers invoice.created and the poller runs under 30 min",
+        },
+  );
 
   if (opts.webhookUrl) {
     const all = (await stripe.webhookEndpoints.list({ limit: 100 })).data;
@@ -968,6 +1015,8 @@ export interface RunDoctorOptions {
    *  when the app mounts the MCP OAuth proxy, which is what makes
    *  `REFRESH_TOKEN_SECRET` required. Omit to skip. */
   workos?: boolean | { oauthProxy?: boolean };
+  /** How the event poller runs — see `checkBillingSetup`'s `sync`. */
+  sync?: false | { intervalMs?: number };
   /** Defaults to `process.argv.slice(2)`. */
   argv?: string[];
   /** Defaults to `process.exit`. Injectable so this is testable. */
@@ -1023,7 +1072,7 @@ export async function runBillingDoctor(opts: RunDoctorOptions = {}): Promise<voi
   // so a Stripe outage does not cost us the comparison.
   let stripeLivemode: boolean | undefined;
   try {
-    const result = await checkBillingSetup({ webhookUrl, config: opts.config });
+    const result = await checkBillingSetup({ webhookUrl, config: opts.config, sync: opts.sync });
     stripeLivemode = result.livemode;
     const account = formatDoctorResult(result);
     log(account.text);

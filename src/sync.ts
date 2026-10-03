@@ -1,6 +1,14 @@
 import type Stripe from "stripe";
 import { pollStripeEvents, pollWorkOSEvents, type PollResult } from "./events.js";
-import { creditsOwedFor, grantCredits, grantInvoiceCredits, getStripe, isCheckoutPaymentEvent } from "./billing.js";
+import {
+  creditsOwedFor,
+  finalizeSubscriptionDraft,
+  grantCredits,
+  grantInvoiceCredits,
+  getStripe,
+  isCheckoutPaymentEvent,
+  paidFromWallet,
+} from "./billing.js";
 import {
   grantFor,
   planForPriceId,
@@ -71,6 +79,11 @@ export interface BillingSyncOptions {
     /** Extra app-specific cleanup when a WorkOS user is deleted (the user
      *  mirror row is already removed). */
     onUserDeleted?(workosUserId: string): Promise<void>;
+    /** A PAID subscription invoice was settled partly from the wallet (`starting_balance <
+     *  0`): its draft was finalized by Stripe before this library could set the wallet
+     *  aside, or Checkout finalized it. `credits` is how much of the wallet it took.
+     *  Default: logged as an error — it is revenue taken as credits, never silent. */
+    onPaidFromWallet?(info: { orgId: string | null; invoiceId: string; credits: number }): Promise<void> | void;
     /** A subscription invoice failed to collect (dunning). The org's status is
      *  already set to `past_due`; use this to notify the user / gate access.
      *  Stripe Smart Retries + the card-updater keep retrying automatically. */
@@ -125,10 +138,17 @@ export const PAYMENT_EVENT_TYPES = [
 // stale row, not a lost payment. Polling suits it — no endpoint, no signing
 // secret, and it self-heals, because each event re-asserts current state rather
 // than applying a delta.
+//
+// One exception, and it is money: `invoice.created`. A subscription invoice is a DRAFT for
+// about an hour before Stripe finalizes it against the customer's credit balance — the
+// wallet — so it has to be finalized first, outside the wallet (`finalizeSubscriptionDraft`).
+// The webhook does it; the poller is the backstop for a missed delivery, which only works if
+// it polls well inside that hour. Keep the interval under 30 minutes; the doctor warns at 30.
 export const SYNC_EVENT_TYPES = [
   "customer.subscription.created",
   "customer.subscription.updated",
   "customer.subscription.deleted",
+  "invoice.created",
 ];
 const WORKOS_EVENTS = [
   "organization.updated",
@@ -278,6 +298,11 @@ export function createStripeEventHandler(opts: {
       return;
     }
 
+    if (event.type === "invoice.created") {
+      await finalizeSubscriptionDraft(event.data.object as Stripe.Invoice);
+      return;
+    }
+
     if (event.type === "invoice.paid") {
       const invoice = event.data.object as Stripe.Invoice & {
         subscription?: string | null;
@@ -293,6 +318,14 @@ export function createStripeEventHandler(opts: {
         // One request for every path that grants this invoice — see `grantInvoiceCredits`.
         await grantInvoiceCredits(invoice, opts.currency ?? "usd");
         return;
+      }
+      const fromWallet = invoice.billing_reason?.startsWith("subscription")
+        ? paidFromWallet(invoice as { starting_balance?: number | null })
+        : 0;
+      if (fromWallet > 0) {
+        const info = { orgId: subscriptionRefOf(invoice).orgId, invoiceId: invoice.id!, credits: fromWallet };
+        if (opts.hooks?.onPaidFromWallet) await opts.hooks.onPaidFromWallet(info);
+        else console.error(`[billing] subscription invoice ${info.invoiceId} was paid ${fromWallet} credits from the wallet`, info);
       }
       if (invoice.billing_reason !== "subscription_create" && invoice.billing_reason !== "subscription_cycle") return;
       const ref = subscriptionRefOf(invoice);

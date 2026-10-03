@@ -20,13 +20,16 @@ import { getStripe } from "./billing.js";
 /**
  * The events the webhook must deliver: the ones that move money.
  *
- * Mirrors PAYMENT_EVENT_TYPES in sync.ts. Subscription state is deliberately
- * absent — it's a projection the poller mirrors, and a minute of staleness there
- * costs nothing, whereas a missed credit is a customer who paid and got nothing.
+ * Mirrors PAYMENT_EVENT_TYPES in sync.ts, plus `invoice.created`: a subscription draft
+ * must be finalized outside the wallet before Stripe finalizes it against it, and that
+ * is the event that says one exists. Subscription state is deliberately absent — it's a
+ * projection the poller mirrors, and a minute of staleness there costs nothing, whereas
+ * a missed credit is a customer who paid and got nothing.
  */
 export const BILLING_WEBHOOK_EVENTS = [
   "checkout.session.completed",
   "checkout.session.async_payment_succeeded",
+  "invoice.created",
   "invoice.paid",
   "invoice.payment_failed",
 ] as const satisfies readonly Stripe.WebhookEndpointCreateParams.EnabledEvent[];

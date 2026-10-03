@@ -1,6 +1,6 @@
 import type Stripe from "stripe";
 import {
-  getStripe, grantCredits, grantInvoiceCredits, isCheckoutPaymentEvent } from "../billing.js";
+  finalizeSubscriptionDraft, getStripe, grantCredits, grantInvoiceCredits, isCheckoutPaymentEvent } from "../billing.js";
 
 // Stripe webhook handler. Grants credits on one-time top-up completion.
 // Subscription events are intentionally NOT handled here — subscription/plan
@@ -100,6 +100,12 @@ export function createStripeWebhookHandler(opts: WebhookOptions = {}) {
           );
         }
       }
+    } else if (event.type === "invoice.created") {
+      // Money, so handled HERE rather than left to `onOtherEvent`: a subscription draft is
+      // finalized outside the wallet before Stripe finalizes it against it an hour from now.
+      // Idempotent, so the poller (or an `onOtherEvent` running the same handler) is a no-op.
+      await finalizeSubscriptionDraft(event.data.object as Stripe.Invoice);
+      await opts.onOtherEvent?.(event);
     } else if (event.type === "invoice.paid" && creditsOn(event)) {
       // An invoice this library SENT for a credit purchase — `collection_method:
       // send_invoice`, which arrives with `billing_reason: "manual"`. Every other crediting

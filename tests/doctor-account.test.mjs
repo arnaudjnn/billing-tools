@@ -40,6 +40,7 @@ function fakeStripe({
   // first version of this fake missed.
   taxSettings = { status: "active", head_office: { address: { country } } },
   taxRegistrations = [{ country, status: "active" }],
+  invoices = [],
 } = {}) {
   return {
     tax: {
@@ -48,7 +49,7 @@ function fakeStripe({
     },
     accounts: { retrieve: async () => ({ id: "acct_1", country }) },
     customers: { list: paged(customers) },
-    invoices: { list: paged([]) },
+    invoices: { list: paged(invoices) },
     subscriptions: { list: paged([]) },
     paymentMethods: { list: async () => ({ data: [] }) },
     prices: { list: async () => ({ data: prices }) },
@@ -208,4 +209,50 @@ test("an undeclared origin on a non-European account is an ERROR, not a warning"
     find(await checkBillingSetup({ config: config({ mode: "none" }) }), "Tax origin"),
     undefined,
   );
+});
+
+// ── wallet-paid invoices and the renewal backstop ────────────────────────────
+//
+// Every invoice the library finalizes sets the wallet aside, so a paid one with
+// `starting_balance < 0` escaped: a renewal whose draft both the webhook and the poller
+// missed, or a first invoice Checkout finalized itself. It is revenue taken as credits, so
+// it is an error — and the poller is only a backstop if it runs inside Stripe's ~1 h draft
+// window, so a slow or absent one is a warning.
+
+const byTitle = (r, t) => r.checks.find((c) => c.title === t);
+
+test("a paid renewal or credit sale settled from the wallet is an ERROR, by id", async () => {
+  __setStripeForTests(
+    fakeStripe({
+      invoices: [
+        { id: "in_renew", status: "paid", billing_reason: "subscription_cycle", starting_balance: -1500, metadata: {}, lines: { data: [] } },
+        { id: "in_sale", status: "paid", billing_reason: "manual", starting_balance: -200, metadata: { credits: "1000" }, lines: { data: [] } },
+        // Not ours to judge: a manual invoice the app raised for something else.
+        { id: "in_other", status: "paid", billing_reason: "manual", starting_balance: -50, metadata: {}, lines: { data: [] } },
+        { id: "in_clean", status: "paid", billing_reason: "subscription_cycle", starting_balance: 0, metadata: {}, lines: { data: [] } },
+      ],
+    }),
+  );
+  const r = await checkBillingSetup({ taxMode: "none" });
+  const c = byTitle(r, "Invoices paid from the wallet");
+  assert.equal(c.level, "error");
+  assert.match(c.detail, /in_renew \(1500 credits\)/);
+  assert.match(c.detail, /in_sale \(200 credits\)/);
+  assert.doesNotMatch(c.detail, /in_other|in_clean/);
+});
+
+test("none found is an ok line", async () => {
+  __setStripeForTests(fakeStripe());
+  const r = await checkBillingSetup({ taxMode: "none" });
+  assert.equal(byTitle(r, "Invoices paid from the wallet").level, "ok");
+});
+
+test("the renewal backstop: no poller, or one at 30 min or slower, is a warning", async () => {
+  __setStripeForTests(fakeStripe());
+  const level = async (sync) => byTitle(await checkBillingSetup({ taxMode: "none", sync }), "Renewal backstop")?.level;
+  assert.equal(await level(false), "warn");
+  assert.equal(await level({ intervalMs: 30 * 60_000 }), "warn");
+  assert.equal(await level({ intervalMs: 60_000 }), "ok");
+  assert.equal(await level({}), "ok", "the default interval is 60 s");
+  assert.equal(await level(undefined), undefined, "not said, not checked");
 });

@@ -72,6 +72,13 @@ function fakeStripe({
     updates,
     released,
     scheduleUpdates,
+    // An empty wallet: an `invoice_now` change reads it to set it aside (see
+    // tests/subscription-cash.test.mjs), and with nothing in it there is nothing to move.
+    customers: {
+      async retrieve(id) {
+        return { id, deleted: false, balance: 0, currency: "eur", metadata: {} };
+      },
+    },
     subscriptions: {
       async *list() {
         yield {
@@ -581,6 +588,11 @@ const SEAT_PLANS = {
 function seatWorld({ boughtNow = 4 } = {}) {
   const recorded = [];
   const stripe = {
+    customers: {
+      async retrieve(id) {
+        return { id, deleted: false, balance: 0, currency: "eur", metadata: {} };
+      },
+    },
     subscriptions: {
       async *list() {
         yield {
