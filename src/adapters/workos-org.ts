@@ -78,6 +78,45 @@ export interface WorkOSOrgAdapterOptions {
 // `setBillingCustomerId` writes through, and `forget` exists for the rest.
 const CACHE_MAX = 2_000;
 
+/** WorkOS's per-org metadata key limit, validated on the MERGED object. */
+const ORG_METADATA_MAX_KEYS = 10;
+/** What a write must never lose to the budget: subscription state and the pending plan. */
+const ESSENTIAL_ORG_KEYS = new Set([
+  "subscriptionStatus",
+  "stripeSubscriptionId",
+  "subscriptionPeriodStart",
+  "subscriptionPeriodEnd",
+  "plan",
+  "subscriptionSeatCounts",
+  "subscriptionSeats",
+  "pendingPlan",
+  "pendingPlanAt",
+  "stripeCustomerId",
+]);
+/** The one key evicted to make room for an essential write: alert dedupe records, whose
+ *  loss can at worst re-send an alert. Never the request queues — they hold open asks. */
+const EVICTABLE_ORG_KEY = "btAlerts";
+/** Legacy org maps superseded by per-member stores — see `seats.ts` and `topup.ts`. */
+const LEGACY_SEATS_KEY = "seatAssignments";
+const LEGACY_GRANTS_KEY = "topUpGrants";
+const MEMBER_SEATS_KEY = "btSeatType";
+const MEMBER_GRANTS_KEY = "btTopUpGrants";
+
+/** A metadata write refused because the org has no key left for it. */
+export class MetadataBudgetError extends Error {
+  constructor(
+    readonly orgId: string,
+    readonly keys: string[],
+    readonly wouldHold: number,
+  ) {
+    super(
+      `Organization ${orgId} metadata is full (${wouldHold} of ${ORG_METADATA_MAX_KEYS} keys): ` +
+        `could not store ${keys.join(", ")}. Remove keys the app no longer reads.`,
+    );
+    this.name = "MetadataBudgetError";
+  }
+}
+
 function remember(cache: Map<string, string>, key: string, value: string): string {
   // A plain FIFO cap. An LRU would be better and is not worth a dependency for
   // a map of id strings that is only unbounded in theory.
@@ -433,12 +472,7 @@ export class WorkOSOrgAdapter implements BillingAdapter {
     // Retired in favour of the key above; cleared so it cannot be read as a stale
     // total after seats change, and so the key budget goes back to nine.
     set("subscriptionSeats", null);
-    await this.workos.organizations.updateOrganization({
-      organization: wid,
-      // The SDK types metadata as Record<string, string>; the API accepts and
-      // REQUIRES null for deletion. Typed around, deliberately.
-      metadata: metadata as unknown as Record<string, string>,
-    });
+    await this.writeOrgMetadata(orgId, wid, metadata);
   }
 
   // ── Metering support (org metadata as the store; no separate DB) ───────────
@@ -455,10 +489,137 @@ export class WorkOSOrgAdapter implements BillingAdapter {
     const wid = await this.wid(orgId);
     const metadata: Record<string, string | null> = {};
     for (const [k, v] of Object.entries(patch)) metadata[k] = v === null || v === "" ? null : v;
-    await this.workos.organizations.updateOrganization({
-      organization: wid,
-      metadata: metadata as unknown as Record<string, string>,
-    });
+    await this.writeOrgMetadata(orgId, wid, metadata);
+  }
+
+  /**
+   * Every org metadata write, kept inside WorkOS's 10-KEY budget.
+   *
+   * WorkOS validates the MERGED object, so an org already holding ten keys refuses ANY write
+   * that adds one — and the subscription sync shares that object with the request queue, the
+   * alert ledger and whatever the app stores. Counted, the library's own keys alone reach
+   * eleven on an org that has been through every feature, so this was a matter of time:
+   *
+   *   1. LEGACY keys are migrated out first. `seatAssignments` and `topUpGrants` predate the
+   *      per-member stores and are only ever READ now; each entry a member does not already
+   *      have is copied onto that member, and the org key is deleted. Read semantics are
+   *      unchanged (the member's own record always won), and the two keys stop counting.
+   *   2. If the write would still overflow, the ESSENTIAL part goes first — subscription
+   *      state, the pending plan, deletions — evicting the alert ledger if that is what it
+   *      takes (losing it can at worst re-send an alert). The rest is then written if it
+   *      fits, and otherwise refused with `MetadataBudgetError` naming the key: one feature
+   *      fails loudly instead of the whole update failing silently.
+   */
+  private async writeOrgMetadata(
+    orgId: string,
+    wid: string,
+    patch: Record<string, string | null>,
+  ): Promise<void> {
+    const org = await this.workos.organizations.getOrganization(wid);
+    const current = ((org.metadata ?? {}) as Record<string, string>);
+    const migrated = await this.migrateLegacyKeys(orgId, current);
+    const full: Record<string, string | null> = { ...migrated, ...patch };
+
+    const keysAfter = (base: Record<string, string>, p: Record<string, string | null>) => {
+      const keys = new Set(Object.keys(base));
+      for (const [k, v] of Object.entries(p)) (v === null ? keys.delete(k) : keys.add(k));
+      return keys;
+    };
+    const send = (p: Record<string, string | null>) =>
+      this.workos.organizations.updateOrganization({
+        organization: wid,
+        // The SDK types metadata as Record<string, string>; the API accepts and REQUIRES
+        // null for deletion. Typed around, deliberately.
+        metadata: p as unknown as Record<string, string>,
+      });
+
+    if (keysAfter(current, full).size <= ORG_METADATA_MAX_KEYS) {
+      if (Object.keys(full).length) await send(full);
+      return;
+    }
+
+    const essential: Record<string, string | null> = {};
+    const optional: Record<string, string | null> = {};
+    for (const [k, v] of Object.entries(full)) {
+      (v === null || ESSENTIAL_ORG_KEYS.has(k) ? essential : optional)[k] = v;
+    }
+    let after = keysAfter(current, essential);
+    if (after.size > ORG_METADATA_MAX_KEYS && after.has(EVICTABLE_ORG_KEY) && !(EVICTABLE_ORG_KEY in full)) {
+      essential[EVICTABLE_ORG_KEY] = null;
+      after = keysAfter(current, essential);
+    }
+    if (after.size > ORG_METADATA_MAX_KEYS) {
+      throw new MetadataBudgetError(orgId, Object.keys(essential).filter((k) => essential[k] !== null), after.size);
+    }
+    if (Object.keys(essential).length) await send(essential);
+    if (!Object.keys(optional).length) return;
+    const final = keysAfter(Object.fromEntries([...after].map((k) => [k, "x"])), optional);
+    if (final.size > ORG_METADATA_MAX_KEYS) {
+      throw new MetadataBudgetError(orgId, Object.keys(optional), final.size);
+    }
+    await send(optional);
+  }
+
+  /**
+   * Copy the two legacy org maps onto their members, and return the deletions to send.
+   *
+   * Only entries a member does not already hold are copied: the member's own record has
+   * always won on read (`listSeatAssignments`, `readGrant`), so copying one over it would
+   * change an answer. A failed member write leaves the org key in place — nothing is
+   * deleted that was not first copied.
+   */
+  private async migrateLegacyKeys(
+    orgId: string,
+    current: Record<string, string>,
+  ): Promise<Record<string, string | null>> {
+    const out: Record<string, string | null> = {};
+    const parse = <T>(raw: string | undefined): T | null => {
+      try {
+        return raw ? (JSON.parse(raw) as T) : null;
+      } catch {
+        return null;
+      }
+    };
+
+    const seats = parse<Record<string, string>>(current[LEGACY_SEATS_KEY]);
+    if (current[LEGACY_SEATS_KEY] !== undefined) {
+      try {
+        for (const [memberId, seat] of Object.entries(seats ?? {})) {
+          const md = await this.getUserMetadata(memberId);
+          const mine = parse<Record<string, string>>(md[MEMBER_SEATS_KEY]) ?? {};
+          if (mine[orgId] !== undefined) continue;
+          mine[orgId] = seat;
+          await this.setUserMetadata(memberId, { [MEMBER_SEATS_KEY]: JSON.stringify(mine) });
+        }
+        out[LEGACY_SEATS_KEY] = null;
+      } catch (e) {
+        console.error(`[billing] could not migrate ${LEGACY_SEATS_KEY} for ${orgId}; kept`, e);
+      }
+    }
+
+    const grants = parse<Record<string, Record<string, number>>>(current[LEGACY_GRANTS_KEY]);
+    if (current[LEGACY_GRANTS_KEY] !== undefined) {
+      try {
+        for (const [memberId, byCycle] of Object.entries(grants ?? {})) {
+          const md = await this.getUserMetadata(memberId);
+          const mine = parse<Record<string, Record<string, number>>>(md[MEMBER_GRANTS_KEY]) ?? {};
+          const own = { ...(mine[orgId] ?? {}) };
+          let changed = false;
+          for (const [cycle, credits] of Object.entries(byCycle ?? {})) {
+            if (own[cycle] != null) continue;
+            own[cycle] = credits;
+            changed = true;
+          }
+          if (!changed) continue;
+          mine[orgId] = own;
+          await this.setUserMetadata(memberId, { [MEMBER_GRANTS_KEY]: JSON.stringify(mine) });
+        }
+        out[LEGACY_GRANTS_KEY] = null;
+      } catch (e) {
+        console.error(`[billing] could not migrate ${LEGACY_GRANTS_KEY} for ${orgId}; kept`, e);
+      }
+    }
+    return out;
   }
 
   /**

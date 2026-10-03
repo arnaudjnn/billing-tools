@@ -1262,6 +1262,39 @@ export async function checkWorkOSSetup(opts: {
     }
   }
 
+  // The org metadata KEY budget. WorkOS allows 10 keys per org and validates the merged
+  // object, so an org at the ceiling fails a metadata write — the adapter writes the
+  // subscription fields first and refuses only the non-essential key (`MetadataBudgetError`),
+  // but an org at 9 is one new key from that refusal, and worth seeing before it happens.
+  if (apiKey) {
+    try {
+      const crowded: string[] = [];
+      let scanned = 0;
+      const list = await getWorkOS().organizations.listOrganizations({ limit: 100 });
+      for (const org of await list.autoPagination()) {
+        const n = Object.keys((org.metadata ?? {}) as Record<string, string>).length;
+        if (n >= 9) crowded.push(`${org.id} (${n} keys)`);
+        if (++scanned >= 1000) break;
+      }
+      checks.push(
+        crowded.length === 0
+          ? { level: "ok", title: "Org metadata key budget", detail: `no org at 9+ of 10 keys (${scanned} scanned)` }
+          : {
+              level: "warn",
+              title: "Org metadata key budget",
+              detail: `${crowded.length} org(s) at 9+ of WorkOS's 10 keys: ${crowded.slice(0, 10).join(", ")}`,
+              fix: "Remove keys the app no longer reads. The library migrates its own legacy keys (seatAssignments, topUpGrants) to per-member metadata on the next write",
+            },
+      );
+    } catch (e) {
+      checks.push({
+        level: "warn",
+        title: "Org metadata key budget",
+        detail: `could not be read: ${e instanceof Error ? e.message : String(e)}`,
+      });
+    }
+  }
+
   // The roles this library's own gate depends on. `isAdmin` asks whether a member's
   // role slug is ADMIN_ROLE_SLUG, so an environment without that role refuses every
   // admin-gated tool for every human — and org API keys are unaffected, which is why
