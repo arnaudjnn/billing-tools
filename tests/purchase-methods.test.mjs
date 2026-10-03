@@ -29,13 +29,15 @@ function fakeStripe({
   /** What Stripe ate off the customer's balance to settle the invoice, in minor
    *  units — negative, exactly as `starting_balance` reports it. */
   startingBalance = 0,
+  /** Credits in the wallet (a NEGATIVE Stripe balance). */
+  walletBalance = 0,
 } = {}) {
   const calls = { items: [], invoices: [], paid: [], finalized: [], sent: [], credits: [], sessions: [] };
   return {
     calls,
     customers: {
       async retrieve() {
-        return { deleted: false, email, balance: 0, currency: "eur", metadata: {} };
+        return { deleted: false, email, balance: -walletBalance, currency: "eur", metadata: {} };
       },
       async createBalanceTransaction(_c, params, opts) {
         calls.credits.push({ ...params, key: opts?.idempotencyKey });
@@ -97,21 +99,27 @@ test("saved_card charges the card on file and credits, with no URL anywhere", as
   assert.equal(s.calls.credits[0].key, "credit:invoice:in_1");
 });
 
-test("a saved-card purchase repays the credits the invoice ATE", async () => {
-  // Stripe applies the customer's credit balance to any invoice it finalizes,
-  // and this library's wallet IS that balance. Measured headless against a real
-  // account: a customer holding 100 credits bought 2 000, paid the full $20,
-  // and ended on 2 000 — their 100 silently gone. The webhook path already
-  // corrected for this (`creditsOwedFor`); the synchronous off-session credit,
-  // which runs FIRST and owns the idempotency key, did not.
-  const s = fakeStripe({ cards: [{ id: "pm_1" }], startingBalance: -100 });
+test("a saved-card purchase is never settled from the wallet", async () => {
+  // Stripe applies the customer's credit balance to any invoice it finalizes, and this
+  // library's wallet IS that balance. This used to be "repaid" by granting the eaten
+  // credits back — which kept the wallet right and the CASH wrong: the card was charged
+  // less and the credits came back for free. Now the wallet is set aside while the invoice
+  // is finalized, so the card pays the whole price and the grant is what was sold.
+  const s = fakeStripe({ cards: [{ id: "pm_1" }], walletBalance: 100 });
   __setStripeForTests(s);
 
   const out = await purchaseCredits("cus_1", "org_1", 20, config, { method: "saved_card", tax: noTax });
 
   assert.equal(out.status, "charged");
-  assert.equal(out.credits, 2000, "what was SOLD is what the caller is told");
-  assert.equal(s.calls.credits[0].amount, -2100, "what is GRANTED is the sale plus what was eaten");
+  assert.deepEqual(
+    s.calls.credits.map((c) => [c.amount, c.key]),
+    [
+      [100, "wallet-aside:in_1"],
+      [-100, "wallet-restore:in_1"],
+      [-2000, "credit:invoice:in_1"],
+    ],
+  );
+  assert.deepEqual(s.calls.finalized, ["in_1"], "finalized explicitly, inside the set-aside");
 });
 
 test("…and refuses with the other method named when there is no card", async () => {

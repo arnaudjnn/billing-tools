@@ -1,6 +1,6 @@
 import type Stripe from "stripe";
 import {
-  creditsOwedFor, getStripe, grantCredits, isCheckoutPaymentEvent } from "../billing.js";
+  getStripe, grantCredits, grantInvoiceCredits, isCheckoutPaymentEvent } from "../billing.js";
 
 // Stripe webhook handler. Grants credits on one-time top-up completion.
 // Subscription events are intentionally NOT handled here — subscription/plan
@@ -105,22 +105,9 @@ export function createStripeWebhookHandler(opts: WebhookOptions = {}) {
       // send_invoice`, which arrives with `billing_reason: "manual"`. Every other crediting
       // branch, here and in `createStripeEventHandler`, filters that reason out, so an
       // emailed invoice was paid by the customer and credited to nobody.
-      const invoice = event.data.object as Stripe.Invoice & { customer?: string | null };
-      const customerId = customerIdOf(invoice.customer as string | { id: string });
-      // What was SOLD, plus whatever the customer's own balance was made to pay — see
-      // `creditsOwedFor`. Without the second half, buying credits destroys credits.
-      const credits = creditsOwedFor(invoice);
-      if (customerId && credits) {
-        await grantCredits(
-          customerId,
-          credits,
-          `Purchase: ${credits} credits by invoice`,
-          currency,
-          // The same key the off-session path uses, so a charge already credited
-          // synchronously cannot be credited again by its event.
-          `credit:invoice:${invoice.id}`,
-        );
-      }
+      // The same request the off-session path sent, so a charge already credited
+      // synchronously is a no-op here — see `grantInvoiceCredits`.
+      await grantInvoiceCredits(event.data.object as Stripe.Invoice, currency);
       await opts.onOtherEvent?.(event);
     } else if (opts.onOtherEvent) {
       await opts.onOtherEvent(event);

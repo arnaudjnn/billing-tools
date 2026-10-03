@@ -59,6 +59,10 @@ function fakeStripe() {
         calls.push({ name: "invoice", params, key: opts?.idempotencyKey });
         return { id: "in_1", status: "draft" };
       },
+      async finalizeInvoice(id) {
+        calls.push({ name: "finalize", params: { id } });
+        return { id, status: "open" };
+      },
       async pay(id) {
         calls.push({ name: "pay", params: { id } });
         return { id, status: "paid" };

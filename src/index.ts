@@ -686,7 +686,18 @@ export {
 // credits somebody paid for. `isCheckoutPaymentEvent` for the same reason on the Checkout
 // side: a consumer crediting a top-up itself must credit it on the event that carries the
 // money, which for a delayed method is not `checkout.session.completed`.
-export { creditsOwedFor, isCheckoutPaymentEvent, sellCredits, spendAlertRefusal } from "./billing.js";
+// `grantInvoiceCredits` is the one grant request for a credit invoice, which a consumer
+// handling `invoice.paid` itself must send byte-for-byte or Stripe's idempotency refuses
+// it; `finalizeOutsideWallet` is how a consumer raising its OWN credit invoice keeps Stripe
+// from settling it out of the wallet.
+export {
+  creditsOwedFor,
+  finalizeOutsideWallet,
+  grantInvoiceCredits,
+  isCheckoutPaymentEvent,
+  sellCredits,
+  spendAlertRefusal,
+} from "./billing.js";
 export { markPlanQuoteAccepted, quotePlanRequest } from "./plan-request.js";
 export {
   currentOperatorToken,

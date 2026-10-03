@@ -68,6 +68,10 @@ function fakeStripe({ balance = 0, cards = ["pm_1"] } = {}) {
         calls.push({ name: "invoice", params, key: opts?.idempotencyKey });
         return once(opts?.idempotencyKey, () => ({ id: "in_1", status: "draft" }));
       },
+      async finalizeInvoice(id) {
+        calls.push({ name: "finalize", params: { id } });
+        return { id, status: "open" };
+      },
       async pay(id) {
         calls.push({ name: "pay", params: { id } });
         return { id, status: "paid" };
@@ -161,9 +165,10 @@ test("concurrent triggers charge once", async () => {
   const keys = new Set(stripe.of("invoice").map((c) => c.key));
   assert.equal(keys.size, 1, "all racers must share one idempotency key");
   assert.ok(stripe.of("invoice")[0].key, "the invoice must carry an idempotency key");
-  assert.ok(stripe.of("credit")[0].key, "the credit must carry one too");
-  const creditKeys = new Set(stripe.of("credit").map((c) => c.key));
-  assert.equal(creditKeys.size, 1);
+  // The GRANT, not the wallet set-aside/restore around finalization (also balance txns).
+  const grants = stripe.of("credit").filter((c) => c.key?.startsWith("credit:"));
+  assert.ok(grants.length > 0 && grants.every((c) => c.key), "the credit must carry one too");
+  assert.deepEqual([...new Set(grants.map((c) => c.key))], ["credit:invoice:in_1"]);
 });
 
 test("nothing happens above the threshold, or with no card", async () => {
@@ -177,4 +182,37 @@ test("nothing happens above the threshold, or with no card", async () => {
   __setStripeForTests(cardless);
   await tryAutoReload("cus_1", "eur");
   assert.equal(cardless.of("invoice").length, 0);
+});
+
+test("the reload is finalized with the wallet set aside, then restored — never paid from it", async () => {
+  // REGRESSION (measured in Stripe TEST): a reload fires while the wallet still holds
+  // credits, and Stripe applies that balance at finalization, so a 1 902-credit reload on
+  // a wallet of 12 998 charged the card nothing — and was then granted twice.
+  const stripe = fakeStripe({ balance: 50 });
+  const { tryAutoReload, __setStripeForTests } = await import("../dist/billing.js");
+  __setStripeForTests(stripe);
+
+  await tryAutoReload("cus_1", "eur");
+
+  const order = stripe.calls.map((c) => c.name === "credit" ? `credit:${c.params.amount}` : c.name);
+  assert.deepEqual(order.slice(order.indexOf("invoice")), [
+    "invoice",
+    "credit:50", // set aside: wallet to zero
+    "finalize",
+    "credit:-50", // restored
+    "pay",
+    "credit:-950", // the reload itself, once
+  ]);
+  const [aside, restore] = stripe.of("credit").filter((c) => c.params.metadata?.kind === "adjustment");
+  assert.equal(aside.key, "wallet-aside:in_1");
+  assert.equal(restore.key, "wallet-restore:in_1");
+});
+
+test("an empty wallet is not set aside at all", async () => {
+  const stripe = fakeStripe({ balance: 0 });
+  const { tryAutoReload, __setStripeForTests } = await import("../dist/billing.js");
+  __setStripeForTests(stripe);
+  await tryAutoReload("cus_1", "eur");
+  assert.equal(stripe.of("credit").filter((c) => c.params.metadata?.kind === "adjustment").length, 0);
+  assert.equal(stripe.of("finalize").length, 1);
 });

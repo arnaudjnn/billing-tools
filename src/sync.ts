@@ -1,6 +1,6 @@
 import type Stripe from "stripe";
 import { pollStripeEvents, pollWorkOSEvents, type PollResult } from "./events.js";
-import { creditsOwedFor, grantCredits, getStripe, isCheckoutPaymentEvent } from "./billing.js";
+import { creditsOwedFor, grantCredits, grantInvoiceCredits, getStripe, isCheckoutPaymentEvent } from "./billing.js";
 import {
   grantFor,
   planForPriceId,
@@ -289,19 +289,9 @@ export function createStripeEventHandler(opts: {
       // It is not a subscription grant, so it is settled here and returns — before the
       // reason filter below, which is what dropped it entirely: the customer paid the
       // invoice Stripe emailed them and nothing credited the wallet.
-      // Sold PLUS eaten: Stripe settles an invoice out of the customer's credit balance,
-      // and that balance is this library's wallet. See `creditsOwedFor`.
-      const purchased = creditsOwedFor(invoice);
-      if (purchased > 0 && invoice.customer) {
-        await grantCredits(
-          invoice.customer,
-          purchased,
-          `Purchase: ${purchased} credits by invoice`,
-          opts.currency ?? "usd",
-          // Shared with the off-session path, so a charge credited synchronously is not
-          // credited a second time when its event lands.
-          `credit:invoice:${invoice.id}`,
-        );
+      if (creditsOwedFor(invoice) > 0 && invoice.customer) {
+        // One request for every path that grants this invoice — see `grantInvoiceCredits`.
+        await grantInvoiceCredits(invoice, opts.currency ?? "usd");
         return;
       }
       if (invoice.billing_reason !== "subscription_create" && invoice.billing_reason !== "subscription_cycle") return;

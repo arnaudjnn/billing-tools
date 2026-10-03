@@ -672,16 +672,20 @@ declaration both come off that one object, so neither can be a second answer: ma
 ride the ITEM, `automatic_tax` rides the invoice, exactly as `purchaseCredits` does. Measured
 live in `scripts/live/13-*.mjs` at €4 200 → €5 124 with `22% "IVA"` on the rate.
 
-**An invoice EATS the customer's own credits, and `creditsOwedFor` is what gives them back.**
+**An invoice EATS the customer's own credits, so the wallet is SET ASIDE while one is finalized (`finalizeOutsideWallet`).**
 Stripe applies a customer's credit balance to any invoice it finalizes, and this library's
-wallet IS that balance. Measured on a real account: a €4 200 sale of 600 000 credits came out
-`subtotal 420000, starting_balance -500, amount_due 419500, ending_balance 0` — the customer
-would have paid €5 less and LOST the 500 credits they were already holding, which is the one
-outcome nobody would agree to. There is no per-invoice flag to refuse it, so the fix is on
-the other side: `invoice.paid` grants what was sold PLUS what the invoice consumed. The rule
-lives beside `grantCredits` because it belongs to every invoiced purchase — a quote, a
-`buy_credits --method invoice`, an auto-reload — not to the quote path that happened to
-expose it.
+wallet IS that balance; there is no per-invoice flag to refuse it. The first answer was to grant
+back what the invoice ate (`sold + eaten`), which fixed the wallet and lost the CASH: measured in
+Stripe TEST, a €70 quote on a wallet of 2 999 charged the card €40.01 and re-granted the 2 999,
+and an auto-reload on a full wallet charged €0. So every invoice this library raises is now
+finalized with the balance zeroed by an `adjustment` and restored straight after (keyed on the
+invoice; the usage ledger skips `kind: "adjustment"`), and `creditsOwedFor` grants what was SOLD.
+The price is a window one finalize call long in which a metered call reads an empty wallet.
+**Assert the cash, not the wallet**: `amount_paid === total` and no `applied_to_invoice`
+transaction (`tests/credit-sale-cash.test.mjs`) — the e2e suite asserted the wallet delta and
+stayed green through both defects. And **one grant request per invoice** (`grantInvoiceCredits`):
+the synchronous grant and the `invoice.paid` grant share a key, and Stripe refuses a reused key
+with different parameters, so both derive every field from the invoice alone.
 
 **The credits are granted by payment, never by acceptance.** `metadata.credits` on the
 invoice is the negotiated quantity and the amount is the negotiated price — the one place in

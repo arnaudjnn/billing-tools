@@ -698,31 +698,121 @@ export type PurchaseResult =
  * same machinery as any other invoice.
  */
 /**
- * What a credit invoice must ACTUALLY grant, once Stripe has taken its bite.
+ * What a credit invoice grants: the quantity it SOLD, from `metadata.credits`, and nothing
+ * else.
  *
- * Stripe applies a customer's credit balance to any invoice it finalizes, and this
- * library's wallet IS that balance — so an invoice for 600 000 credits at €4 200 was
- * settled €5 cheaper out of the 500 credits the customer was already holding. Measured on
- * a real account: `subtotal 420000, starting_balance -500, amount_due 419500,
- * ending_balance 0`. They pay less money and LOSE credits they had already bought, which
- * is the one outcome nobody would agree to.
+ * Stripe applies a customer's credit balance to any invoice it finalizes, and this library's
+ * wallet IS that balance. This used to answer `sold + eaten` — repaying whatever the invoice
+ * had taken out of the wallet — which put the wallet right and left the CASH wrong: an
+ * Enterprise quote for 10 000 credits at €70 was settled €29.99 from the 2 999 credits the
+ * customer held, charged €40.01 to the card, and then re-granted the 2 999. The customer kept
+ * every credit and paid €29.99 less; an auto-reload with a full wallet was charged €0 and
+ * granted a wallet's worth on top. The fix is upstream: every invoice this library raises is
+ * finalized by `finalizeOutsideWallet`, so nothing is eaten and the sale grants what it sold.
  *
- * There is no per-invoice flag to refuse that — it happens at finalization. So the fix is
- * on the other side: grant what was sold PLUS whatever the invoice ate, which puts the
- * customer exactly where the deal said they would be. `starting_balance` is negative when
- * a credit was applied, and is in minor units, which is the same unit as a credit.
- *
- * The same arithmetic serves every invoiced purchase — a quote, a `buy_credits --method
- * invoice`, an auto-reload — which is why it lives here rather than at three call sites.
+ * `starting_balance` is deliberately NOT read any more. An invoice finalized before that fix
+ * (an open emailed one paid later) grants what it sold: its customer paid that much less in
+ * cash and spent that many credits, which is a swap rather than a gift.
  */
 export function creditsOwedFor(invoice: {
   metadata?: { credits?: string | null } | null;
   starting_balance?: number | null;
 }): number {
   const sold = parseInt(invoice.metadata?.credits ?? "0", 10);
-  if (!Number.isFinite(sold) || sold <= 0) return 0;
-  const eaten = invoice.starting_balance && invoice.starting_balance < 0 ? -invoice.starting_balance : 0;
-  return sold + eaten;
+  return Number.isFinite(sold) && sold > 0 ? sold : 0;
+}
+
+/**
+ * Grant a library-issued credit invoice — the ONE call every path makes for it.
+ *
+ * The off-session charge credits synchronously, and the `invoice.paid` webhook and the
+ * poller credit the same invoice when its event lands. They share the idempotency key so the
+ * second is a no-op, and that only works if they also send IDENTICAL parameters: Stripe
+ * rejects a reused key with different ones. They did not — the auto-reload granted under its
+ * own key ("Auto-reload: 1 902 credits") and the event under `credit:invoice:<id>` with a
+ * different amount, so the same reload was credited twice; the card purchase and the event
+ * agreed on the key but not the description, so the event's grant errored on every delivery.
+ * Everything here is derived from the invoice alone, so every caller sends the same request.
+ */
+export async function grantInvoiceCredits(
+  invoice: Pick<Stripe.Invoice, "id" | "customer" | "metadata">,
+  currency: string,
+): Promise<number> {
+  const credits = creditsOwedFor(invoice);
+  const customer = typeof invoice.customer === "string" ? invoice.customer : invoice.customer?.id;
+  if (!credits || !customer || !invoice.id) return 0;
+  await grantCredits(
+    customer,
+    credits,
+    invoice.metadata?.auto_reload === "true" ? `Auto-reload: ${credits} credits` : `Purchase: ${credits} credits`,
+    currency,
+    `credit:invoice:${invoice.id}`,
+  );
+  return credits;
+}
+
+/**
+ * Finalize an invoice WITHOUT letting Stripe settle it from the wallet.
+ *
+ * Stripe applies the customer's credit balance at finalization and offers no per-invoice
+ * way to refuse it, and that balance is the prepaid wallet — so a credit purchase was paid
+ * for, in part or in full, with credits. The balance is therefore SET ASIDE for the instant
+ * of finalization (zeroed by an adjustment) and restored straight after, both keyed on the
+ * invoice so a retry neither sets aside twice nor restores twice.
+ *
+ * Both transactions carry `kind: "adjustment"`, which the usage ledger skips, so they move
+ * no one's usage. The cost is the window itself, one finalize call long: a metered call
+ * landing in it reads an empty wallet and is refused. That refusal is retryable; the
+ * alternative was revenue nobody collected.
+ */
+export async function finalizeOutsideWallet(
+  stripeCustomerId: string,
+  invoiceId: string,
+  currency: string,
+): Promise<Stripe.Invoice> {
+  const stripe = getStripe();
+  const held = await getCreditBalance(stripeCustomerId, currency);
+  if (held <= 0) return stripe.invoices.finalizeInvoice(invoiceId);
+  await stripe.customers.createBalanceTransaction(
+    stripeCustomerId,
+    {
+      amount: held,
+      currency,
+      description: `Wallet set aside while ${invoiceId} is issued`,
+      metadata: { kind: "adjustment", set_aside_for: invoiceId },
+    },
+    { idempotencyKey: `wallet-aside:${invoiceId}` },
+  );
+  try {
+    return await stripe.invoices.finalizeInvoice(invoiceId);
+  } finally {
+    // The restore is the customer's money: retried, and loud if it still fails.
+    let restored = false;
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3 && !restored; attempt++) {
+      try {
+        await stripe.customers.createBalanceTransaction(
+          stripeCustomerId,
+          {
+            amount: -held,
+            currency,
+            description: `Wallet restored after ${invoiceId} was issued`,
+            metadata: { kind: "adjustment", restored_for: invoiceId },
+          },
+          { idempotencyKey: `wallet-restore:${invoiceId}` },
+        );
+        restored = true;
+      } catch (e) {
+        lastError = e;
+      }
+    }
+    if (!restored) {
+      console.error(
+        `[billing] could not restore ${held} credits set aside for ${invoiceId} on ${stripeCustomerId}:`,
+        lastError,
+      );
+    }
+  }
 }
 
 export async function sellCredits(
@@ -842,7 +932,7 @@ export async function sellCredits(
   );
   if (!draft.id) return { status: "refused", reason: "charge_failed", message: "Stripe returned no invoice." };
 
-  const finalized = await stripe.invoices.finalizeInvoice(draft.id);
+  const finalized = await finalizeOutsideWallet(stripeCustomerId, draft.id, currency);
 
   if (card) {
     // Off-session, because nobody is at a browser: this is an operator accepting on the
@@ -994,6 +1084,7 @@ export async function purchaseCredits(
     if (!invoice.id) return { status: "refused", reason: "charge_failed", message: "Stripe returned no invoice." };
     let settled: Stripe.Invoice;
     try {
+      await finalizeOutsideWallet(stripeCustomerId, invoice.id, currency);
       settled = await stripe.invoices.pay(invoice.id, { off_session: true });
       if (settled.status !== "paid") {
         return { status: "refused", reason: "charge_failed", message: `Invoice is ${settled.status}, not paid.` };
@@ -1011,13 +1102,12 @@ export async function purchaseCredits(
     // synchronous: the caller gets `charged` and the balance is already true. The webhook
     // grants on the same key, so a delivered event cannot double it.
     //
-    // `creditsOwedFor`, NOT `credits`: Stripe applies the customer's credit balance to any
-    // invoice it finalizes, and this library's wallet IS that balance — so a customer with
-    // 100 credits buying 2 000 paid $20, had their 100 eaten, and ended on 2 000 instead of
-    // 2 100 (measured headless, exactly the loss `creditsOwedFor` exists to repay). The
-    // webhook path already used it; this one, which credits before the event, did not.
-    const owed = creditsOwedFor(settled) || credits;
-    await grantCredits(stripeCustomerId, owed, `Purchase: ${credits} credits`, currency, `credit:invoice:${invoice.id}`);
+    // `grantInvoiceCredits`, the same request the event will send, so it is a no-op there.
+    // Nothing was eaten: `finalizeOutsideWallet` kept the wallet off the invoice.
+    await grantInvoiceCredits(
+      { id: invoice.id, customer: stripeCustomerId, metadata: { org_id: orgId, credits: String(credits) } },
+      currency,
+    );
     return { status: "charged", method, credits, invoiceId: invoice.id };
   }
 
@@ -1060,7 +1150,7 @@ export async function purchaseCredits(
   if (!draft.id) return { status: "refused", reason: "charge_failed", message: "Stripe returned no invoice." };
   // Finalize THEN send: an unfinalized invoice has no number, no hosted page and nothing to
   // pay, and `sendInvoice` on a draft is an error rather than a send.
-  const finalized = await stripe.invoices.finalizeInvoice(draft.id);
+  const finalized = await finalizeOutsideWallet(stripeCustomerId, draft.id, currency);
   // The SEND can fail on its own — an account not yet activated for invoice emails answers
   // "This invoice cannot be sent right now", which is Stripe's, not the customer's fault.
   // The invoice is finalized and payable either way, so losing its hosted URL to that error
@@ -1379,16 +1469,19 @@ export async function tryAutoReload(
     );
     if (!invoice.id) return;
 
+    // Finalized with the wallet SET ASIDE. Otherwise a reload — which by definition fires
+    // while the wallet still holds credits — was paid out of them: measured, a 1 902-credit
+    // reload on a wallet of 12 998 charged the card €0.
+    await finalizeOutsideWallet(stripeCustomerId, invoice.id, currency);
     const paid = await stripe.invoices.pay(invoice.id, { off_session: true });
     if (paid.status === "paid") {
-      // Same key: a retry that finds the invoice already paid must not credit
-      // a second time.
-      await grantCredits(
-        stripeCustomerId,
-        creditsNeeded,
-        `Auto-reload: ${creditsNeeded} credits`,
+      // The invoice's own grant, under the key the `invoice.paid` event uses, so the event
+      // is a no-op. It used `credit:${key}`, and the event granted the same reload again.
+      // Built from what this call set rather than read off the response, so the request is
+      // byte-for-byte the one the event handler derives from the same invoice.
+      await grantInvoiceCredits(
+        { id: invoice.id, customer: stripeCustomerId, metadata: { auto_reload: "true", credits: String(creditsNeeded) } },
         currency,
-        `credit:${key}`,
       );
     }
   } catch {
