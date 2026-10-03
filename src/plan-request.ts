@@ -57,40 +57,66 @@ async function read(adapter: BillingAdapter, orgId: string): Promise<PlanRequest
   const md = (await adapter.getOrgMetadata?.(orgId)) ?? {};
   try {
     const parsed = JSON.parse(md[REQUESTS_KEY] ?? "[]") as PlanRequest[];
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? parsed.map(withContactDefaults) : [];
   } catch {
     return [];
   }
 }
 
+/** `pack` stores a contact without its EMPTY fields to save room; every reader still sees
+ *  all three as strings, which is the type's promise. */
+function withContactDefaults(r: PlanRequest): PlanRequest {
+  if (!r.contact) return r;
+  const c = r.contact as Partial<NonNullable<PlanRequest["contact"]>>;
+  return { ...r, contact: { firstName: c.firstName ?? "", lastName: c.lastName ?? "", email: c.email ?? "" } };
+}
+
+/** An ask somebody is still waiting on: unanswered (`pending`), or priced and waiting on
+ *  the customer (`quoted`). Neither is history. */
+function isOpen(r: PlanRequest): boolean {
+  return r.status === "pending" || r.status === "quoted";
+}
+
 /**
  * Fit the queue into one metadata value, shedding in order of what costs least to lose.
  *
+ *   0. EMPTY contact fields — lossless, `read` restores them.
  *   1. NOTES on settled records — decoration on something already answered.
  *   2. settled records themselves — history; losing one costs a UI a row.
- *   3. notes on pending records — the ask survives, its sentence does not.
+ *   3. notes on open records, the ask's and the quote's — the ask survives, its sentence
+ *      does not.
  *
- * And then it stops. A pending ask is never dropped: somebody is waiting for an answer, and
+ * And then it stops. An OPEN ask is never dropped: somebody is waiting for an answer, and
  * silently deleting the question means they wait for ever. The first version dropped the
  * oldest pending record once nothing else was left, which a test caught by watching an open
- * request disappear — so past that point the WRITE fails instead, and the caller refuses the
- * new request with `queue_full` rather than quietly losing an old one.
+ * request disappear — so past that point the WRITE fails instead, and the caller refuses
+ * with `queue_full` rather than quietly losing an old one.
+ *
+ * "Open" includes `quoted`. It used to mean `pending` alone, so a quote — the price an
+ * operator just set, which `accept_plan_quote` needs — counted as settled history and was
+ * the FIRST record shed: `quote_plan_change` answered "quoted" and the quote was gone.
  */
 function pack(list: PlanRequest[]): { kept: PlanRequest[]; fits: boolean } {
-  const byPendingFirst = [...list].sort(
-    (a, b) => Number(a.status !== "pending") - Number(b.status !== "pending"),
-  );
   const size = (l: PlanRequest[]) => JSON.stringify(l).length;
-  let kept = byPendingFirst;
+  let kept = [...list].sort((a, b) => Number(!isOpen(a)) - Number(!isOpen(b)));
   if (size(kept) <= VALUE_LIMIT) return { kept, fits: true };
 
-  const strip = (r: PlanRequest) => {
-    const { note: _note, ...rest } = r;
-    return rest as PlanRequest;
+  const compactContact = (r: PlanRequest): PlanRequest => {
+    if (!r.contact) return r;
+    const contact = Object.fromEntries(Object.entries(r.contact).filter(([, v]) => v !== ""));
+    return { ...r, contact: contact as PlanRequest["contact"] };
   };
-  kept = kept.map((r) => (r.status === "pending" ? r : strip(r)));
+  const strip = (r: PlanRequest): PlanRequest => {
+    const { note: _note, ...rest } = r;
+    if (!rest.quote?.note) return rest as PlanRequest;
+    const { note: _quoteNote, ...quote } = rest.quote;
+    return { ...rest, quote } as PlanRequest;
+  };
+  kept = kept.map(compactContact);
+  if (size(kept) <= VALUE_LIMIT) return { kept, fits: true };
+  kept = kept.map((r) => (isOpen(r) ? r : strip(r)));
   while (size(kept) > VALUE_LIMIT) {
-    const settledAt = kept.map((r) => r.status !== "pending").lastIndexOf(true);
+    const settledAt = kept.map((r) => !isOpen(r)).lastIndexOf(true);
     if (settledAt === -1) break;
     kept = kept.filter((_, i) => i !== settledAt);
   }
