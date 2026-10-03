@@ -1,3 +1,12 @@
+## [25.8.10](https://github.com/arnaudjnn/billing-tools/compare/v25.8.9...v25.8.10) (2026-10-03)
+
+
+### Bug Fixes
+
+* **subscription:** an SCA-declined wallet repayment now tells the admins where to pay ([46f32f2](https://github.com/arnaudjnn/billing-tools/commit/46f32f26db6a5d37179882817346c1fa06e0af2d))
+* **ui:** a payment form silently ignored a submit while Stripe was loading ([51cea43](https://github.com/arnaudjnn/billing-tools/commit/51cea436e14095fe114d8903bc77a1ebd4bdeed1))
+* **workos-org:** an eleventh org metadata key failed the whole update, subscription sync included ([ff1c1c7](https://github.com/arnaudjnn/billing-tools/commit/ff1c1c7a76d30bef18abed88cff21a390b4a7202))
+
 ## [25.8.9](https://github.com/arnaudjnn/billing-tools/compare/v25.8.8...v25.8.9) (2026-10-03)
 
 
