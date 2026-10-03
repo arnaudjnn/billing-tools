@@ -91,6 +91,7 @@ function account({ wallet = 0 } = {}) {
       starting_balance: 0,
       billing_reason: "subscription_cycle",
       metadata: {},
+      hosted_invoice_url: `https://invoice.stripe.com/i/in_${seq}`,
       ...over,
     };
     issued.set(inv.id, inv);
@@ -163,6 +164,10 @@ function account({ wallet = 0 } = {}) {
       },
       async pay(id) {
         const inv = issued.get(id);
+        if (self().requiresAction) {
+          // What Stripe throws for an off-session charge the bank wants the cardholder for.
+          throw Object.assign(new Error("This payment requires authentication."), { code: "authentication_required" });
+        }
         if (self().declines) throw new Error("Your card was declined.");
         inv.amount_paid = inv.amount_due;
         inv.status = "paid";
@@ -376,6 +381,71 @@ test("a declined repayment stays open, and is credited when it is paid", async (
   const paid = stripe.collect(r.invoiceId);
   await createStripeWebhookHandler({ currency: "eur" })(signed(paidEvt(paid)));
   assert.equal(stripe.wallet(), 100);
+});
+
+test("an SCA challenge on the repayment leaves it open AND tells the admins where to pay", async () => {
+  // Off-session, nobody is at a browser to authenticate, so European cards routinely ask
+  // for the cardholder here. That must never be a silent failure.
+  const stripe = account({ wallet: 100 });
+  stripe.requiresAction = true;
+  __setStripeForTests(stripe);
+  const first = checkoutFirstInvoice(stripe);
+  const sent = [];
+  const res = await createStripeWebhookHandler({ currency: "eur", notify: (n) => sent.push(n) })(signed(paidEvt(first)));
+  assert.equal(res.status, 200, "an SCA challenge is not a webhook failure");
+
+  const repay = [...stripe.issued.values()].find((i) => i.metadata?.repays === first.id);
+  assert.equal(repay.status, "open", "left payable, not voided");
+  assert.equal(stripe.wallet(), 0, "nothing granted for money not collected");
+  assert.equal(sent.length, 1);
+  const n = sent[0];
+  assert.equal(n.type, "payment.action_required");
+  assert.equal(n.id, `payment-action:${repay.id}`, "stable, so a re-delivery dedupes");
+  assert.deepEqual(n.audience, { kind: "admins" });
+  assert.equal(n.orgId, "org_1");
+  assert.equal(n.data.hostedInvoiceUrl, repay.hosted_invoice_url);
+  assert.equal(n.data.amountDue, 100);
+  assert.equal(n.data.forInvoiceId, first.id);
+
+  // The customer authenticates on the hosted page; Stripe sends invoice.paid; credited.
+  const paid = stripe.collect(repay.id);
+  await createStripeWebhookHandler({ currency: "eur" })(signed(paidEvt(paid)));
+  assert.equal(stripe.wallet(), 100);
+});
+
+test("the poller path announces it too, and the hook sees the decline code", async () => {
+  const stripe = account({ wallet: 100 });
+  stripe.requiresAction = true;
+  __setStripeForTests(stripe);
+  const first = checkoutFirstInvoice(stripe);
+  const sent = [];
+  const reported = [];
+  await createStripeEventHandler({
+    adapter: {},
+    plans: {},
+    currency: "eur",
+    notify: (n) => sent.push(n),
+    hooks: { onPaidFromWallet: (i) => reported.push(i) },
+  })(paidEvt(first));
+  assert.equal(sent[0]?.type, "payment.action_required");
+  assert.equal(reported[0].repayment.status, "open");
+  assert.equal(reported[0].repayment.declineCode, "authentication_required");
+});
+
+test("with no notifier, an open repayment is logged as an error with its link — never silent", async () => {
+  const stripe = account({ wallet: 100 });
+  stripe.requiresAction = true;
+  __setStripeForTests(stripe);
+  const first = checkoutFirstInvoice(stripe);
+  const logged = [];
+  const original = console.error;
+  console.error = (...a) => logged.push(a.join(" "));
+  try {
+    await createStripeWebhookHandler({ currency: "eur" })(signed(paidEvt(first)));
+  } finally {
+    console.error = original;
+  }
+  assert.ok(logged.some((l) => /needs the customer/.test(l) && /invoice\.stripe\.com/.test(l)), logged.join("\n"));
 });
 
 test("no card on file: nothing is raised, and it is reported", async () => {

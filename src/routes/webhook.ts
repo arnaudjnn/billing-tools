@@ -1,6 +1,7 @@
 import type Stripe from "stripe";
 import {
-  finalizeSubscriptionDraft, getStripe, grantCredits, grantInvoiceCredits, isCheckoutPaymentEvent, paidFromWallet, repayWalletShortfall } from "../billing.js";
+  finalizeSubscriptionDraft, getStripe, grantCredits, grantInvoiceCredits, isCheckoutPaymentEvent, notifyRepaymentOpen, paidFromWallet, repayWalletShortfall } from "../billing.js";
+import type { Notify } from "../notifications/index.js";
 
 // Stripe webhook handler. Grants credits on one-time top-up completion.
 // Subscription events are intentionally NOT handled here — subscription/plan
@@ -9,6 +10,9 @@ import {
 
 export interface WebhookOptions {
   currency?: string;
+  /** Where a repayment that needs the customer is announced (`payment.action_required`).
+   *  `createBilling` passes its own; without one it is logged as an error. */
+  notify?: Notify;
   /** Called for events this handler doesn't process (e.g. subscription.*). */
   onOtherEvent?: (event: Stripe.Event) => Promise<void> | void;
 }
@@ -119,7 +123,10 @@ export function createStripeWebhookHandler(opts: WebhookOptions = {}) {
       const orgId =
         (invoice as { parent?: { subscription_details?: { metadata?: Record<string, string> | null } | null } })
           .parent?.subscription_details?.metadata?.org_id ?? null;
-      await repayWalletShortfall(invoice, orgId);
+      const repayment = await repayWalletShortfall(invoice, orgId);
+      // An SCA challenge or a decline leaves the repayment OPEN: tell the customer where to
+      // pay it, never fail silently.
+      notifyRepaymentOpen(opts.notify, orgId, invoice.id!, repayment);
       await opts.onOtherEvent?.(event);
     } else if (event.type === "invoice.paid" && creditsOn(event)) {
       // An invoice this library SENT for a credit purchase — `collection_method:

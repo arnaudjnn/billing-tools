@@ -116,6 +116,31 @@ export type BillingNotification =
       to: string[];
       data: { quoteId: string; member: NotifiedMember; quote: unknown };
     }
+  /**
+   * A charge this library raised could not be taken off-session and is waiting on the
+   * customer — the bank wants the cardholder (SCA), or the card declined. `to` is every admin.
+   * `hostedInvoiceUrl` is where they pay it; paying it completes whatever it was for.
+   *
+   * Today the one source is `repayWalletShortfall`: the wallet paid part of a subscription
+   * invoice, and the card is charged that share so the credits can be given back.
+   */
+  | {
+      type: "payment.action_required";
+      orgId: string;
+      to: string[];
+      data: {
+        invoiceId: string;
+        hostedInvoiceUrl: string | null;
+        /** Minor units of the invoice's currency — what is owed. */
+        amountDue: number;
+        currency: string;
+        purpose: "wallet_shortfall";
+        /** The invoice whose wallet share this collects. */
+        forInvoiceId: string;
+        /** Credits returned to the wallet once it is paid. */
+        credits: number;
+      };
+    }
   /** An allowance crossed a threshold. Fired once per window per threshold per cycle. */
   | {
       type: "usage.threshold";

@@ -365,6 +365,7 @@ export function createBilling(opts: CreateBillingOptions) {
       : createStripeWebhookHandler({
           ...(opts.webhook || {}),
           currency: opts.webhook?.currency ?? resolved.currency,
+          notify: opts.webhook?.notify ?? notify,
         });
 
   /**

@@ -698,6 +698,7 @@ export {
   finalizeOutsideWallet,
   finalizeSubscriptionDraft,
   grantInvoiceCredits,
+  notifyRepaymentOpen,
   paidFromWallet,
   repayWalletShortfall,
   type WalletRepayment,

@@ -7,6 +7,7 @@ import {
   grantInvoiceCredits,
   getStripe,
   isCheckoutPaymentEvent,
+  notifyRepaymentOpen,
   paidFromWallet,
   repayWalletShortfall,
   type WalletRepayment,
@@ -20,6 +21,7 @@ import {
 } from "./plans.js";
 import type { Mirror, MirrorQuery } from "./mirror.js";
 import type { WorkOSOrgAdapter } from "./adapters/workos-org.js";
+import type { Notify } from "./notifications/index.js";
 
 const CURSOR_TABLE = "billing_sync_cursors";
 
@@ -73,6 +75,9 @@ export interface BillingSyncOptions {
    * with only a log line to show for it.
    */
   onEventFault?: (source: "stripe" | "workos", event: { id: string; error: unknown }) => void;
+  /** Announces a charge waiting on the customer (`payment.action_required`) — the emitter
+   *  `createBilling` builds, or your own. Without it such a charge is logged as an error. */
+  notify?: Notify;
   /** Mirror of the WorkOS Organization (e.g. a workspaces table). */
   orgMirror?: Mirror;
   /** Mirror of the WorkOS User (e.g. a users table). */
@@ -251,6 +256,8 @@ export function createStripeEventHandler(opts: {
   plans: PlanCatalog;
   currency?: string;
   hooks?: BillingSyncOptions["hooks"];
+  /** Announces a repayment waiting on the customer (`payment.action_required`). */
+  notify?: Notify;
 }): (event: Stripe.Event) => Promise<void> {
   const currency = opts.currency ?? "usd";
   return async function handleStripe(event: Stripe.Event): Promise<void> {
@@ -336,6 +343,7 @@ export function createStripeEventHandler(opts: {
         // an app learns a repayment is still open.
         const orgId = subscriptionRefOf(invoice).orgId;
         const repayment = await repayWalletShortfall(invoice as Stripe.Invoice, orgId);
+        notifyRepaymentOpen(opts.notify, orgId, invoice.id!, repayment);
         const info = { orgId, invoiceId: invoice.id!, credits: fromWallet, repayment };
         if (opts.hooks?.onPaidFromWallet) await opts.hooks.onPaidFromWallet(info);
         else if (repayment.status !== "charged") {
@@ -418,6 +426,7 @@ export function createBillingSync(opts: BillingSyncOptions): BillingSync {
     plans: opts.plans,
     currency,
     hooks: opts.hooks,
+    notify: opts.notify,
   });
 
   async function handleWorkOS(event: { event: string; data: unknown }): Promise<void> {

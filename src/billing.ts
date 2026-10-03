@@ -1,4 +1,5 @@
 import Stripe from "stripe";
+import type { Notify } from "./notifications/index.js";
 import { defaultPaymentMethodConfig } from "./payment-method-config.js";
 import { creditsForAmount } from "./plan-model.js";
 // Both of these import `getStripe` back from here. An ESM cycle, deliberately and
@@ -877,7 +878,17 @@ export type WalletRepayment =
   | { status: "charged"; invoiceId: string; credits: number }
   /** Raised but not collected (a decline, a bank asking for the cardholder): payable from
    *  its hosted page, and credited by `invoice.paid` when it is. */
-  | { status: "open"; invoiceId: string; credits: number; hostedInvoiceUrl: string | null }
+  | {
+      status: "open";
+      invoiceId: string;
+      credits: number;
+      hostedInvoiceUrl: string | null;
+      amountDue: number;
+      currency: string;
+      /** Why the off-session charge did not go through: `authentication_required` is the
+       *  bank asking for the cardholder (SCA), which only the hosted page can satisfy. */
+      declineCode: string | null;
+    }
   | { status: "no_card"; credits: number }
   | { status: "nothing_taken" };
 
@@ -948,21 +959,74 @@ export async function repayWalletShortfall(
   const fresh = await stripe.invoices.retrieve(draft.id);
   const current = fresh.status === "draft" ? await finalizeOutsideWallet(customer, draft.id, currency) : fresh;
   let settled = current;
+  let declineCode: string | null = null;
   if (current.status === "open") {
     try {
       settled = await stripe.invoices.pay(draft.id, { off_session: true });
-    } catch {
+    } catch (e) {
+      // An off-session charge the bank wants the cardholder for (SCA) throws, as does a
+      // decline. Neither is an error here: the invoice stays OPEN and payable from its
+      // hosted page, and the caller tells the customer — see `notifyRepaymentOpen`.
+      const err = e as { code?: string; decline_code?: string; raw?: { code?: string; decline_code?: string } };
+      declineCode = err.decline_code ?? err.raw?.decline_code ?? err.code ?? err.raw?.code ?? "charge_failed";
       settled = await stripe.invoices.retrieve(draft.id);
     }
   }
   if (settled.status !== "paid") {
-    return { status: "open", invoiceId: draft.id, credits, hostedInvoiceUrl: settled.hosted_invoice_url ?? null };
+    return {
+      status: "open",
+      invoiceId: draft.id,
+      credits,
+      hostedInvoiceUrl: settled.hosted_invoice_url ?? null,
+      amountDue: settled.amount_due ?? credits,
+      currency,
+      declineCode,
+    };
   }
   await grantInvoiceCredits(
     { id: draft.id, customer, metadata: { ...(orgId ? { org_id: orgId } : {}), credits: String(credits), repays: invoice.id } },
     currency,
   );
   return { status: "charged", invoiceId: draft.id, credits };
+}
+
+/**
+ * Tell the workspace's admins that a repayment is waiting on them, with the link to pay it.
+ *
+ * Never silent: without a notifier (or an org to address), it is logged as an error with the
+ * hosted URL, which is the one thing anybody needs to act on it. The id is the repayment
+ * invoice's, so a re-delivered event that re-attempts the charge does not send it twice.
+ */
+export function notifyRepaymentOpen(
+  notify: Notify | undefined,
+  orgId: string | null,
+  forInvoiceId: string,
+  repayment: WalletRepayment,
+): void {
+  if (repayment.status !== "open") return;
+  if (notify && orgId) {
+    notify({
+      id: `payment-action:${repayment.invoiceId}`,
+      type: "payment.action_required",
+      orgId,
+      to: [],
+      audience: { kind: "admins" },
+      data: {
+        invoiceId: repayment.invoiceId,
+        hostedInvoiceUrl: repayment.hostedInvoiceUrl,
+        amountDue: repayment.amountDue,
+        currency: repayment.currency,
+        purpose: "wallet_shortfall",
+        forInvoiceId,
+        credits: repayment.credits,
+      },
+    });
+    return;
+  }
+  console.error(
+    `[billing] wallet repayment ${repayment.invoiceId} for ${forInvoiceId} needs the customer ` +
+      `(${repayment.declineCode ?? "not charged"}): ${repayment.hostedInvoiceUrl ?? "no hosted URL"}`,
+  );
 }
 
 /**
