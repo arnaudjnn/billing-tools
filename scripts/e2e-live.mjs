@@ -77,6 +77,9 @@ const SECTIONS = [
   // ledger named, two of which were listed for a reason that turned out to be wrong: the
   // Pattern-B mirror needs two async functions, not a database.
   ["14", "mounted seams", () => import("./live/14-mounted-seams.mjs")],
+  // 15 asserts the CASH of every credit sale — what every earlier section left unasserted
+  // while the wallet paid for its own top-ups. Its own customer, so it moves no fixture.
+  ["15", "credit sales paid in cash", () => import("./live/15-credit-sales-cash.mjs")],
 ];
 
 async function main() {
