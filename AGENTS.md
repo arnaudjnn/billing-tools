@@ -252,6 +252,7 @@ WorkOS org metadata is **10 keys, keys ≤40 chars, values ≤600, ASCII**; Stri
 - **The blast radius is still the whole org, not the record.** WorkOS validates the MERGED object, so ONE oversized value already stored fails *every* later metadata write for that org — a long top-up history stopped `past_due` from being recorded. (The writers send patches now — WorkOS merges server-side — but the merged result is what the limits are enforced on.)
 - **A per-MEMBER record goes on the member.** `adapter.getUserMetadata` / `setUserMetadata` (optional; `WorkOSOrgAdapter` has them) give each member their own budget, removing the ceiling rather than raising it. A grant is stored `{ [orgId]: { [cycle]: credits } }` — keyed by org because WorkOS user metadata is global to the user, and pruned to the cycle being written because `extraAllowance` only reads the current one. An adapter without them falls back to the org blob, reads included, so a grant approved by an earlier version still applies.
 - **Correctness and history trim differently.** A request queue may drop **settled** records to make room, never a pending ask: losing history costs a UI a row, losing a grant costs the customer allowance they were promised.
+- **The plan-request queue is bounded by ONE value, and `queue_full` IS the bound.** Open asks (`pending` and `quoted`) are never shed — a quoted ask is the price `accept_plan_quote` needs — so when two or three open asks with long contacts fill 600 characters, the next write refuses with `queue_full` instead of losing one. One key per request is not the way out: the org's 10 KEYS are already spoken for (`plan`, `subscriptionStatus`, `stripeSubscriptionId`, `subscriptionPeriodStart`/`End`, `subscriptionSeats`, `subscriptionSeatCounts`, `pendingPlan`/`pendingPlanAt`, `btPlanRequests`, `btAlerts`, `topUpRequests`, plus the legacy `seatAssignments`/`topUpGrants` on older orgs), so per-request keys would trade a refused ask for a refused subscription write. Lift it only by moving the queue to per-member metadata, the way top-up grants moved.
 - **A seat is never trimmable.** `seatAssignments` (`seats.ts`) had the same overflow at ~13 members, on the one plan shape whose premise is many seats. Dropping an entry silently downgrades a member to the default pack, so the per-member path does not write the legacy value at all — which is what lets an already-oversized org be assigned into. A cleared seat writes a **tombstone** (`""`) rather than deleting, because the legacy map is still read as a fallback and a plain delete would read back as the old seat.
 - **Enumerating a per-member record needs `adapter.listMemberIds`** (`WorkOSOrgAdapter` lists active memberships; `memberCount` derives from it). Without it `listSeatAssignments` returns what the legacy map holds.
 
@@ -686,6 +687,19 @@ transaction (`tests/credit-sale-cash.test.mjs`) — the e2e suite asserted the w
 stayed green through both defects. And **one grant request per invoice** (`grantInvoiceCredits`):
 the synchronous grant and the `invoice.paid` grant share a key, and Stripe refuses a reused key
 with different parameters, so both derive every field from the invoice alone.
+
+**Subscription invoices too.** A renewal, a `create_prorations` change and a scheduled
+downgrade are DRAFTS for ~1 h, then Stripe finalizes them against the wallet. So
+`invoice.created` (in `BILLING_WEBHOOK_EVENTS` and the poller's DEFAULT `SYNC_EVENT_TYPES`)
+runs `finalizeSubscriptionDraft`: finalize now with the wallet set aside, and Stripe's
+auto-advance collects the card. The webhook route does it natively; the poller is the backstop
+for a missed delivery, which **only works if it polls well inside that hour — run
+`createBillingSync` under 30 minutes** (the doctor warns at 30, and when there is none). An
+`invoice_now` plan change finalizes inside `subscriptions.update`, so `changePlan` wraps that
+call in `withWalletSetAside`. **What escapes** — a draft both legs missed, or a first invoice
+Checkout finalizes itself, where nothing can intervene — is DETECTED rather than silent:
+`hooks.onPaidFromWallet` on the sync (default: an error log) and the doctor's "Invoices paid
+from the wallet", which is an error naming each invoice.
 
 **The credits are granted by payment, never by acceptance.** `metadata.credits` on the
 invoice is the negotiated quantity and the amount is the negotiated price — the one place in
