@@ -1,3 +1,10 @@
+## [25.8.8](https://github.com/arnaudjnn/billing-tools/compare/v25.8.7...v25.8.8) (2026-10-03)
+
+
+### Bug Fixes
+
+* **subscription:** renewals and invoice_now upgrades were paid out of the wallet ([5ef1e9f](https://github.com/arnaudjnn/billing-tools/commit/5ef1e9ff2550f01b0e4643cc8dc1642e77a860ec))
+
 ## [25.8.7](https://github.com/arnaudjnn/billing-tools/compare/v25.8.6...v25.8.7) (2026-10-03)
 
 
