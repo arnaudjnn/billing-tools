@@ -1,3 +1,10 @@
+## [25.8.9](https://github.com/arnaudjnn/billing-tools/compare/v25.8.8...v25.8.9) (2026-10-03)
+
+
+### Bug Fixes
+
+* **subscription:** Checkout's first invoice was paid from the wallet; repay what it took ([2a2bf8e](https://github.com/arnaudjnn/billing-tools/commit/2a2bf8eedfc73a14c8ca8dd60aefc66c759f665f))
+
 ## [25.8.8](https://github.com/arnaudjnn/billing-tools/compare/v25.8.7...v25.8.8) (2026-10-03)
 
 
