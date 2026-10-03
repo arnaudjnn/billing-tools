@@ -1,3 +1,10 @@
+## [25.8.5](https://github.com/arnaudjnn/billing-tools/compare/v25.8.4...v25.8.5) (2026-10-03)
+
+
+### Bug Fixes
+
+* **invitations:** an invitation email carried a relative accept link ([e0515ad](https://github.com/arnaudjnn/billing-tools/commit/e0515adbbac9e258cbf3ad7e8cfc8f490472550a))
+
 ## [25.8.4](https://github.com/arnaudjnn/billing-tools/compare/v25.8.3...v25.8.4) (2026-10-03)
 
 
